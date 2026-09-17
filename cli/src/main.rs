@@ -1,0 +1,383 @@
+//! `pwe` — the PWE command-line toolchain.
+//!
+//! Like `javac`/`java` for the PWE language:
+//!
+//! * `pwe compile <src.pwe> [-o <out.pweb>]` — compile a source program into a
+//!   self-describing `.pweb` artifact: the verified canonical (RFC-0021) EIR
+//!   module plus the world-model source the runtime derives its initial scene
+//!   from. Compile failures render the source with a caret.
+//! * `pwe run <artifact.pweb | src.pwe> [--steps N]` — execute deterministically
+//!   (interpreter == JIT, cross-checked every step) and report the outcome.
+//! * `pwe present <artifact.pweb | src.pwe> [--port P]` — execute live and serve
+//!   the browser 3D viewer.
+//!
+//! Exit codes: 0 success, 1 compile/runtime failure, 2 usage error.
+
+use pwe_api::RegionId;
+use pwe_reference::eir::EirModule;
+use pwe_reference::lang::{self, CompiledProgram, LangRuntime};
+use pwe_reference::math::Vec3;
+use pwe_reference::physics_eir::PhysicsProgram;
+use pwe_reference::present::{self, CameraVisual, LiveState};
+use pwe_reference::sha256::digest;
+use std::sync::{Arc, RwLock};
+
+/// Artifact container magic and format version.
+const MAGIC: &[u8; 4] = b"PWEB";
+const VERSION: u16 = 1;
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let code = match args.first().map(String::as_str) {
+        Some("compile") => cmd_compile(&args[1..]),
+        Some("run") => cmd_run(&args[1..], None),
+        Some("present") => cmd_run(&args[1..], Some(8000)),
+        Some("-h") | Some("--help") | None => {
+            usage();
+            0
+        }
+        Some(other) => {
+            eprintln!("pwe: unknown command '{other}'\n");
+            usage();
+            2
+        }
+    };
+    std::process::exit(code);
+}
+
+fn usage() {
+    println!(
+        "pwe — the PWE language toolchain\n\
+         \n\
+         USAGE:\n  \
+           pwe compile <src.pwe> [-o <out.pweb>]\n  \
+           pwe run     <artifact.pweb | src.pwe> [--steps N]\n  \
+           pwe present <artifact.pweb | src.pwe> [--port P]\n\
+         \n\
+         A .pweb artifact holds the verified canonical EIR module plus the\n\
+         world-model source; `run` and `present` execute the artifact's EIR."
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Artifact container
+// ---------------------------------------------------------------------------
+
+/// Packs a compiled module plus its source into the `.pweb` container:
+/// `magic | version u16 | flags u16 | eir_len u64 | source_len u64 | eir | source`.
+fn pack(eir: &EirModule, source: &str) -> Result<Vec<u8>, String> {
+    let eir_bytes = eir
+        .encode()
+        .map_err(|e| format!("cannot encode EIR: {e}"))?;
+    let mut out = Vec::with_capacity(24 + eir_bytes.len() + source.len());
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&VERSION.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&(eir_bytes.len() as u64).to_le_bytes());
+    out.extend_from_slice(&(source.len() as u64).to_le_bytes());
+    out.extend_from_slice(&eir_bytes);
+    out.extend_from_slice(source.as_bytes());
+    Ok(out)
+}
+
+/// Unpacks a `.pweb` container, decoding and re-validating the EIR module.
+fn unpack(bytes: &[u8]) -> Result<(EirModule, String), String> {
+    if bytes.len() < 24 || &bytes[..4] != MAGIC {
+        return Err("not a .pweb artifact (bad magic)".to_string());
+    }
+    let version = u16::from_le_bytes([bytes[4], bytes[5]]);
+    if version != VERSION {
+        return Err(format!("unsupported .pweb version {version}"));
+    }
+    let eir_len = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) as usize;
+    let source_len = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+    let eir_bytes = bytes
+        .get(24..24 + eir_len)
+        .ok_or("truncated artifact: EIR section")?;
+    let source_bytes = bytes
+        .get(24 + eir_len..24 + eir_len + source_len)
+        .ok_or("truncated artifact: source section")?;
+    let eir = EirModule::decode(eir_bytes).map_err(|e| format!("artifact EIR is invalid: {e}"))?;
+    let source =
+        String::from_utf8(source_bytes.to_vec()).map_err(|_| "artifact source is not UTF-8")?;
+    Ok((eir, source))
+}
+
+/// Loads a runtime from a `.pweb` artifact (magic-detected) or a `.pwe` source.
+fn load(path: &str) -> Result<LangRuntime, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    if bytes.starts_with(MAGIC) {
+        // Execute the artifact's compiled EIR; the source only supplies the
+        // initial world model (entity layouts, gravity, fields, channels).
+        let (eir, source) = unpack(&bytes)?;
+        let parsed = lang::parse(&source).map_err(|e| lang::diagnose(&source, &e))?;
+        let scene = parsed.model.build_scene();
+        let program = PhysicsProgram {
+            systems: Vec::new(),
+            entities: Vec::new(),
+            module: eir.clone(),
+        };
+        let compiled = CompiledProgram {
+            parsed,
+            program,
+            eir,
+        };
+        LangRuntime::from_compiled_region(compiled, scene, RegionId(1))
+            .map_err(|e| format!("cannot boot artifact {path}: {e}"))
+    } else {
+        let source = String::from_utf8(bytes)
+            .map_err(|_| format!("{path} is not UTF-8 (source or .pweb expected)"))?;
+        LangRuntime::compile(&source).map_err(|e| lang::diagnose(&source, &e))
+    }
+}
+
+/// Appends `.pweb` to a path stem (`scene.pwe` -> `scene.pweb`).
+fn with_extension(path: &str, ext: &str) -> String {
+    match path.rsplit_once('.') {
+        Some((stem, _)) => format!("{stem}.{ext}"),
+        None => format!("{path}.{ext}"),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+// ---------------------------------------------------------------------------
+// compile
+// ---------------------------------------------------------------------------
+
+fn cmd_compile(args: &[String]) -> i32 {
+    let mut input: Option<String> = None;
+    let mut output: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "-o" | "--output" => {
+                output = it.next().cloned();
+                if output.is_none() {
+                    eprintln!("pwe compile: -o needs a path");
+                    return 2;
+                }
+            }
+            other if other.starts_with('-') => {
+                eprintln!("pwe compile: unknown option '{other}'");
+                return 2;
+            }
+            other => {
+                if input.is_some() {
+                    eprintln!("pwe compile: unexpected extra argument '{other}'");
+                    return 2;
+                }
+                input = Some(other.to_string());
+            }
+        }
+    }
+    let Some(input) = input else {
+        eprintln!("pwe compile: missing <src.pwe>");
+        return 2;
+    };
+    let output = output.unwrap_or_else(|| with_extension(&input, "pweb"));
+    let source = match std::fs::read_to_string(&input) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("pwe: cannot read {input}: {e}");
+            return 1;
+        }
+    };
+    match lang::compile(&source) {
+        Ok(compiled) => {
+            let bytes = match pack(&compiled.eir, &source) {
+                Ok(b) => b,
+                Err(msg) => {
+                    eprintln!("pwe: {msg}");
+                    return 1;
+                }
+            };
+            if let Err(e) = std::fs::write(&output, &bytes) {
+                eprintln!("pwe: cannot write {output}: {e}");
+                return 1;
+            }
+            println!("compiled {input} -> {output}");
+            println!("  EIR functions: {}", compiled.eir.functions.len());
+            println!("  artifact hash: {}", hex(&digest(&bytes).0));
+            0
+        }
+        Err(e) => {
+            eprintln!("{}", lang::diagnose(&source, &e));
+            1
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// run / present
+// ---------------------------------------------------------------------------
+
+fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
+    let mut input: Option<String> = None;
+    let mut steps: u64 = 60;
+    let mut port = present_default;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--steps" | "-n" => {
+                let Some(v) = it.next().and_then(|s| s.parse::<u64>().ok()) else {
+                    eprintln!("pwe: --steps needs a non-negative integer");
+                    return 2;
+                };
+                steps = v;
+            }
+            "--port" | "-p" => {
+                let Some(v) = it.next().and_then(|s| s.parse::<u16>().ok()) else {
+                    eprintln!("pwe: --port needs a u16");
+                    return 2;
+                };
+                port = Some(v);
+            }
+            other if other.starts_with('-') => {
+                eprintln!("pwe: unknown option '{other}'");
+                return 2;
+            }
+            other => {
+                if input.is_some() {
+                    eprintln!("pwe: unexpected extra argument '{other}'");
+                    return 2;
+                }
+                input = Some(other.to_string());
+            }
+        }
+    }
+    let Some(input) = input else {
+        eprintln!("pwe: missing <artifact.pweb | src.pwe>");
+        return 2;
+    };
+    let mut rt = match load(&input) {
+        Ok(rt) => rt,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return 1;
+        }
+    };
+    match port {
+        None => {
+            for k in 0..steps {
+                if let Err(e) = rt.step_cross() {
+                    eprintln!("pwe: step {k} failed: {e}");
+                    return 1;
+                }
+            }
+            report(&rt, steps);
+            0
+        }
+        Some(p) => present_live(rt, p),
+    }
+}
+
+/// Executes live and serves the browser viewer until interrupted.
+fn present_live(mut rt: LangRuntime, port: u16) -> i32 {
+    let live = Arc::new(RwLock::new(LiveState::default()));
+    if let Err(e) = present::serve_live(Arc::clone(&live), port) {
+        eprintln!("pwe: cannot serve on 127.0.0.1:{port}: {e}");
+        return 1;
+    }
+    println!("pwe present: open http://localhost:{port}  (Ctrl-C to stop)");
+    let cam = auto_frame_camera(&rt);
+    let mut step = 0u64;
+    loop {
+        if let Err(e) = rt.step_cross() {
+            eprintln!("pwe: step {step} failed: {e}");
+            return 1;
+        }
+        step += 1;
+        let mut g = live.write().unwrap();
+        g.step = step;
+        g.frame = rt.present_frame(Some(cam));
+        g.info = vec![
+            format!(
+                "pwe — step {step}, t={:.3}s (interpreter == JIT)",
+                rt.scene.sim_time
+            ),
+            format!(
+                "entities: {} | fields: {} | events last step: {}",
+                rt.scene.entities.len(),
+                rt.scene.fields.len(),
+                rt.emitted_events().len(),
+            ),
+        ];
+        drop(g);
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+}
+
+/// Frames the camera on the scene's initial extent (a simple auto-fit).
+fn auto_frame_camera(rt: &LangRuntime) -> CameraVisual {
+    let frame = rt.present_frame(None);
+    if frame.entities.is_empty() {
+        return CameraVisual {
+            position: Vec3::new(2.0, 5.0, 30.0),
+            target: Vec3::ZERO,
+        };
+    }
+    let (mut lo, mut hi) = (frame.entities[0].position, frame.entities[0].position);
+    for e in &frame.entities {
+        lo = Vec3::new(
+            lo.x.min(e.position.x),
+            lo.y.min(e.position.y),
+            lo.z.min(e.position.z),
+        );
+        hi = Vec3::new(
+            hi.x.max(e.position.x),
+            hi.y.max(e.position.y),
+            hi.z.max(e.position.z),
+        );
+    }
+    let center = Vec3::new(
+        (lo.x + hi.x) / 2.0,
+        (lo.y + hi.y) / 2.0,
+        (lo.z + hi.z) / 2.0,
+    );
+    let extent = (hi - lo).length().max(1.0);
+    CameraVisual {
+        position: center + Vec3::new(0.0, extent * 0.4, extent * 1.8),
+        target: center,
+    }
+}
+
+/// Reports the final state of a batch run.
+fn report(rt: &LangRuntime, steps: u64) {
+    println!("ran {steps} steps (interpreter == JIT, every step)");
+    println!("  sim time:  {:.6} s", rt.scene.sim_time);
+    println!("  entities:  {}", rt.scene.entities.len());
+    for e in &rt.present_frame(None).entities {
+        let p = e.position;
+        print!(
+            "  #{:<3} {:<14} pos = ({:9.4}, {:9.4}, {:9.4})",
+            e.id, e.name, p.x, p.y, p.z
+        );
+        // Trim the state to its highest non-zero slot for readability.
+        let last = e.state.iter().rposition(|v| *v != 0.0);
+        if let Some(last) = last {
+            let slots: Vec<String> = e.state[..=last].iter().map(|v| format!("{v:.4}")).collect();
+            print!("  state = [{}]", slots.join(", "));
+        }
+        println!();
+    }
+    for (name, f) in &rt.scene.fields {
+        println!(
+            "  field {name}: {}x{} dx={} total={:.6}",
+            f.width,
+            f.height,
+            f.dx,
+            f.total()
+        );
+    }
+    let events = rt.emitted_events();
+    if !events.is_empty() {
+        let kinds: Vec<String> = events.iter().map(|e| format!("{}", e.kind)).collect();
+        println!("  events (last step): {}", kinds.join(", "));
+    }
+    for line in rt.logs() {
+        println!("  {line}");
+    }
+}

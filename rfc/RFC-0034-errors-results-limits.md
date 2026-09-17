@@ -1,0 +1,2 @@
+# RFC-0034: Error, Result, and Limits
+**Status:** Normative. `PweStatus` is u32: OK=0; INVALID=1; LIMIT=2; SCHEMA_HASH=3; SCHEMA_UNSUPPORTED=4; EIR_INVALID=5; CAPABILITY=6; HANDLE_STALE=7; CONFLICT=8; OWNERSHIP_STALE=9; ABI_MISMATCH=10; HASH_COLLISION=11; INTERNAL=255. Errors include status, stable detail code, byte offset, and message length+UTF-8 bytes. Default limits: document 256 MiB, sections 1024, nesting 64, records 10M; implementations MAY lower with advertised profile.

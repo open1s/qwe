@@ -1,0 +1,2 @@
+# RFC-0036: Interchange Envelope and Extension Registry
+**Status:** Normative. Every extensible file/message uses `(u16 extension_id,u16 flags,u32 length,payload)` sorted extension_id. ID 0 and 1..1023 are core; 1024..49151 are registered vendor; 49152..65535 private and MUST NOT appear in canonical artifacts. Unknown required extension fails; unknown optional may be skipped after length validation. Compression extension declares algorithm, uncompressed length, and SHA-256; decompression is bounded by RFC-0034 limits.

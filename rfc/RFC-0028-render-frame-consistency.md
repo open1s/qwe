@@ -1,0 +1,2 @@
+# RFC-0028: Render Frame Consistency
+**Status:** Normative. `RenderFrameId=(world_version:u64,render_time_ns:i64,sequence:u64)`. Renderer acquires an immutable declared WorldVersion; all passes and resource reads for one frame use it. Interpolation names both source ticks. Culling/LOD are representational and cannot mutate authority. Present is external IO and returns input/events through a later explicit transaction.

@@ -1,0 +1,5 @@
+/target/
+/.opencode/
+/.zvec-grep/
+/graphify-out/
+**/*.rs.bk

@@ -1,0 +1,2 @@
+# RFC-0033: Capability and View ABI
+**Status:** Normative. Capability token binds issuer, subject, world, region, component/resource selectors, access mask, expiry version/time, and nonce; signature verification precedes use. Masks are READ=1, WRITE=2, CREATE=4, DESTROY=8, EMIT=16, IO=32. Views are `(handle,generation,access,world_version)` and valid only in their transaction/schedule scope. Narrowing is allowed; amplification/delegation is not. Failure is `PWE_E_CAPABILITY` and makes no mutation.

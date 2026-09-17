@@ -1,0 +1,45 @@
+# RFC Implementation Alignment Matrix
+
+RFC-0001 through RFC-0018 are earlier `Draft` (v0.1.0) documents superseded by
+this frozen v0.2 set; see `docs/rfc-supersession.md` for the mapping and the
+forward-looking types folded into `pwe_api` (`time`, `compat`, `resource`,
+`spatial`, `audit`) and `pwe_reference` (`physics_ir`).
+
+This document is a release gate, not a claim of compliance. A row is **Done**
+only when its required behavior is implemented and covered by a named test.
+`Partial` code is not eligible for a `pwe-v0.2` claim.
+
+| RFC | Required reference slice | Status | Evidence / next gate |
+| --- | --- | --- | --- |
+| 0019 | canonical schema bytes, SHA-256, registry, migrations | Done | `schema::tests::schema_canonical_order_and_registry_are_stable`, `sha256::tests::canonical_hash_matches_rfc6234_vectors` |
+| 0020 | complete WIR envelope, CRC32C, sections, rejection order | Done | `wir::tests::wir_canonical_round_trip_is_byte_identical`, `wir::tests::wir_rejects_bad_magic_and_bad_header_crc`, `wir::tests::wir_rejects_out_of_order_or_duplicate_entities`, `wir::tests::wir_rejects_unknown_section_kind`, `wir::tests::wir_rejects_duplicate_known_section_kind`, `wir::tests::wir_rejects_trailing_bytes_after_last_section`, `wir::tests::wir_rejects_unknown_directory_flag_bit`. Sections 1–3, 9 decoded; **sections 4–8 (RESOURCES/SPATIAL/SYSTEMS/EVENTS/TIMELINES) now decoded** as bounded generic record containers (framing, bounds, exact consumption) and round-tripped: `wir::tests::wir_sections_4_through_8_decode_and_round_trip`, `wir::tests::wir_record_section_rejects_malformed_framing`, plus randomized coverage in `prop::wir_round_trip_is_byte_identical_across_many_inputs`. |
+| 0021 | EIR envelope, SSA verifier, interpreter semantics | Done | `eir::tests::eir_rejects_use_before_def`, `eir::tests::eir_rejects_type_mismatch`, `eir::tests::eir_interpreter_produces_ordered_writes`. Opcode collision fixed: component-access ops are now `READ_VIEW=64`/`WRITE_VIEW=65`. `PWEEIR2` envelope + directory + TYPES/FUNCTIONS sections + module hash implemented: `eir::tests::eir_binary_round_trip_is_byte_identical_and_recomputes_hash`. **Control flow**: `BR=0x8001`/`COND_BR=0x8002`/`UNREACHABLE=0x8004` with instruction-index targets, CFG dominance in `validate`, PC-based interpreter. **All remaining opcodes implemented**: `CALL=48` (intra-module calls, per-function `argument_count`, recursion-capped `MAX_CALL_DEPTH`), `ATOMIC=68` (read-modify-write), `EMIT_EVENT=69` (ordered events), `TIME=70`, `RANDOM=71` (seeded, reproducible), `IO=72`, all with a deterministic `ExecEnv` and effect-mask enforcement. Evidence: `eir::tests::eir_call_returns_callee_value_and_recursion_guard_traps`, `eir::tests::eir_recursion_depth_is_capped`, `eir::tests::eir_random_is_deterministic_across_runs`, `eir::tests::eir_time_random_emit_require_declared_effect`, `eir::tests::eir_emit_event_produces_ordered_events`, `eir::tests::eir_atomic_read_modify_write_returns_old_and_writes_sum`. Language surfaces `random()`/`emit(...)`: `lang::tests::random_and_emit_work_cross_backend_and_are_reproducible`. |
+| 0022 | declared access scheduler and view lifetime | Done | `scheduler::tests::schedule_rejects_write_write_conflict` |
+| 0023 | transactional create/destroy/component writes | Done | `tests::commit_is_atomic_and_ordered`, `tests::component_writes_are_invisible_until_atomic_commit`, `tests::conflict_policy_reject_rejects_stale_base`, `tests::conflict_policy_last_writer_wins`, `tests::conflict_policy_commutative_merge_uses_registered_fn`, `tests::commutative_merge_requires_registered_fn`, `tests::events_commit_only_after_success`, `tests::read_component_records_read_set`. State machine `OPEN→PREPARED→VALIDATED→COMMITTED|ABORTED`, read set, ordered events, and all four conflict policies implemented; stale base resolves at commit. |
+| 0024 | transfer prepare/freeze/install/ack/release across regions | Done | `ownership::tests::ownership_full_transfer_state_machine_advances_epoch`, `ownership::tests::ownership_rejects_stale_epoch_proposal`, `ownership::tests::ownership_install_is_idempotent_and_release_requires_ack` |
+| 0025 | snapshot/delta and transactional restore | Done | `snapshot::tests::restore_is_atomic_and_deterministic`, `snapshot::tests::failed_delta_apply_changes_nothing`, `snapshot::tests::delta_round_trips_and_applies_deterministically`, `snapshot::tests::snapshot_round_trips_sim_time_and_resource_refs`, `snapshot::tests::delta_resource_update_applies_to_resource_store` |
+| 0026 | C ABI table, generated header, handle checks | Done | `include/pwe_abi.h`; `ffi::tests::runtime_api_layout_matches_c_header`, `ffi::tests::error_layout_matches_c_header` |
+| 0027 | validated artifact lifecycle/invalidation/deopt | Done | `jit::tests::jit_compile_validate_publish_execute_lifecycle`, `jit::tests::jit_deoptimizes_to_interpreter_on_assumption_violation`, `jit::tests::jit_is_differential_with_interpreter` |
+| 0028 | immutable render frame | Done | `render::tests`; `pwe-conformance` "render frame reads one consistent version"; `render::tests::interpolation_names_both_source_ticks_and_lerps`, `render::tests::present_is_external_io_that_does_not_mutate_world` |
+| 0029 | fixtures and conformance report | Done | `pwe-conformance` binary (total=17 failed=0, no skips); deterministic property tests `reference/tests/prop.rs` (300 WIR + 300 EIR round-trips + 200 transaction sequences, seeded xorshift, no deps). **AOT and CPU/GPU fence coverage added**: `interpreter-AOT differential semantics`, `AOT artifact binary round-trip preserves writes`, `CPU->GPU releasing fence + ownership passes`, `CPU->GPU with weak (relaxed) fence rejected`, `handoff without ownership transfer rejected`. |
+| 0030 | ground/vehicle/camera profile | Done | `pwe-conformance` "RFC-0030 ground+vehicle+camera (Input->Physics->Commit->RenderPrepare)" and "RFC-0030 WIR->EIR->binary round-trip"; `simulation::tests::physics_view_is_read_only_and_sees_dynamic_bodies` (`PhysicsView`). CPU JIT is a validated interpreter-backed cache (documented in CHANGELOG), not native codegen. |
+| 0031 | exact component descriptor, canonical values | Done | `include/pwe_abi.h` `PweComponentDescriptor`; descriptor validation in `pwe_api::ComponentDescriptor::validate` (abi major, align, unknown required flag bits `0x0f`). **`value_size == schema_size` and schema-hash verification now enforced**: `ComponentDescriptor::validate_against(schema_size, schema_hash)` (stable ABI), `Schema::fixed_size()`, `SchemaRegistry::validate_descriptor`, wired into `ReferenceWorld::put_component` via an optional schema registry (`ReferenceWorld::register_schemas`). Evidence: `schema::tests::fixed_size_sum_of_fields_and_variable_size_is_none`, `schema::tests::validate_descriptor_enforces_size_and_schema_hash`, `schema::tests::variable_size_schema_descriptor_skips_size_check_but_checks_hash`. |
+| 0032 | typed deterministic Domain IR lowering | Done | `domain_ir::tests::lower_preserves_order_effects_and_determinism`, `domain_ir::tests::lowered_domain_module_is_valid_and_executable` (lowered functions are valid typed EIR that validate, round-trip through the binary codec, and interpret; physics lowering is `physics_eir`) |
+| 0033 | signed/verifiable capability claims and scoped views | Done | `capability::tests::capability_token_round_trips_and_verifies`, `capability::tests::capability_failures_reject_before_transaction_creation`; `pwe_api::ReadView`/`WriteView` carry the RFC-0033 `(handle,generation,access,world_version)` tuple |
+| 0034 | stable error/result detail codes and advertised limits | Done | `limits::tests::default_limits_match_rfc_numbers`, `detail::tests::detail_codes_are_distinct_within_status`; `ADVERTISED_LIMITS` |
+| 0035 | canonical artifact identity/compatibility | Done | `artifact::tests::artifact_identity_hash_is_stable_and_order_insensitive_for_features`, `artifact::tests::artifact_requires_fails_closed_on_abi_mismatch`, `artifact::tests::artifact_requires_rejects_format_minor_and_feature_mismatch` |
+| 0036 | extension envelope and bounded compression metadata | Done | `extension::tests::extension_envelope_round_trips_sorted`, `extension::tests::extension_required_unknown_fails_optional_skipped`, `extension::tests::compression_metadata_round_trips_and_is_bounded` |
+
+## Language front end
+
+Beyond the RFC rows, `pwe-reference` ships a textual **PWE language** (`reference/src/lang.rs`,
+`cargo run --example language_demo`): source is parsed to a `WorldModel` + system
+declarations, compiled to low-level EIR, and run **cross-backend** (interpreter + CPU JIT)
+through `LangRuntime`, asserting the two backends produce byte-identical writes each step.
+Conformance case: "PWE language compile->EIR + cross-backend run".
+
+## Current rule
+
+No test, crate, or document may use the labels `conformant`, `compliant`, or
+`pwe-v0.2` until every row is Done and RFC-0029 report has no required skip.
+Each implementation pull/change must update the relevant row with its test name.

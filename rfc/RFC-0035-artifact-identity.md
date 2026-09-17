@@ -1,0 +1,2 @@
+# RFC-0035: Artifact Identity and Compatibility
+**Status:** Normative. Artifact identity hashes canonical tuple `(kind,format major/minor,EIR hash,Domain IR hash,SchemaSetHash,Runtime ABI major,Component ABI majors,target,feature set,capability manifest)`. Loader requires equality for every non-negotiable member and validates declared optional features before link. Cache keys are full identity bytes; a mismatch is ABI_MISMATCH, never fallback reinterpretation.

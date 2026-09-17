@@ -1,0 +1,2 @@
+# RFC-0030: Minimal Reference Profile
+**Status:** Normative profile. Required: Rust kernel abstraction, World/ECS, schema registry, WIR, Component ABI, transactional deterministic scheduler, EIR validator/interpreter, PhysicsView/RenderView, snapshot/delta, local ownership, and one CPU JIT. First scenario: ground+vehicle+camera; Input→Physics→Commit→RenderPrepare; WIR→Domain IR→EIR→Interpreter/JIT; snapshot→restore→replay yields identical hash. Physics/Renderer authoritative copies fail the profile.

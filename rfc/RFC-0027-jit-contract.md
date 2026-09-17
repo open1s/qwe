@@ -1,0 +1,2 @@
+# RFC-0027: JIT Contract
+**Status:** Normative. Lifecycle is Compile→Validate→CapabilityCheck→Link→Publish→Execute, with Profile/Invalidate returning to Compile. Artifact identity is RFC-0035 identity plus EIR hash, target, Runtime ABI major, SchemaSetHash, feature and profile hashes. Assumptions (layouts/constants/ranges/device/alignment) are checked at entry. Publication and invalidation are atomic; execution deoptimizes only at declared EIR safe points and resumes generic semantics. No executable artifact runs without a capability manifest.

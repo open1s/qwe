@@ -1,0 +1,2 @@
+# RFC-0032: Domain IR
+**Status:** Normative. Domain IR is typed, deterministic lowering between WIR and EIR. Node IDs are stable SHA-256-derived IDs; nodes are sorted ID and have declared input/output schemas, effects, and capability needs. Lowering MUST preserve entity order, numeric canonicalization, event order, and declared effects; it emits EIR plus `domain_ir_hash`. No hardware opcode, pointer, or runtime handle is permitted.

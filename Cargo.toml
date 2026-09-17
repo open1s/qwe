@@ -1,0 +1,18 @@
+[package]
+name = "pwe-api"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.81"
+description = "PWE v0.2 frozen Rust API contract"
+license = "Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+std = []
+
+[workspace]
+members = ["reference", "conformance", "cli"]
+resolver = "2"

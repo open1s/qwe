@@ -1,0 +1,134 @@
+// The PWE language grammar (PEST). Rules are grouped by concern so the language
+// stays easy to extend: add a rule here and a lowering arm in
+// `LangParser`-consuming code (`parse`) / `build_systems` / `WorldModel::build_scene`.
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" | ("#" ~ (!"\n" ~ ANY)*) | ("//" ~ (!"\n" ~ ANY)*) }
+COMMENT = _{ "#" ~ (!"\n" ~ ANY)* | "//" ~ (!"\n" ~ ANY)* }
+
+program = _{ SOI ~ world_section ~ funcs_section? ~ systems_section? ~ EOI }
+
+// -- user-defined functions ---------------------------------------------------
+// Pure functions over named params, called from `update` rules. The body is a
+// scalar expression; params are referenced by slot `s0`, `s1`, … (param i is
+// slot `s_i`). Lowered to EIR `CALL` functions.
+funcs_section = { "funcs" ~ "{" ~ func_def* ~ "}" }
+// The body is either a bare scalar expression (its return value) or a
+// sequence of statements (lets and bounded loops) ending with an explicit
+// `return expr`.
+func_def = { ident ~ "(" ~ param_list? ~ ")" ~ "{" ~ func_body ~ "}" }
+func_body = _{ func_stmts | expr }
+func_stmts = { (func_item ~ ";"?)+ ~ func_return }
+func_item = _{ let_stmt | repeat_stmt | for_stmt }
+func_return = _{ return_kw ~ expr ~ ";"? }
+param_list = { ident ~ ("," ~ ident)* }
+
+// -- world model -------------------------------------------------------------
+world_section = { "world" ~ "{" ~ world_item* ~ "}" }
+world_item = _{ gravity_stmt | chan_stmt | entity_stmt | field_stmt }
+gravity_stmt = { "gravity" ~ "=" ~ vec3 }
+chan_stmt = { "chan" ~ ident ~ "{" ~ "value" ~ "=" ~ value ~ ";"? ~ "}" }
+entity_stmt = { "entity" ~ ident ~ "{" ~ entity_field* ~ "}" }
+// A deterministic scalar grid field (PDE substrate): `field name { width = w; height = h; dx = d }`.
+field_stmt = { "field" ~ ident ~ "{" ~ param* ~ "}" }
+
+position_field = { "position" ~ "=" ~ vec3 ~ ";"? }
+velocity_field = { "velocity" ~ "=" ~ vec3 ~ ";"? }
+state_field = { "state" ~ "=" ~ (vecN | named_state) ~ ";"? }
+named_state = { "(" ~ state_item ~ ("," ~ state_item)* ~ ")" }
+// `vec3 pos` declares N consecutive slots with a named vector element: `pos`
+// reads the first component, `@self.state.pos.1` reads component 1.
+state_item = { ("vec" ~ ASCII_DIGIT+ ~ ident) | (ident ~ "=" ~ value) | value }
+mass_field = { "mass" ~ "=" ~ value ~ ";"? }
+dynamic_field = { "dynamic" ~ "=" ~ boolean ~ ";"? }
+nbody_field = { "nbody" ~ "=" ~ boolean ~ ";"? }
+restitution_field = { "restitution" ~ "=" ~ value ~ ";"? }
+friction_field = { "friction" ~ "=" ~ value ~ ";"? }
+box_field = { "box" ~ "=" ~ vec3 ~ ";"? }
+sphere_field = { "sphere" ~ "=" ~ value ~ ";"? }
+hull_field = { "hull" ~ "=" ~ hull_list ~ ";"? }
+camera_field = { "camera" ~ "=" ~ boolean ~ ";"? }
+color_field = { "color" ~ "=" ~ color ~ ";"? }
+color = @{ "0x" ~ ASCII_HEX_DIGIT+ }
+entity_field = _{ position_field | velocity_field | state_field | mass_field | dynamic_field
+                 | nbody_field | restitution_field | friction_field | box_field | sphere_field
+                 | hull_field | camera_field | color_field }
+
+hull_list = { "[" ~ vec3 ~ ("," ~ vec3)* ~ "]" }
+vec3 = { "(" ~ value ~ "," ~ value ~ "," ~ value ~ ")" }
+vecN = { "(" ~ value ~ ("," ~ value)* ~ ")" }
+
+// -- systems -----------------------------------------------------------------
+systems_section = { "systems" ~ "{" ~ system* ~ "}" }
+// Channel send/recv are first-class grammar productions; any other system kind
+// is a generic `ident { param }` block.
+system = _{ send_system | recv_system | generic_system }
+send_system = { "send" ~ "{" ~ param* ~ "}" }
+recv_system = { "recv" ~ "{" ~ param* ~ "}" }
+generic_system = { ident ~ "{" ~ param* ~ "}" }
+param = { (let_stmt | repeat_stmt | for_stmt | slot_lhs ~ "=" ~ expr | call | ident ~ "=" ~ (vecN | expr | ident)) ~ ";"? }
+// Dynamic slot LHS: `s[i] = expr` writes the State slot at a runtime index.
+slot_lhs = { "s" ~ "[" ~ expr ~ "]" }
+// `let name = expr` binds a reusable local in an `update` rule.
+let_stmt = { "let" ~ ident ~ "=" ~ expr }
+// `repeat n { let … }` unrolls at lowering time (bounded) with per-loop
+// break/continue gating, enabling fixed-point / Newton-style iteration within
+// one step. Optional `until (cond)` exits after an iteration when cond is
+// true; `while (cond)` skips an iteration when cond is false. Bodies may
+// contain only `let`, nested loops, and `break`/`continue` (`break if (cond)`);
+// slot rules stay outside the loop.
+repeat_stmt = { "repeat" ~ number ~ repeat_gate? ~ "{" ~ repeat_item* ~ "}" }
+repeat_gate = { gate_kw ~ "(" ~ expr ~ ")" }
+gate_kw = @{ "until" ~ !(ASCII_ALPHANUMERIC | "_") | "while" ~ !(ASCII_ALPHANUMERIC | "_") }
+// `for i in lo..hi { let … }` unrolls with the index bound as a local per
+// iteration (ascending integers, bounded). Same body restrictions as repeat.
+for_stmt = { "for" ~ ident ~ "in" ~ for_range ~ "{" ~ repeat_item* ~ "}" }
+for_range = { number ~ ".." ~ number }
+repeat_item = { (let_stmt | repeat_stmt | for_stmt | break_stmt | continue_stmt) ~ ";"? }
+// `break` / `continue` (optionally `break if (cond)`) inside a loop body.
+break_stmt = { break_kw ~ (if_kw ~ expr)? }
+continue_stmt = { continue_kw ~ (if_kw ~ expr)? }
+break_kw = @{ "break" ~ !(ASCII_ALPHANUMERIC | "_") }
+continue_kw = @{ "continue" ~ !(ASCII_ALPHANUMERIC | "_") }
+if_kw = @{ "if" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// A general scalar expression over state slots (`s0`, `s1`, …), constants,
+// the operators + - * / with parentheses, comparisons (< > <= >= == !=),
+// logical connectives (`and`/`or`/`not`, also `&&`/`||`/`!`), and function
+// calls (sin cos exp ln sqrt pow, min max if). Comparisons and logical ops
+// yield 1.0 / 0.0; any nonzero operand counts as true. Precedence:
+// `not` > `and` > `or` > comparison > additive. `not` binds to the following
+// factor: write `not (x > 0)` for a negated comparison.
+expr = { logical_or }
+logical_or = { logical_and ~ (or_op ~ logical_and)* }
+or_op = @{ "or" ~ !(ASCII_ALPHANUMERIC | "_") | "||" }
+logical_and = { comparison ~ (and_op ~ comparison)* }
+and_op = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") | "&&" }
+comparison = { additive ~ (cmp_op ~ additive)* }
+cmp_op = { "<=" | ">=" | "==" | "!=" | "<" | ">" }
+additive = { term ~ (add_op ~ term)* }
+add_op = { "+" | "-" }
+term = { factor ~ (term_op ~ factor)* }
+term_op = { "*" | "/" }
+factor = { unary | number | call | "(" ~ expr ~ ")" | slot | slot_dyn | entity_ref | time | constant | state_name }
+// Dynamic slot read: `s[i]` reads the State slot at a runtime index.
+slot_dyn = { "s" ~ "[" ~ expr ~ "]" }
+unary = { "-" ~ factor | not_op ~ factor }
+not_op = @{ "not" ~ !(ASCII_ALPHANUMERIC | "_") | "!" }
+call = { func_name ~ "(" ~ expr? ~ ("," ~ expr)* ~ ")" }
+// Any identifier may be called; builtins (sin cos exp ln sqrt pow min max if
+// random emit) are special-cased in lowering, everything else resolves to a
+// user-defined function from the `funcs` section.
+func_name = @{ ident }
+slot = @{ "s" ~ ASCII_DIGIT+ }
+entity_ref = { "@" ~ ident ~ "." ~ ( slot | prop_path ) }
+prop_path = { ident ~ ("." ~ (ident | ASCII_DIGIT+))* }
+state_name = @{ ident }
+time = @{ "t" ~ !(ASCII_ALPHANUMERIC | "_") }
+constant = @{ ("pi" | "e") ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// -- atoms -------------------------------------------------------------------
+ident = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+ | "." ~ !".")? ~ (("e" | "E") ~ "-"? ~ ASCII_DIGIT+)? }
+value = { number ~ ("/" ~ number)? }
+boolean = { "true" | "false" }
+return_kw = @{ "return" ~ !(ASCII_ALPHANUMERIC | "_") }

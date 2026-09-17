@@ -1,0 +1,2 @@
+# RFC-0031: Component ABI
+**Status:** Normative — frozen. Component descriptor is `(ComponentTypeId,SchemaHash,u32 abi_major,u32 flags,u32 value_size,u32 value_align)`. ABI bytes are canonical schema values, never native structs. `value_align` is power-of-two ≤64; fixed-size descriptors must match schema size. Calls pass descriptor plus `(ptr,len)` and validate type/schema/length before read. ABI major mismatch or unknown required flag fails; minor compatible additions use new descriptor flags only. Mutable access requires RFC-0033 Write capability and RFC-0023 transaction.
