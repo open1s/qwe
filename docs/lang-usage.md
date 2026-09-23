@@ -95,6 +95,9 @@ Entity ids are 1-based in declaration order; channels follow the bodies.
 | `rk4` | `on = name?`, `when = expr?`, `every = n?`, `substeps = n?`, `dt`, `let …`, slot rules | Same rules as `update`, but integrated with the classic **4th-order Runge–Kutta** method — far tighter accuracy for oscillators and nonlinear ODEs at the same `dt`. |
 | `invariant` | `on = name?`, `expr`, `let …` | Per-step assertion: `expr` must be non-zero for the checked entities as the systems leave the state; a violated invariant fails the step (detail 69) before any write is applied. |
 | `watch` | `on = name?`, `expr`, `mem = slot`, `into = slot` | Zero-crossing detection: flags 1 when the watched expression changes sign between consecutive steps; the previous value lives in the `mem` slot (world state), the flag lands in `into`. |
+| `diffuse` | `field = name`, `rate` | Explicit diffusion of a grid field: `T += rate·∇²T` per step, a Jacobi sweep (exactly conservative under the zero-flux stencil). |
+| `poisson` | `field = name`, `source = name?`, `iters`, `scale = s?` | Gauss–Seidel relaxation of `∇²φ = ρ·scale` — `iters` sweeps per step, boundary cells held fixed. |
+| `wave` | `field = name`, `prev = name`, `velocity = c`, `dt`, `damping = s?` | Second-order leapfrog `u_tt = c²∇²u` over two fields (`prev` stores `u(t−h)`); Courant `c·h/dx ≤ 1/√2` (2D) / `≤ 1/√3` (3D). `damping` (default `1.0`, lossless) scales the temporal term; `absorb` + `absorb_width` add a graded sponge layer that absorbs outgoing waves at the boundary instead of reflecting them. |
 
 Unknown system kind → error (detail code 49).
 
@@ -189,6 +192,11 @@ comparison rejection.
 | `pi`, `e` | Constants. |
 | `t` | Global simulation clock (seconds). |
 
+A bare name that resolves to no local, slot, or parameter reads `0.0` (the
+unresolved-reference convention) rather than failing the step. System parameters
+such as `dt` are *not* in expression scope — write the step explicitly (e.g.
+`x = (target - x) / 0.5` to snap `x` to `target` when `dt = 0.5`).
+
 ### Builtin functions
 
 * 1-arg: `sin cos exp ln sqrt abs floor ceil round sign log10 log2 sinh cosh tanh asin acos atan`
@@ -225,8 +233,12 @@ from "physics" import thrust     # thrust(m)  (bare)
   rules resolve their bare names within their own namespace first, then
   globally. Entities, systems, fields and channels are world content and merge
   flatly (a duplicate entity/field name across modules is a compile error).
-* Cycles are tolerated (a module is loaded once); missing files and duplicate
-  entity/field names are reported (detail 76).
+* **Circular imports resolve**: a module is loaded once and merged, and its
+  members are registered under **every alias** it is imported with, so mutual
+  references (`a` ↔ `b`) and multi-alias references (`import "x" as alpha`
+  alongside `import "x"`) both resolve. `--param` updates every alias of a
+  parameter together. Missing files and duplicate entity/field names are
+  reported (detail 76).
 
 ```pwe
 # physics.pwe
@@ -278,16 +290,71 @@ arguments; `sqrt` halves exponents.
 
 ### Grid fields (PDE substrate)
 
-Declared with `field <name> { width = w; height = h; dx = d }` in the world
+Declared with `field <name> { width = w; height = h; dx = d }` (2D) or
+`field <name> { width = w; height = h; depth = d; dx = h }` (3D) in the world
 section; the cells are deterministic world state (snapshot/replayable like any
-other world state).
+other world state). Space is 3D — with the simulation clock, fields are the 4D
+substrate (3D space + time).
 
-* `fget(f, i, j)` — the cell value at `(i, j)`; sees same-step writes.
-* `fset(f, i, j, v)` — writes the cell (a bare call statement; yields `0.0`).
-* `flap(f, i, j)` — the discrete Laplacian with the Field's zero-flux stencil,
-  scaled by `1/dx²` — the PDE operator heat/diffusion/Poisson rules compose.
+* `fget(f, i, j)` / `fget(f, i, j, k)` — the cell value (2D / 3D); sees
+  same-step writes.
+* `fset(f, i, j, v)` / `fset(f, i, j, k, v)` — writes the cell (a bare call
+  statement; yields `0.0`).
+* `flap(f, i, j)` / `flap(f, i, j, k)` — the discrete Laplacian with the
+  Field's zero-flux stencil, scaled by `1/dx²` (5-point in 2D, 7-point in 3D) —
+  the PDE operator heat/diffusion/Poisson rules compose.
 * Coordinates may be any expression (slots, locals, arithmetic). Unknown field
   names read `0` (the documented unresolved-reference convention).
+
+#### Continuum solvers (`diffuse` / `poisson`)
+
+Rather than hand-write an `fget`/`fset`/`flap` loop, declare a solver:
+
+```pwe
+field heat { width = 32; height = 32; dx = 1.0 }
+field phi  { width = 32; height = 32; dx = 1.0 }
+field rho  { width = 32; height = 32; dx = 1.0 }
+field u    { width = 64; height = 64; dx = 1.0 }
+field um   { width = 64; height = 64; dx = 1.0 }
+systems {
+  diffuse { field = heat; rate = 0.2 }                 # T += 0.2·∇²T
+  poisson { field = phi; source = rho; iters = 20 }    # ∇²φ = ρ
+  wave    { field = u; prev = um; velocity = 1.0; dt = 0.5 }  # u_tt = c²∇²u
+}
+```
+
+`diffuse` reads every cell and its Laplacian from one snapshot, then applies
+all updates — a Jacobi sweep, so the injected total is conserved exactly
+(`rate ≤ 1/4` in 2D, `≤ 1/6` in 3D). `poisson` runs `iters` in-place Gauss–Seidel
+sweeps; the boundary cells act as fixed potentials (set them with `fset`).
+`wave` shifts the two fields each step (`prev ← u`, `u ← 2u − prev + (c·h/dx)²∇²u`),
+so an initial pulse splits into a spherical (3D) or circular (2D) wavefront.
+All solvers iterate the field in 3D when `depth > 1`. All solvers run
+**once per step** (only the first dynamic entity emits the sweep), are
+deterministic, and lower to the existing field opcodes, so the interpreter and
+JIT remain byte-identical.
+
+### Standard library (`std/`)
+
+`std/` is a package of pure-function modules for general simulation:
+
+```pwe
+import "std/forces"
+import "std/thermal"
+systems {
+  update { on = body; dt = 0.1
+    vx   = forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0) + 0.0
+    temp = thermal.newton_cooling(temp, 293.15, 0.05) + 0.0
+  }
+}
+```
+
+Modules: `math`, `particles`, `forces`, `mechanics`, `chemistry` (periodic
+table 1–118), `thermal`, `acoustics`, `optics`, `em`, `robotics`, `units`,
+`control`. Their physical constants are params
+(`chemistry.R_gas`, `thermal.sigma_sb`, `em.k_coulomb`, …), overridable with
+`--param`. See `std/README.md` for the full API and `cli/examples/domains.pwe`
+for a composing example.
 
 ### Dynamic slot indexing
 

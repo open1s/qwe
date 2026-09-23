@@ -1,0 +1,48 @@
+# acoustics.pwe — 2-D sound propagation on the `wave` solver.
+#
+# A monopole at (4,16) is driven for a short burst; the pressure field radiates
+# outward and reflects off the walls. Three probes on the axis ride the local
+# pressure (their y "snaps" to the field via `(target - y)/0.5`, since a rule
+# integrates). Their state also carries the level in dB via std/acoustics.
+import "../../std/acoustics"
+
+world {
+  gravity = (0, 0, 0)
+  field p  { width = 33; height = 33; dx = 1.0 }
+  field pm { width = 33; height = 33; dx = 1.0 }
+  entity source { state = (x = 4.0,  y = 0.0, z = 0.0, db = 0.0) }
+  entity near   { state = (x = 12.0, y = 0.0, z = 0.0, db = 0.0) }
+  entity mid    { state = (x = 20.0, y = 0.0, z = 0.0, db = 0.0) }
+  entity far    { state = (x = 28.0, y = 0.0, z = 0.0, db = 0.0) }
+}
+
+systems {
+  wave { field = p; prev = pm; velocity = 1.0; dt = 0.5 }
+
+  # driver: a 4-step-period tone for t < 16, injected after the wave step
+  update {
+    on = source
+    dt = 0.5
+    let _ = fset(p, 4.0, 16.0, fget(p, 4.0, 16.0) + if(t < 16.0, 0.05 * sin(6.283185307179586 * t / 4.0), 0.0))
+    y  = (60.0 * fget(p, 4.0, 16.0) - y) / 0.5 + 0.0
+    db = (acoustics.spl(max(abs(0.02 * fget(p, 4.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0
+  }
+  update {
+    on = near
+    dt = 0.5
+    y  = (60.0 * fget(p, 12.0, 16.0) - y) / 0.5 + 0.0
+    db = (acoustics.spl(max(abs(0.02 * fget(p, 12.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0
+  }
+  update {
+    on = mid
+    dt = 0.5
+    y  = (60.0 * fget(p, 20.0, 16.0) - y) / 0.5 + 0.0
+    db = (acoustics.spl(max(abs(0.02 * fget(p, 20.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0
+  }
+  update {
+    on = far
+    dt = 0.5
+    y  = (60.0 * fget(p, 28.0, 16.0) - y) / 0.5 + 0.0
+    db = (acoustics.spl(max(abs(0.02 * fget(p, 28.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0
+  }
+}

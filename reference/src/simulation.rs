@@ -291,10 +291,13 @@ impl Simulation {
             let height = take_u64(bytes, &mut cursor)? as usize;
             let dx = take_f64_s(bytes, &mut cursor)?;
             let cell_count = take_u64(bytes, &mut cursor)? as usize;
-            let mut f = crate::field::Field::new(width, height, dx);
-            for k in 0..cell_count {
+            // The depth is recoverable from the cell count: the snapshot format
+            // is unchanged by extending fields to 3D.
+            let depth = (cell_count / (width * height).max(1)).max(1);
+            let mut f = crate::field::Field::new3(width, height, depth, dx);
+            for idx in 0..cell_count {
                 let v = take_f64_s(bytes, &mut cursor)?;
-                f.set(k % width, k / width, v);
+                f.set_linear(idx, v);
             }
             scene.fields.insert(name, f);
         }

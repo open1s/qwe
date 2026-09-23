@@ -142,16 +142,24 @@ impl EirRuntime for SceneRuntime<'_> {
         // A grid field cell: the linear index rides in the offset. Checked
         // before the entity lookup — fields do not belong to any entity.
         if let Some(f) = self.field_ids.get(&target.component) {
+            // Grid-cell access: the linear `[k][j][i]` index rides in the
+            // offset (the interpreter folds `(i, j + k·height)` into it).
             let idx = (target.offset / field::STATE_SLOT_BYTES) as usize;
-            let (i, j) = (idx % f.width, idx / f.width);
-            if j >= f.height {
+            if idx >= f.cells().len() {
                 return Err(pwe_api::Error {
                     status: pwe_api::Status::Invalid,
                     detail: 7,
                     byte_offset: 0,
                 });
             }
-            Ok(f.value(i, j).to_bits())
+            Ok(f.value_linear(idx).to_bits())
+        } else if target.entity == 0 {
+            // A world-level component that is not a registered parameter, clock,
+            // or field: an unresolved reference (a bare name bound to a
+            // not-registered parameter component, or a bare `dt`/typo). These
+            // read 0.0 — the documented unresolved-reference convention. Entity
+            // ids are 1-based, so entity 0 is never a real body.
+            Ok(0.0f64.to_bits())
         } else {
             let e = self
                 .scene
@@ -292,8 +300,14 @@ impl EirRuntime for SceneRuntime<'_> {
             detail: 6,
             byte_offset: 0,
         })?;
-        let (ii, jj) = (i as usize, j as usize);
-        if ii >= f.width || jj >= f.height {
+        let (w, h, d) = (f.width, f.height, f.depth);
+        // The caller encodes `(j, k)` as `j + k·height` (the same packing the
+        // linear index uses), so recover `j` and `k` from the field's geometry.
+        let j_lin = j as usize;
+        let ii = i as usize;
+        let kk = j_lin.checked_div(h).unwrap_or(0);
+        let jj = j_lin.checked_rem(h).unwrap_or(0);
+        if ii >= w || jj >= h || kk >= d {
             return Err(pwe_api::Error {
                 status: pwe_api::Status::Invalid,
                 detail: 7,
@@ -303,24 +317,39 @@ impl EirRuntime for SceneRuntime<'_> {
         // The Field's zero-flux stencil (off-edge neighbors = center), scaled
         // by 1/dx²; each cell prefers any in-interpretation write (the same
         // overlay `read_field` sees).
-        let cell = |ci: usize, cj: usize| -> f64 {
-            let idx = (ci + cj * f.width) as u32;
+        let cell = |ci: usize, cj: usize, ck: usize| -> f64 {
+            let idx = ((ck * h + cj) * w + ci) as u32;
             if let Some(&v) = self
                 .pending
                 .get(&(0, component, idx * field::STATE_SLOT_BYTES))
             {
                 f64::from_bits(v)
             } else {
-                f.value(ci, cj)
+                f.value_linear(idx as usize)
             }
         };
-        let (w, h) = (f.width, f.height);
-        let center = cell(ii, jj);
-        let left = if ii > 0 { cell(ii - 1, jj) } else { center };
-        let right = if ii + 1 < w { cell(ii + 1, jj) } else { center };
-        let up = if jj > 0 { cell(ii, jj - 1) } else { center };
-        let down = if jj + 1 < h { cell(ii, jj + 1) } else { center };
-        Ok((left + right + up + down - 4.0 * center) / (f.dx * f.dx))
+        let center = cell(ii, jj, kk);
+        let left = if ii > 0 { cell(ii - 1, jj, kk) } else { center };
+        let right = if ii + 1 < w {
+            cell(ii + 1, jj, kk)
+        } else {
+            center
+        };
+        let up = if jj > 0 { cell(ii, jj - 1, kk) } else { center };
+        let down = if jj + 1 < h {
+            cell(ii, jj + 1, kk)
+        } else {
+            center
+        };
+        let back = if kk > 0 { cell(ii, jj, kk - 1) } else { center };
+        let front = if kk + 1 < d {
+            cell(ii, jj, kk + 1)
+        } else {
+            center
+        };
+        // 6-point stencil throughout; for a 2D slice the two off-edge z-terms
+        // equal the centre, collapsing to the 5-point `−4·centre` form.
+        Ok((left + right + up + down + back + front - 6.0 * center) / (f.dx * f.dx))
     }
 }
 
@@ -1302,15 +1331,14 @@ pub fn apply_writes(scene: &mut Scene, writes: &[crate::eir::WorldWrite]) -> Res
             // linear index rides in the offset.
             if let Some(f) = scene.fields.get_mut(name) {
                 let idx = (w.offset / field::STATE_SLOT_BYTES) as usize;
-                let (i, j) = (idx % f.width, idx / f.width);
-                if j >= f.height {
+                if idx >= f.cells().len() {
                     return Err(pwe_api::Error {
                         status: pwe_api::Status::Invalid,
                         detail: 7,
                         byte_offset: 0,
                     });
                 }
-                f.set(i, j, f64::from_bits(w.value));
+                f.set_linear(idx, f64::from_bits(w.value));
             }
             continue;
         }

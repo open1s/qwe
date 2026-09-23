@@ -1,0 +1,16 @@
+# std/forces — interaction laws (returned as accelerations where noted).
+world { }
+
+funcs {
+  hooke(k, x) { 0.0 - k * x }
+  spring_accel(k, x, mass) { 0.0 - k * x / mass }
+  damping_accel(c, v, mass) { 0.0 - c * v / mass }
+  drag_linear_accel(c, v, mass) { 0.0 - c * v / mass }
+  drag_quadratic_accel(c, v, mass) { 0.0 - c * v * abs(v) / mass }
+  coulomb_force(k, q1, q2, r) { k * q1 * q2 / (r * r) }
+  gravity_force(g, m1, m2, r) { g * m1 * m2 / (r * r) }
+  inverse_square_accel(mu, r) { 0.0 - mu / (r * r) }
+  buoyancy_force(density, volume, g) { density * volume * g }
+  thrust_accel(force, mass) { force / mass }
+  damper_force(c, v) { 0.0 - c * v }
+}

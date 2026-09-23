@@ -95,6 +95,7 @@ pub struct FieldDecl {
     pub name: String,
     pub width: usize,
     pub height: usize,
+    pub depth: usize,
     pub dx: f64,
 }
 
@@ -110,6 +111,9 @@ pub struct WorldModel {
     pub params: std::collections::BTreeMap<String, f64>,
     /// Declared units for parameters (`G = 6.7e-11 m^3*kg^-1*s^-2`).
     pub param_units: std::collections::BTreeMap<String, crate::units::Dim>,
+    /// Parameter alias -> canonical key, for modules imported under several
+    /// namespaces (`--param` updates every alias of one parameter).
+    pub param_alias: std::collections::BTreeMap<String, String>,
     pub entities: Vec<EntityDecl>,
     pub channels: Vec<ChanDecl>,
     pub fields: Vec<FieldDecl>,
@@ -122,6 +126,7 @@ impl WorldModel {
             title: None,
             params: std::collections::BTreeMap::new(),
             param_units: std::collections::BTreeMap::new(),
+            param_alias: std::collections::BTreeMap::new(),
             entities: Vec::new(),
             channels: Vec::new(),
             fields: Vec::new(),
@@ -136,7 +141,7 @@ impl WorldModel {
         for decl in &self.fields {
             scene.fields.insert(
                 decl.name.clone(),
-                crate::field::Field::new(decl.width, decl.height, decl.dx),
+                crate::field::Field::new3(decl.width, decl.height, decl.depth, decl.dx),
             );
         }
         for (index, decl) in self.entities.iter().enumerate() {

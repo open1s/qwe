@@ -110,7 +110,13 @@ fn main() -> pwe_api::Result<()> {
     let mut rt = LangRuntime::compile(SOURCE)?;
 
     let live = Arc::new(RwLock::new(LiveState::default()));
-    present::serve_live(Arc::clone(&live), port).expect("serve live viewer");
+    present::serve_live(
+        Arc::clone(&live),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        port,
+    )
+    .expect("serve live viewer");
     println!("live Scientific Laws gallery: open http://localhost:{port}");
 
     let cam = CameraVisual {

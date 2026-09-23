@@ -1,0 +1,48 @@
+# std/units — physical unit conversions (values in, values out; SI on the right).
+world { }
+
+funcs {
+  # speed
+  kmh_to_ms(v) { v / 3.6 }
+  ms_to_kmh(v) { v * 3.6 }
+  mph_to_ms(v) { v * 0.44704 }
+  knot_to_ms(v) { v * 0.5144444444444445 }
+  # temperature
+  fahrenheit_to_celsius(f) { (f - 32.0) * 5.0 / 9.0 }
+  celsius_to_fahrenheit(c) { c * 9.0 / 5.0 + 32.0 }
+  celsius_to_kelvin(c) { c + 273.15 }
+  kelvin_to_celsius(k) { k - 273.15 }
+  # energy
+  kwh_to_j(x) { x * 3.6e6 }
+  cal_to_j(x) { x * 4.184 }
+  kcal_to_j(x) { x * 4184.0 }
+  ev_to_j(x) { x * 1.602176634e-19 }
+  btu_to_j(x) { x * 1055.06 }
+  # pressure
+  atm_to_pa(x) { x * 101325.0 }
+  bar_to_pa(x) { x * 1.0e5 }
+  psi_to_pa(x) { x * 6894.757293168 }
+  mmhg_to_pa(x) { x * 133.322387415 }
+  # length
+  angstrom_to_m(x) { x * 1.0e-10 }
+  nm_to_m(x) { x * 1.0e-9 }
+  au_to_m(x) { x * 1.495978707e11 }
+  ly_to_m(x) { x * 9.4607304725808e15 }
+  parsec_to_m(x) { x * 3.0856775814913673e16 }
+  mile_to_m(x) { x * 1609.344 }
+  nautical_mile_to_m(x) { x * 1852.0 }
+  foot_to_m(x) { x * 0.3048 }
+  inch_to_m(x) { x * 0.0254 }
+  # mass
+  lb_to_kg(x) { x * 0.45359237 }
+  oz_to_kg(x) { x * 0.028349523125 }
+  tonne_to_kg(x) { x * 1000.0 }
+  # angle
+  deg_to_rad(d) { d * 0.017453292519943295 }
+  rad_to_deg(r) { r * 57.29577951308232 }
+  arcmin_to_rad(a) { a * 0.0002908882086657216 }
+  arcsec_to_rad(a) { a * 4.84813681109536e-6 }
+  # acceleration / force
+  g_to_ms2(x) { x * 9.80665 }
+  lbf_to_n(x) { x * 4.4482216152605 }
+}

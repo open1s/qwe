@@ -45,7 +45,13 @@ fn main() -> pwe_api::Result<()> {
     let mut rt = LangRuntime::compile(SOURCE)?;
 
     let live = Arc::new(RwLock::new(LiveState::default()));
-    present::serve_live(Arc::clone(&live), port).expect("serve live viewer");
+    present::serve_live(
+        Arc::clone(&live),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        port,
+    )
+    .expect("serve live viewer");
     println!("live stochastic ecology: open http://localhost:{port}");
 
     let cam = CameraVisual {
@@ -55,8 +61,12 @@ fn main() -> pwe_api::Result<()> {
 
     let steps = 2000usize;
     let mut last = 0.0f64;
+    // `emitted_events()` holds only the current step's events (the step clears
+    // them first), so accumulate to prove the model emits every step.
+    let mut total_events = 0usize;
     for i in 0..steps {
         rt.step_cross()?; // interpreter == JIT enforced every step
+        total_events += rt.emitted_events().len();
         last = rt
             .scene
             .get(pwe_api::EntityId(1))
@@ -70,7 +80,7 @@ fn main() -> pwe_api::Result<()> {
             g.info = vec![
                 format!("step {i}/{steps}: stochastic logistic population"),
                 format!(
-                    "P = {last:.3}  (carrying capacity 1.0, r=1.8, σ=0.02)  events={}",
+                    "P = {last:.3}  (carrying capacity 1.0, r=1.8, σ=0.02)  events/step={}",
                     rt.emitted_events().len()
                 ),
             ];
@@ -83,8 +93,8 @@ fn main() -> pwe_api::Result<()> {
         "population {last} stayed within the ecological bounds"
     );
     assert!(
-        rt.emitted_events().len() >= steps,
-        "events were emitted each step"
+        total_events >= steps,
+        "events were emitted each step (got {total_events} over {steps} steps)"
     );
 
     // Reproducibility: a fresh runtime with the same source reproduces the same

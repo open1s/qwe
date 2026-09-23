@@ -93,6 +93,9 @@ systems {
 | `rk4` | `on = name?`, `when = expr?`, `every = n?`, `dt`, `let …`, 槽规则 | 与 `update` 相同的规则，但用经典 **4 阶龙格-库塔** 方法积分——在相同 `dt` 下对振荡器与非线性 ODE 精度高得多。 |
 | `invariant` | `on = name?`, `expr`, `let …` | 每步断言：系统跑完后 `expr` 对被检查实体必须非零；违反不变式时该步报错（detail 69），且在任何写入应用之前失败。 |
 | `watch` | `on = name?`, `expr`, `mem = slot`, `into = slot` | 零穿越检测：被监测表达式在相邻两步之间变号时置 1；上一值存于 `mem` 槽（世界状态），标志写入 `into`。 |
+| `diffuse` | `field = name`, `rate` | 网格场的显式扩散：每步 `T += rate·∇²T`，使用 Jacobi 扫描（零通量模板下总严格守恒）。 |
+| `poisson` | `field = name`, `source = name?`, `iters`, `scale = s?` | 对 `∇²φ = ρ·scale` 做 Gauss–Seidel 松弛——每步 `iters` 次扫描，边界单元固定。 |
+| `wave` | `field = name`, `prev = name`, `velocity = c`, `dt`, `damping = s?` | 二阶蛙跳 `u_tt = c²∇²u`，跨越两个场（`prev` 保存 `u(t−h)`）；Courant 数 2D `c·h/dx ≤ 1/√2`、3D `≤ 1/√3`。`damping`（默认 `1.0`，无损）缩放时间项；`absorb` + `absorb_width` 在边界加渐变海绵层，吸收外传波而非反射。 |
 
 未知系统种类报错（detail code 49）。
 
@@ -177,6 +180,10 @@ systems {
 | `pi`, `e` | 常数。 |
 | `t` | 全局仿真时钟（秒）。 |
 
+裸名字若既非局部值、槽，也非参数，则读到 `0.0`（未解析引用约定），不会令该步
+失败。系统参数（如 `dt`）**不在表达式作用域内**——请显式写出步长（例如
+`dt = 0.5` 时用 `x = (target - x) / 0.5` 把 `x` 吸附到 `target`）。
+
 ### 内建函数
 
 * 1 元：`sin cos exp ln sqrt abs floor ceil round sign log10 log2 sinh cosh tanh asin acos atan`
@@ -230,7 +237,10 @@ from "physics" import thrust     # thrust(m)（裸名）
 * **函数与参数**按模块加命名空间：模块自身的规则先在其命名空间内解析裸名、
   再回退到全局。实体、系统、场、通道属世界内容、扁平合并（跨模块实体/场重名
   即编译错误）。
-* 循环导入可容忍（模块只加载一次）；缺文件、实体/场重名会报错（detail 76）。
+* **循环导入可解析**：模块只加载一次并合并，且其成员按**每个别名**注册，因此
+  互相引用（`a` ↔ `b`）与多别名引用（`import "x" as alpha` 与 `import "x"` 并存）
+  都能解析。`--param` 会同时更新同一参数的所有别名。缺文件、实体/场重名会报错
+  （detail 76）。
 
 ### 计划事件（离散事件调度）
 
@@ -265,15 +275,64 @@ systems {
 
 ### 网格场（PDE 基底）
 
-在 world 段用 `field <name> { width = w; height = h; dx = d }` 声明；单元是
-确定性世界状态（像其他世界状态一样可快照/重放）。
+在 world 段用 `field <name> { width = w; height = h; dx = d }`（2D）或
+`field <name> { width = w; height = h; depth = d; dx = h }`（3D）声明；单元是
+确定性世界状态（像其他世界状态一样可快照/重放）。空间是 3D——加上仿真时钟，
+场即 4D 基底（3D 空间 + 时间）。
 
-* `fget(f, i, j)`——`(i, j)` 处的单元值；能看到同一步内的写入。
-* `fset(f, i, j, v)`——写单元（裸调用语句；返回 `0.0`）。
-* `flap(f, i, j)`——Field 的零通量模板离散拉普拉斯，按 `1/dx²` 缩放——
-  热/扩散/Poisson 规则组合的 PDE 算子。
+* `fget(f, i, j)` / `fget(f, i, j, k)`——单元值（2D / 3D）；能看到同一步内的写入。
+* `fset(f, i, j, v)` / `fset(f, i, j, k, v)`——写单元（裸调用语句；返回 `0.0`）。
+* `flap(f, i, j)` / `flap(f, i, j, k)`——Field 的零通量模板离散拉普拉斯，按
+  `1/dx²` 缩放（2D 五点、3D 七点）——热/扩散/Poisson 规则组合的 PDE 算子。
 * 坐标可为任意表达式（槽、局部值、算术）。未知场名读到 `0`（已文档化的
   未解析引用约定）。
+
+#### 连续场求解器（`diffuse` / `poisson`）
+
+无需手写 `fget`/`fset`/`flap` 循环，直接声明求解器：
+
+```pwe
+field heat { width = 32; height = 32; dx = 1.0 }
+field phi  { width = 32; height = 32; dx = 1.0 }
+field rho  { width = 32; height = 32; dx = 1.0 }
+field u    { width = 64; height = 64; dx = 1.0 }
+field um   { width = 64; height = 64; dx = 1.0 }
+systems {
+  diffuse { field = heat; rate = 0.2 }                       # T += 0.2·∇²T
+  poisson { field = phi; source = rho; iters = 20 }          # ∇²φ = ρ
+  wave    { field = u; prev = um; velocity = 1.0; dt = 0.5 } # u_tt = c²∇²u
+}
+```
+
+`diffuse` 先对全部单元及其拉普拉斯取自同一快照、再统一写回——即 Jacobi
+扫描，故注入总量严格守恒（2D 稳定条件 `rate ≤ 1/4`，3D `≤ 1/6`）。`poisson` 每步做
+`iters` 次就地 Gauss–Seidel 扫描；边界单元相当于固定电势（用 `fset` 设置）。
+`wave` 每步平移两个场（`prev ← u`、`u ← 2u − prev + (c·h/dx)²∇²u`），因此初始
+脉冲会分裂为球面（3D）或圆环（2D）波前。`depth > 1` 时所有求解器按 3D 迭代。
+每步**只跑一次**（仅首个动态实体发射
+扫描），确定性，且降级为既有场指令，解释器与 JIT 保持逐字节一致。
+
+### 标准库（`std/`）
+
+`std/` 是一组用于通用仿真的纯函数模块：
+
+```pwe
+import "std/forces"
+import "std/thermal"
+systems {
+  update { on = body; dt = 0.1
+    vx   = forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0) + 0.0
+    temp = thermal.newton_cooling(temp, 293.15, 0.05) + 0.0
+  }
+}
+```
+
+模块：`math`、`particles`、`forces`、`mechanics`、`chemistry`（元素周期表
+1–118）、`thermal`、`acoustics`、`optics`、`em`、`robotics`、`units`、`control`。
+物理常量以参数形式给出
+（`chemistry.R_gas`、`thermal.sigma_sb`、`em.k_coulomb` 等），可用
+`--param` 覆盖。完整 API 见 `std/README.md`，组合示例见
+`cli/examples/domains.pwe`。
 
 ### 用户自定义函数
 

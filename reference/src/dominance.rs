@@ -190,21 +190,20 @@ fn verify_dominance_impl(
         block_of[b.start..b.end].fill(bi);
     }
 
-    // Locate the defining (block, position) of an SSA value.
-    let def_of = |id: u32| -> Option<(usize, usize)> {
-        instructions
-            .iter()
-            .enumerate()
-            .find_map(|(pos, ins)| (ins.result_id == id).then_some((block_of[pos], pos)))
-    };
-
-    // Reject multiple definitions of one value; verify each use is dominated.
+    // Reject multiple definitions of one value, and index the defining
+    // position of every SSA value once. `def_of` then answers in O(log n)
+    // instead of rescanning the whole stream per operand — the difference
+    // between linear and quadratic on large unrolled systems (3D field sweeps).
     let mut result_ids: BTreeMap<u32, usize> = BTreeMap::new();
     for (pos, ins) in instructions.iter().enumerate() {
         if ins.result_id != 0 && result_ids.insert(ins.result_id, pos).is_some() {
             return Err(error(Status::EirInvalid, 46, pos));
         }
     }
+    let def_of = |id: u32| -> Option<(usize, usize)> {
+        result_ids.get(&id).map(|&pos| (block_of[pos], pos))
+    };
+
     for (bi, b) in cfg.blocks.iter().enumerate() {
         for (idx, ins) in instructions[b.start..b.end].iter().enumerate() {
             let pos = b.start + idx;

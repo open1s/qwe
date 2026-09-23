@@ -214,6 +214,29 @@ impl CpuJit {
         code.eir.interpret_with_env(rt, env, world, version)
     }
 
+    /// Env-aware execution that skips EIR re-validation. For callers that step
+    /// the same immutable module many times (the language runtime validates
+    /// once at compile), this avoids re-running the dominance verifier every
+    /// step. The JIT lifecycle result is identical to `execute_with_env`: both
+    /// paths share interpreter semantics, so the assumption/deopt branches
+    /// would return the same writes anyway.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_with_env_validated(
+        &self,
+        key: &CodeCacheKey,
+        rt: &mut dyn crate::eir::EirRuntime,
+        env: &mut crate::eir::ExecEnv,
+        world: WorldId,
+        version: WorldVersion,
+    ) -> Result<Vec<WorldWrite>> {
+        let code = self.code.get(key).ok_or(error(Status::HandleStale, 9))?;
+        self.ready(code)?;
+        if let Some(counter) = self.invocations.get(key) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+        code.eir.execute(rt, env, world, version)
+    }
+
     /// EXECUTE: run the compiled unit if assumptions hold, else deopt.
     pub fn execute(
         &self,

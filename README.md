@@ -81,6 +81,14 @@ pwe compile cli/examples/heat.pwe   -o heat.pweb   && pwe run heat.pweb --steps 
 pwe compile cli/examples/flock.pwe  -o flock.pweb  && pwe present flock.pweb --port 8000
 pwe compile cli/examples/spring/spring.pwe -o spring.pweb && pwe run spring.pweb --steps 400 \
   --param k=16.0    # multi-file (imports) + params + units + scheduled events
+pwe compile cli/examples/domains.pwe -o domains.pweb && pwe run domains.pweb --steps 200
+  # composes the std/ library (forces + thermal + em + chemistry)
+pwe compile cli/examples/wave.pwe -o wave.pweb && pwe present wave.pweb --port 8000
+  # the `wave` solver: u_tt = c²∇²u (a pulse splits, reflects, recombines)
+pwe compile cli/examples/acoustics.pwe -o acoustics.pweb && pwe run acoustics.pweb --steps 80
+  # 2-D sound: a driven monopole radiates; probes ride the field (std/acoustics dB)
+pwe compile cli/examples/wave3d.pwe -o wave3d.pweb && pwe present wave3d.pweb --port 8000
+  # 3D wave: a pulse radiates through a cube, rendered as a glowing scalar volume
 
 # `present` shows a top-right legend (color, name, r from the central body) and
 # a top-left run-info panel (per-body radii, satellite distances, step + title).
@@ -90,8 +98,13 @@ pwe compile cli/examples/spring/spring.pwe -o spring.pweb && pwe run spring.pweb
 The language also supports **model parameters** (`params { G = 1.0 }`, overridden
 with `--param G=2` on the same artifact), **Python-style modules**
 (`import "mod"` / `import "mod" as m` / `from "mod" import f`; packages via directories + `__init__.pwe`; functions and parameters namespaced as `mod.name`), **scheduled events**
-(`at(T)` / `periodic(P)`, exact-once on the step grid), and **gradual
-dimensional analysis** (opt-in `[m/s^2]` unit annotations checked against rules).
+(`at(T)` / `periodic(P)`, exact-once on the step grid), **gradual
+dimensional analysis** (opt-in `[m/s^2]` unit annotations checked against rules),
+**continuum solver systems** (`diffuse`/`poisson`/`wave` step a 3D grid field in one line — space is 3D + time = 4D), and a **field viewport** that renders a 1D field as an energy-coloured sine curve and a 2D/3D field as a smooth marching-cubes isosurface whose colour encodes wave energy (hot near the source, cool with radius; dimming as it attenuates), with ⟳ Restart / ⏸ Pause controls,
+and a growing **standard library** (`std/`: `math`, `particles`, `forces`,
+`mechanics`, `chemistry` (1–118 periodic table), `thermal`, `acoustics`,
+`optics`, `em`, `robotics`, `units`, `control` — pure-function modules keyed by
+namespaced physical constants).
 
 A `.pweb` artifact is a self-describing container (magic + version) holding the
 verified canonical (RFC-0021) EIR module plus the world-model source the runtime

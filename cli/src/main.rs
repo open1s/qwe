@@ -82,10 +82,15 @@ fn pack(eir: &EirModule, sources: &ProgramSources) -> Result<Vec<u8>, String> {
     out.extend_from_slice(&eir_bytes);
     out.extend_from_slice(sources.root.as_bytes());
     out.extend_from_slice(&(sources.modules.len() as u32).to_le_bytes());
-    for (ns, path, src) in &sources.modules {
+    for (ns, path, src, aliases) in &sources.modules {
         for part in [ns.as_str(), path.as_str(), src.as_str()] {
             out.extend_from_slice(&(part.len() as u32).to_le_bytes());
             out.extend_from_slice(part.as_bytes());
+        }
+        out.extend_from_slice(&(aliases.len() as u32).to_le_bytes());
+        for a in aliases {
+            out.extend_from_slice(&(a.len() as u32).to_le_bytes());
+            out.extend_from_slice(a.as_bytes());
         }
     }
     out.extend_from_slice(&(sources.aliases.len() as u32).to_le_bytes());
@@ -153,7 +158,12 @@ fn unpack(bytes: &[u8]) -> Result<(EirModule, ProgramSources), String> {
         let ns = take_str(bytes, &mut cursor, "module namespace")?.to_string();
         let path = take_str(bytes, &mut cursor, "module path")?.to_string();
         let src = take_str(bytes, &mut cursor, "module source")?.to_string();
-        modules.push((ns, path, src));
+        let alias_count = take_u32(bytes, &mut cursor, "module alias count")?;
+        let mut aliases = Vec::with_capacity(alias_count as usize);
+        for _ in 0..alias_count {
+            aliases.push(take_str(bytes, &mut cursor, "module alias")?.to_string());
+        }
+        modules.push((ns, path, src, aliases));
     }
     let alias_count = take_u32(bytes, &mut cursor, "alias count")?;
     let mut aliases = Vec::with_capacity(alias_count as usize);
@@ -349,9 +359,12 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
         }
     };
     // Apply `--param` overrides (declared parameters only, so typos are caught).
+    // A parameter imported under several namespaces has several alias keys;
+    // update the whole group so every reference sees the new value.
     for (k, v) in &params {
-        if !model.params.contains_key(k) {
-            let declared: Vec<&str> = model.params.keys().map(String::as_str).collect();
+        if !model.params.contains_key(k) && !model.param_alias.contains_key(k) {
+            let mut declared: Vec<&str> = model.params.keys().map(String::as_str).collect();
+            declared.sort();
             let list = if declared.is_empty() {
                 "none".to_string()
             } else {
@@ -360,7 +373,21 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
             eprintln!("pwe: unknown parameter '{k}' (declared: {list})");
             return 2;
         }
-        rt.scene.params.insert(k.clone(), *v);
+        let canonical = model
+            .param_alias
+            .get(k)
+            .cloned()
+            .unwrap_or_else(|| k.clone());
+        let group: Vec<String> = rt
+            .scene
+            .params
+            .keys()
+            .filter(|p| *p == &canonical || model.param_alias.get(*p) == Some(&canonical))
+            .cloned()
+            .collect();
+        for p in group {
+            rt.scene.params.insert(p, *v);
+        }
     }
     match port {
         None => {
@@ -380,14 +407,31 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
 /// Executes live and serves the browser viewer until interrupted.
 fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
     let live = Arc::new(RwLock::new(LiveState::default()));
-    if let Err(e) = present::serve_live(Arc::clone(&live), port) {
+    // The viewer's Restart button sets this; the loop reloads the initial scene.
+    let reset = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let pause = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Err(e) = present::serve_live(
+        Arc::clone(&live),
+        Arc::clone(&reset),
+        Arc::clone(&pause),
+        port,
+    ) {
         eprintln!("pwe: cannot serve on 127.0.0.1:{port}: {e}");
         return 1;
     }
     println!("pwe present: open http://localhost:{port}  (Ctrl-C to stop)");
     let cam = auto_frame_camera(&rt);
+    let initial = rt.scene.clone();
     let mut step = 0u64;
     loop {
+        if reset.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            rt.reset_to(initial.clone());
+            step = 0;
+        }
+        if pause.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            continue;
+        }
         if let Err(e) = rt.step_cross() {
             eprintln!("pwe: step {step} failed: {e}");
             return 1;
@@ -452,25 +496,36 @@ fn info_lines(rt: &LangRuntime, model: &WorldModel, step: u64) -> Vec<String> {
 /// Frames the camera on the scene's initial extent (a simple auto-fit).
 fn auto_frame_camera(rt: &LangRuntime) -> CameraVisual {
     let frame = rt.present_frame(None);
-    if frame.entities.is_empty() {
+    // Bounds of everything visible: entity positions plus every field's grid,
+    // which is centered at the origin and spans ±(dims·dx)/2 per axis.
+    let mut lo: Option<Vec3> = None;
+    let mut hi: Option<Vec3> = None;
+    let mut include = |p: Vec3| {
+        lo = Some(match lo {
+            Some(l) => Vec3::new(l.x.min(p.x), l.y.min(p.y), l.z.min(p.z)),
+            None => p,
+        });
+        hi = Some(match hi {
+            Some(h) => Vec3::new(h.x.max(p.x), h.y.max(p.y), h.z.max(p.z)),
+            None => p,
+        });
+    };
+    for e in &frame.entities {
+        include(e.position);
+    }
+    for f in &frame.fields {
+        let hx = f.width as f64 * f.dx / 2.0;
+        let hy = f.height as f64 * f.dx / 2.0;
+        let hz = f.depth as f64 * f.dx / 2.0;
+        include(Vec3::new(-hx, -hy, -hz));
+        include(Vec3::new(hx, hy, hz));
+    }
+    let (Some(lo), Some(hi)) = (lo, hi) else {
         return CameraVisual {
             position: Vec3::new(2.0, 5.0, 30.0),
             target: Vec3::ZERO,
         };
-    }
-    let (mut lo, mut hi) = (frame.entities[0].position, frame.entities[0].position);
-    for e in &frame.entities {
-        lo = Vec3::new(
-            lo.x.min(e.position.x),
-            lo.y.min(e.position.y),
-            lo.z.min(e.position.z),
-        );
-        hi = Vec3::new(
-            hi.x.max(e.position.x),
-            hi.y.max(e.position.y),
-            hi.z.max(e.position.z),
-        );
-    }
+    };
     let center = Vec3::new(
         (lo.x + hi.x) / 2.0,
         (lo.y + hi.y) / 2.0,
@@ -478,7 +533,7 @@ fn auto_frame_camera(rt: &LangRuntime) -> CameraVisual {
     );
     let extent = (hi - lo).length().max(1.0);
     CameraVisual {
-        position: center + Vec3::new(0.0, extent * 0.4, extent * 1.8),
+        position: center + Vec3::new(extent * 1.25, extent * 0.95, extent * 1.25),
         target: center,
     }
 }
@@ -503,13 +558,24 @@ fn report(rt: &LangRuntime, steps: u64) {
         println!();
     }
     for (name, f) in &rt.scene.fields {
-        println!(
-            "  field {name}: {}x{} dx={} total={:.6}",
-            f.width,
-            f.height,
-            f.dx,
-            f.total()
-        );
+        if f.depth > 1 {
+            println!(
+                "  field {name}: {}x{}x{} dx={} total={:.6}",
+                f.width,
+                f.height,
+                f.depth,
+                f.dx,
+                f.total()
+            );
+        } else {
+            println!(
+                "  field {name}: {}x{} dx={} total={:.6}",
+                f.width,
+                f.height,
+                f.dx,
+                f.total()
+            );
+        }
     }
     let events = rt.emitted_events();
     if !events.is_empty() {

@@ -930,8 +930,10 @@ impl EirModule {
     }
 
     /// Executes the module without re-validating. The public entry points
-    /// validate with the appropriate purity before delegating here.
-    fn execute(
+    /// validate with the appropriate purity before delegating here. Callers
+    /// that step the same immutable module repeatedly (the language runtime)
+    /// validate once and then use this directly.
+    pub(crate) fn execute(
         &self,
         rt: &mut dyn EirRuntime,
         env: &mut ExecEnv,

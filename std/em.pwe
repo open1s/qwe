@@ -1,0 +1,17 @@
+# std/em — electromagnetism.
+world {
+  params { c_light = 299792458.0 [m/s] k_coulomb = 8.9875517923e9 [kg*m^3*s^-4*A^-2] mu0 = 1.25663706212e-6 [kg*m*s^-2*A^-2] }
+}
+
+funcs {
+  coulomb_force(q1, q2, r) { k_coulomb * q1 * q2 / (r * r) }
+  electric_field(q, r) { k_coulomb * q / (r * r) }
+  potential(q, r) { k_coulomb * q / r }
+  lorentz_force(q, e_field, v, b_field) { q * (e_field + v * b_field) }
+  cyclotron_radius(m, v, q, b) { m * v / (q * b) }
+  biot_savart_wire(current, r) { mu0 * current / (2.0 * 3.141592653589793 * r) }
+  poynting(e_field, b_field) { e_field * b_field / mu0 }
+  plane_wave_b(e_field) { e_field / c_light }
+  plane_wave_e(b_field) { b_field * c_light }
+  impedance_free_space() { mu0 * c_light }
+}

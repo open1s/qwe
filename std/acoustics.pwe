@@ -1,0 +1,16 @@
+# std/acoustics — sound and acoustic waves.
+world {
+  params { rho_air = 1.225 [kg*m^-3] c_air = 343.0 [m/s] p_ref = 2.0e-5 [kg*m^-1*s^-2] }
+}
+
+funcs {
+  speed_of_sound_air(temp_c) { 331.3 * sqrt(1.0 + temp_c / 273.15) }
+  wavelength(freq, c) { c / freq }
+  spl(pressure) { 20.0 * log10(pressure / p_ref) }
+  pressure_from_spl(spl_db) { p_ref * pow(10.0, spl_db / 20.0) }
+  acoustic_impedance(density, c) { density * c }
+  doppler(f, v_obs, v_src, c) { f * (c + v_obs) / (c - v_src) }
+  inverse_square(a, r) { a / (r * r) }
+  sound_intensity(pressure, density, c) { pressure * pressure / (density * c) }
+  beat_frequency(f1, f2) { abs(f1 - f2) }
+}

@@ -1,0 +1,30 @@
+# wave.pwe — the `wave` continuum solver: u_tt = c²∇²u on a 1-D line, driven with
+# a sine wave. The line is initialised with a sine standing wave
+# `u[i] = um[i] = sin(2π·i/40)` (two wavelengths; equal fields => zero initial
+# velocity), so it oscillates as a travelling-sine superposition in place. The
+# `probe` entity tracks an antinode cell (i=30), so its position oscillates.
+world {
+  gravity = (0, 0, 0)
+  field u  { width = 81; height = 1; dx = 1.0 }
+  field um { width = 81; height = 1; dx = 1.0 }
+  entity probe { state = (x = 0.0, y = 0.0, z = 0.0) }
+}
+
+systems {
+  update {
+    on = probe
+    dt = 0.5
+    # seed the sine standing wave once (equal in both fields => zero velocity)
+    for i in 0..81 {
+      let th = 6.283185307179586 * i / 40.0
+      let sv = at(0.0) * sin(th)
+      let _ = fset(u, i, 0, fget(u, i, 0) + sv)
+      let _ = fset(um, i, 0, fget(um, i, 0) + sv)
+    }
+    x = (fget(u, 30, 0) - x) / 0.5 + 0.0
+    y = 0.0 + 0.0
+    z = 0.0 + 0.0
+  }
+  # lossless leapfrog (c·dt/dx = 0.5); zero-flux ends reflect the standing wave
+  wave { field = u; prev = um; velocity = 1.0; dt = 0.5 }
+}

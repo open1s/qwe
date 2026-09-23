@@ -34,13 +34,11 @@ fn field_to_bytes(field: &Field) -> Vec<u8> {
 /// Rehydrates a field from stored bytes.
 fn field_from_bytes(field: &Field, bytes: &[u8]) -> Field {
     debug_assert_eq!(bytes.len(), field.cells().len() * 8);
-    let mut out = Field::new(field.width, field.height, field.dx);
+    let mut out = Field::new3(field.width, field.height, field.depth, field.dx);
     for (i, chunk) in bytes.chunks_exact(8).enumerate() {
         let mut buf = [0u8; 8];
         buf.copy_from_slice(chunk);
-        let idx_row = i / field.width;
-        let idx_col = i % field.width;
-        out.set(idx_col, idx_row, f64::from_bits(u64::from_le_bytes(buf)));
+        out.set_linear(i, f64::from_bits(u64::from_le_bytes(buf)));
     }
     out
 }

@@ -1,0 +1,33 @@
+# std/control — control-systems primitives (all pure, scalar, per-step).
+world { }
+
+funcs {
+  # first-order lag: x' = (target - x)/tau   (use as a rule RHS with dt)
+  first_order(x, target, tau) { (target - x) / tau }
+  # second-order plant: x'' = w^2(target - x) - 2*zeta*w*x'
+  second_order(x, v, target, omega, zeta) { omega * omega * (target - x) - 2.0 * zeta * omega * v }
+  # exponential smoothing (alpha in [0,1] per step)
+  low_pass(prev, sample, alpha) { prev + alpha * (sample - prev) }
+  complementary(a, b, alpha) { alpha * a + (1.0 - alpha) * b }
+  # integrator / differentiator building blocks
+  integrate(prev, rate, dt) { prev + rate * dt }
+  derivative(prev, cur, dt) { (cur - prev) / dt }
+  # proportional-integral-derivative with anti-windup clamp (lo <= u <= hi)
+  pid(kp, ki, kd, err, integ, deriv) { kp * err + ki * integ + kd * deriv }
+  pid_clamped(kp, ki, kd, err, integ, deriv, lo, hi) { max(lo, min(hi, kp * err + ki * integ + kd * deriv)) }
+  # feedforward + feedback
+  feedforward(kff, reference, kp, err) { kff * reference + kp * err }
+  # full-state feedback u = -(k1 x1 + k2 x2)
+  state_feedback(k1, x1, k2, x2) { 0.0 - (k1 * x1 + k2 * x2) }
+  # bang-bang with a dead band, and Schmitt-trigger hysteresis
+  bang_bang(err, dead) { if(err > dead, 1.0, if(err < 0.0 - dead, 0.0 - 1.0, 0.0)) }
+  hysteresis(x, on_thresh, off_thresh, state) { if(x > on_thresh, 1.0, if(x < off_thresh, 0.0, state)) }
+  # largest step this iteration may take toward the target
+  rate_limit_delta(prev, target, max_step) { max(0.0 - max_step, min(max_step, target - prev)) }
+  # lead compensator: u = k(u + tau du)
+  lead(u, du, k, tau) { k * (u + tau * du) }
+  # settle predicate (1 when |err| <= band)
+  within(err, band) { if(abs(err) <= band, 1.0, 0.0) }
+  # slew toward a target by at most max_step
+  slew(prev, target, max_step) { prev + max(0.0 - max_step, min(max_step, target - prev)) }
+}

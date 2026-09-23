@@ -1,0 +1,19 @@
+# std/mechanics — rigid-body and collision mechanics.
+world { }
+
+funcs {
+  momentum(m, v) { m * v }
+  kinetic_energy(m, v) { 0.5 * m * v * v }
+  reduced_mass(m1, m2) { m1 * m2 / (m1 + m2) }
+  elastic_1d_v1(m1, m2, u1, u2) { ((m1 - m2) * u1 + 2.0 * m2 * u2) / (m1 + m2) }
+  elastic_1d_v2(m1, m2, u1, u2) { ((m2 - m1) * u2 + 2.0 * m1 * u1) / (m1 + m2) }
+  impulse(m, dv) { m * dv }
+  friction_force(mu, normal) { mu * normal }
+  normal_impulse(rest, rel_v, m) { (1.0 + rest) * rel_v * m }
+  inertia_rod(m, l) { m * l * l / 12.0 }
+  inertia_disk(m, r) { 0.5 * m * r * r }
+  inertia_sphere(m, r) { 0.4 * m * r * r }
+  torque(force, arm) { force * arm }
+  angular_accel(torque, inertia) { torque / inertia }
+  angular_kinetic(inertia, omega) { 0.5 * inertia * omega * omega }
+}

@@ -1,0 +1,18 @@
+# std/thermal — heat and thermodynamics.
+world {
+  params { sigma_sb = 5.670374419e-8 [kg*s^-3*K^-4] }
+}
+
+funcs {
+  celsius(k) { k - 273.15 }
+  kelvin(c) { c + 273.15 }
+  newton_cooling(temp, ambient, k) { 0.0 - k * (temp - ambient) }
+  heat_capacity(mass, specific) { mass * specific }
+  sensible_heat(mass, specific, dtemp) { mass * specific * dtemp }
+  conduction_flux(conductivity, area, dtemp, thickness) { conductivity * area * dtemp / thickness }
+  stefan_boltzmann(temp) { sigma_sb * temp * temp * temp * temp }
+  radiative_cooling(temp, ambient, emissivity, area, mass, specific) { 0.0 - emissivity * sigma_sb * area * (temp * temp * temp * temp - ambient * ambient * ambient * ambient) / (mass * specific) }
+  thermal_diffusivity(conductivity, density, specific) { conductivity / (density * specific) }
+  thermostat_hysteresis(temp, lo, hi, on) { if(temp < lo, 1.0, if(temp > hi, 0.0, on)) }
+  mixing_temp(m1, t1, m2, t2) { (m1 * t1 + m2 * t2) / (m1 + m2) }
+}

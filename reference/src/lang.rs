@@ -390,7 +390,10 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
         Rule::expr => {
             let text = rhs.as_str().trim().to_string();
             // String-valued params (`chan`, `on`, `when`) keep the raw text.
-            if matches!(key.as_str(), "chan" | "on" | "when") {
+            if matches!(
+                key.as_str(),
+                "chan" | "on" | "when" | "field" | "source" | "prev"
+            ) {
                 decl.string_params.insert(key, text);
             } else if let Some(v) = parse_scalar_number(&text) {
                 decl.params.insert(key, v);
@@ -422,6 +425,18 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
 /// Maximum iteration count of one loop.
 const MAX_REPEAT_COUNT: usize = 1_000;
 /// Maximum number of statements one loop may unroll into.
+/// The numeric slot index of an `sN` token, or `None` for any other name
+/// (including a named slot like `smooth` that merely starts with `s`).
+fn numeric_slot(key: &str) -> Option<usize> {
+    key.strip_prefix('s').and_then(|d| {
+        if !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()) {
+            d.parse().ok()
+        } else {
+            None
+        }
+    })
+}
+
 const MAX_UNROLLED_STMTS: usize = 10_000;
 
 /// Rejects `let` names that can never be read back: the grammar resolves
@@ -931,13 +946,17 @@ fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
         // Grid field access: `fget(f, i, j)` / `flap(f, i, j)` / `fset(f, i, j, v)`;
         // the first argument must be a literal field name.
         "fget" | "flap" => {
-            if args.len() != 3 || !matches!(args.first(), Some(Expr::Name(_))) {
+            // 2D `fget(f, i, j)` or 3D `fget(f, i, j, k)`.
+            if !(args.len() == 3 || args.len() == 4) || !matches!(args.first(), Some(Expr::Name(_)))
+            {
                 return Err(error(Status::Invalid, 59));
             }
             Box::leak(name.clone().into_boxed_str())
         }
         "fset" => {
-            if args.len() != 4 || !matches!(args.first(), Some(Expr::Name(_))) {
+            // 2D `fset(f, i, j, v)` or 3D `fset(f, i, j, k, v)`.
+            if !(args.len() == 4 || args.len() == 5) || !matches!(args.first(), Some(Expr::Name(_)))
+            {
                 return Err(error(Status::Invalid, 59));
             }
             "fset"
@@ -1119,6 +1138,9 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             }
                             let width = params.get("width").copied().unwrap_or(0.0) as usize;
                             let height = params.get("height").copied().unwrap_or(0.0) as usize;
+                            // `depth` is optional: a 2D field is depth 1.
+                            let depth =
+                                params.get("depth").copied().unwrap_or(1.0).max(1.0) as usize;
                             if width == 0 || height == 0 {
                                 return Err(error(Status::Invalid, 75));
                             }
@@ -1127,6 +1149,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 name,
                                 width,
                                 height,
+                                depth,
                                 dx,
                             });
                         }
@@ -1473,7 +1496,7 @@ pub struct UpdateSystem {
     /// User-defined function name -> EIR function id (for `CALL`).
     pub func_ids: std::collections::BTreeMap<String, u64>,
     /// Grid field name -> width (compile-time, from the model).
-    pub field_widths: std::collections::BTreeMap<String, u32>,
+    pub field_dims: std::collections::BTreeMap<String, (u32, u32)>,
     /// Module namespace of this system's rules.
     pub namespace: String,
     /// Every declared parameter name (qualified), for namespace fallback.
@@ -1548,11 +1571,7 @@ impl EirSystem for UpdateSystem {
         let mut resolved: Vec<(usize, &Expr)> = Vec::new();
         let mut slots = self.slots_hint;
         for (lhs, expr) in &self.rules {
-            let idx: Option<usize> = if let Some(n) = lhs.strip_prefix('s') {
-                n.parse().ok()
-            } else {
-                sn.get(lhs).copied()
-            };
+            let idx: Option<usize> = numeric_slot(lhs).or_else(|| sn.get(lhs).copied());
             if let Some(idx) = idx {
                 slots = slots.max(idx + 1);
                 resolved.push((idx, expr));
@@ -1693,7 +1712,7 @@ impl EirSystem for UpdateSystem {
                 func_ids: &self.func_ids,
                 namespace: &self.namespace,
                 params: &self.param_names,
-                field_widths: &self.field_widths,
+                field_dims: &self.field_dims,
                 current_entity: entity,
             };
             lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
@@ -1709,7 +1728,7 @@ impl EirSystem for UpdateSystem {
                 func_ids: &self.func_ids,
                 namespace: &self.namespace,
                 params: &self.param_names,
-                field_widths: &self.field_widths,
+                field_dims: &self.field_dims,
                 current_entity: entity,
             };
             // `when = expr` gates every rule's write: `new = state + gate·delta` —
@@ -1897,7 +1916,7 @@ pub struct Rk4System {
     pub entity_map: std::collections::BTreeMap<String, u128>,
     pub only: Option<std::collections::BTreeSet<u128>>,
     pub func_ids: std::collections::BTreeMap<String, u64>,
-    pub field_widths: std::collections::BTreeMap<String, u32>,
+    pub field_dims: std::collections::BTreeMap<String, (u32, u32)>,
     pub namespace: String,
     pub param_names: std::collections::BTreeSet<String>,
     pub state_names_by_id:
@@ -1967,11 +1986,7 @@ impl EirSystem for Rk4System {
         let mut resolved: Vec<(usize, &Expr)> = Vec::new();
         let mut slots = self.slots_hint;
         for (lhs, expr) in &self.rules {
-            let idx: Option<usize> = if let Some(n) = lhs.strip_prefix('s') {
-                n.parse().ok()
-            } else {
-                sn.get(lhs).copied()
-            };
+            let idx: Option<usize> = numeric_slot(lhs).or_else(|| sn.get(lhs).copied());
             if let Some(idx) = idx {
                 slots = slots.max(idx + 1);
                 resolved.push((idx, expr));
@@ -2153,7 +2168,7 @@ impl EirSystem for Rk4System {
                     func_ids: &self.func_ids,
                     namespace: &self.namespace,
                     params: &self.param_names,
-                    field_widths: &self.field_widths,
+                    field_dims: &self.field_dims,
                     current_entity: entity,
                 };
                 lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
@@ -2168,7 +2183,7 @@ impl EirSystem for Rk4System {
                     func_ids: &self.func_ids,
                     namespace: &self.namespace,
                     params: &self.param_names,
-                    field_widths: &self.field_widths,
+                    field_dims: &self.field_dims,
                     current_entity: entity,
                 };
                 let mut k: Vec<Option<u32>> = vec![None; slots];
@@ -2215,7 +2230,7 @@ impl EirSystem for Rk4System {
                     func_ids: &self.func_ids,
                     namespace: &self.namespace,
                     params: &self.param_names,
-                    field_widths: &self.field_widths,
+                    field_dims: &self.field_dims,
                     current_entity: entity,
                 };
                 let mut gnext = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
@@ -2349,7 +2364,7 @@ struct LowerCtx<'a> {
     func_ids: &'a std::collections::BTreeMap<String, u64>,
     /// Grid field name -> width (compile-time, from the model), for
     /// `fget`/`fset`/`flap` cell access.
-    field_widths: &'a std::collections::BTreeMap<String, u32>,
+    field_dims: &'a std::collections::BTreeMap<String, (u32, u32)>,
     /// The module namespace of the system being lowered; unqualified function
     /// and parameter references resolve within it first.
     namespace: &'a str,
@@ -2915,16 +2930,36 @@ fn lower_expr(
                         // The parse requires a literal field name.
                         return 0;
                     };
-                    let width = ctx.field_widths.get(fname.as_str()).copied().unwrap_or(0);
+                    let (width, height) = ctx
+                        .field_dims
+                        .get(fname.as_str())
+                        .copied()
+                        .unwrap_or((0, 0));
                     let target = crate::physics_eir::cr(
                         0,
                         crate::physics_eir::field_component_id(fname),
                         width,
                     );
-                    if *name == "fset" {
-                        let ri = lower_expr(&args[1], ctx, next_id, out);
-                        let rj = lower_expr(&args[2], ctx, next_id, out);
-                        let rv = lower_expr(&args[3], ctx, next_id, out);
+                    let is_fset = *name == "fset";
+                    // The value (fset only) is the last argument; the index
+                    // arguments are `(i, j)` in 2D and `(i, j, k)` in 3D. The
+                    // runtime packs `(j, k)` as `j + k·height` — the same
+                    // combination the linear `[k][j][i]` index uses — so the
+                    // existing field opcodes address a 3D grid unchanged.
+                    let idx_args = if is_fset { args.len() - 1 } else { args.len() };
+                    let three_d = idx_args - 1 == 3;
+                    let ri = lower_expr(&args[1], ctx, next_id, out);
+                    let rj = lower_expr(&args[2], ctx, next_id, out);
+                    let rj = if three_d {
+                        let rk = lower_expr(&args[3], ctx, next_id, out);
+                        let h = const_reg(height as f64, next_id, out);
+                        let kt = binary(crate::eir::Opcode::Mul, rk, h, next_id, out);
+                        binary(crate::eir::Opcode::Add, rj, kt, next_id, out)
+                    } else {
+                        rj
+                    };
+                    if is_fset {
+                        let rv = lower_expr(&args[idx_args], ctx, next_id, out);
                         out.push(crate::physics_eir::instr(
                             crate::eir::Opcode::WriteFieldCell,
                             0,
@@ -2945,8 +2980,6 @@ fn lower_expr(
                         ));
                         out_reg
                     } else {
-                        let ri = lower_expr(&args[1], ctx, next_id, out);
-                        let rj = lower_expr(&args[2], ctx, next_id, out);
                         let op = if *name == "fget" {
                             crate::eir::Opcode::ReadFieldCell
                         } else {
@@ -3013,7 +3046,7 @@ pub struct InvariantSystem {
     /// User-defined function name -> EIR function id (for `CALL`).
     pub func_ids: std::collections::BTreeMap<String, u64>,
     /// Grid field name -> width (compile-time, from the model).
-    pub field_widths: std::collections::BTreeMap<String, u32>,
+    pub field_dims: std::collections::BTreeMap<String, (u32, u32)>,
     /// Module namespace of this system's rules.
     pub namespace: String,
     /// Every declared parameter name (qualified), for namespace fallback.
@@ -3151,7 +3184,7 @@ impl EirSystem for InvariantSystem {
             func_ids: &self.func_ids,
             namespace: &self.namespace,
             params: &self.param_names,
-            field_widths: &self.field_widths,
+            field_dims: &self.field_dims,
             current_entity: entity,
         };
         lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
@@ -3222,7 +3255,7 @@ pub struct WatchSystem {
     /// User-defined function name -> EIR function id (for `CALL`).
     pub func_ids: std::collections::BTreeMap<String, u64>,
     /// Grid field name -> width (compile-time, from the model).
-    pub field_widths: std::collections::BTreeMap<String, u32>,
+    pub field_dims: std::collections::BTreeMap<String, (u32, u32)>,
     /// Module namespace of this system's rules.
     pub namespace: String,
     /// Every declared parameter name (qualified), for namespace fallback.
@@ -3344,7 +3377,7 @@ impl EirSystem for WatchSystem {
             func_ids: &self.func_ids,
             namespace: &self.namespace,
             params: &self.param_names,
-            field_widths: &self.field_widths,
+            field_dims: &self.field_dims,
             current_entity: entity,
         };
         let ctx = parts.ctx(&locals);
@@ -3402,6 +3435,398 @@ impl EirSystem for WatchSystem {
     }
 }
 
+/// A grid-field **diffusion** solver (`diffuse { field = heat; rate = r }`):
+/// every step advances each cell by `T += rate·∇²T` (Gauss–Seidel: later cells
+/// in a step see earlier cells' fresh writes). The step runs once per step
+/// (only the first dynamic entity emits the sweep). `rate ≤ 1/4` in 2D for
+/// explicit stability.
+pub struct DiffuseSystem {
+    pub field: String,
+    pub rate: f64,
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+    /// The single entity whose function carries the sweep.
+    pub run_on: u128,
+}
+impl EirSystem for DiffuseSystem {
+    fn name(&self) -> &'static str {
+        "physics.diffuse"
+    }
+    fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
+        let ret = |out: &mut Vec<crate::eir::Instruction>| {
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Return,
+                0,
+                None,
+                vec![],
+                None,
+                None,
+            ));
+        };
+        if entity != self.run_on {
+            ret(out);
+            return;
+        }
+        let (w, h, d) = (self.width, self.height, self.depth);
+        let target =
+            crate::physics_eir::cr(0, crate::physics_eir::field_component_id(&self.field), w);
+        let mut next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+        let rate = const_reg(self.rate, &mut next, out);
+        // Pass 1 (Jacobi): read every cell's value and laplacian from the same
+        // snapshot, so the sweep is exactly conservative (matching
+        // `Field::diffusion_step`).
+        let cells = w as usize * h as usize * d as usize;
+        let mut cur_regs: Vec<u32> = Vec::with_capacity(cells);
+        let mut lap_regs: Vec<u32> = Vec::with_capacity(cells);
+        for k in 0..cells {
+            let i = (k % w as usize) as f64;
+            // Pack `(j, k)` as `j + k·height` — the linear index the
+            // field opcodes fold back into a 3D `[k][j][i]` cell.
+            let j = (((k / w as usize) % h as usize) + (k / (w as usize * h as usize)) * h as usize)
+                as f64;
+            let i_reg = const_reg(i, &mut next, out);
+            let j_reg = const_reg(j, &mut next, out);
+            let cur = next;
+            next += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::ReadFieldCell,
+                cur,
+                Some(crate::eir::ValueType::F64),
+                vec![i_reg, j_reg],
+                None,
+                Some(target),
+            ));
+            let lap = next;
+            next += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::FieldLaplacian,
+                lap,
+                Some(crate::eir::ValueType::F64),
+                vec![i_reg, j_reg],
+                None,
+                Some(target),
+            ));
+            cur_regs.push(cur);
+            lap_regs.push(lap);
+        }
+        // Pass 2: apply `T += rate·∇²T` to every cell.
+        for k in 0..cells {
+            let i = (k % w as usize) as f64;
+            // Pack `(j, k)` as `j + k·height` — the linear index the
+            // field opcodes fold back into a 3D `[k][j][i]` cell.
+            let j = (((k / w as usize) % h as usize) + (k / (w as usize * h as usize)) * h as usize)
+                as f64;
+            let i_reg = const_reg(i, &mut next, out);
+            let j_reg = const_reg(j, &mut next, out);
+            let delta = binary(crate::eir::Opcode::Mul, rate, lap_regs[k], &mut next, out);
+            let new = binary(crate::eir::Opcode::Add, cur_regs[k], delta, &mut next, out);
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::WriteFieldCell,
+                0,
+                None,
+                vec![i_reg, j_reg, new],
+                None,
+                Some(target),
+            ));
+        }
+        ret(out);
+    }
+}
+
+/// A grid-field **Poisson/Laplace relaxation** solver
+/// (`poisson { field = phi; source = rho?; iters = n; scale = s }`): each step
+/// runs `n` Gauss–Seidel sweeps of `∇²φ = ρ·scale` over the field's interior
+/// cells; boundary cells are held (fixed potentials). With no `source`, solves
+/// the Laplace equation.
+pub struct PoissonSystem {
+    pub field: String,
+    pub source: Option<String>,
+    pub iters: u32,
+    pub scale: f64,
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+    pub dx: f64,
+    pub run_on: u128,
+}
+impl EirSystem for PoissonSystem {
+    fn name(&self) -> &'static str {
+        "physics.poisson"
+    }
+    fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
+        let ret = |out: &mut Vec<crate::eir::Instruction>| {
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Return,
+                0,
+                None,
+                vec![],
+                None,
+                None,
+            ));
+        };
+        if entity != self.run_on {
+            ret(out);
+            return;
+        }
+        let (w, h, d, dx) = (self.width, self.height, self.depth, self.dx);
+        let target =
+            crate::physics_eir::cr(0, crate::physics_eir::field_component_id(&self.field), w);
+        let src_target = self
+            .source
+            .as_ref()
+            .map(|s| crate::physics_eir::cr(0, crate::physics_eir::field_component_id(s), w));
+        let mut next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+        // ∇² is 6-point in 3D, 4-point in a 2D slice.
+        let div = const_reg(if d > 1 { 6.0 } else { 4.0 }, &mut next, out);
+        let dx2 = const_reg(dx * dx * self.scale, &mut next, out);
+        let hh = h as i32;
+        // Neighbour offsets in the packed `(i, j + k·height)` index space.
+        let mut offsets: Vec<(i32, i32)> = vec![(-1, 0), (1, 0), (0, -1), (0, 1)];
+        if d > 1 {
+            offsets.push((0, -hh));
+            offsets.push((0, hh));
+        }
+        // Interior cells relax; boundary cells are held (fixed potentials).
+        let k_range: Vec<usize> = if d > 1 {
+            (1..(d as usize).saturating_sub(1)).collect()
+        } else {
+            vec![0]
+        };
+        for _ in 0..self.iters {
+            for &k in &k_range {
+                for j in 1..(h as usize).saturating_sub(1) {
+                    for i in 1..(w as usize).saturating_sub(1) {
+                        let jp = j as i32 + (k as i32) * hh;
+                        let mut sum: Option<u32> = None;
+                        for (di, dj) in &offsets {
+                            let ci = (i as i32 + di) as f64;
+                            let cj = (jp + dj) as f64;
+                            let ci_r = const_reg(ci, &mut next, out);
+                            let cj_r = const_reg(cj, &mut next, out);
+                            let v = next;
+                            next += 1;
+                            out.push(crate::physics_eir::instr(
+                                crate::eir::Opcode::ReadFieldCell,
+                                v,
+                                Some(crate::eir::ValueType::F64),
+                                vec![ci_r, cj_r],
+                                None,
+                                Some(target),
+                            ));
+                            sum = Some(match sum {
+                                None => v,
+                                Some(s) => binary(crate::eir::Opcode::Add, s, v, &mut next, out),
+                            });
+                        }
+                        let sum = sum.unwrap();
+                        let i_r = const_reg(i as f64, &mut next, out);
+                        let j_r = const_reg(jp as f64, &mut next, out);
+                        // rho(x)·dx²·scale (0 without a source field)
+                        let rhs = match src_target {
+                            Some(st) => {
+                                let rho = next;
+                                next += 1;
+                                out.push(crate::physics_eir::instr(
+                                    crate::eir::Opcode::ReadFieldCell,
+                                    rho,
+                                    Some(crate::eir::ValueType::F64),
+                                    vec![i_r, j_r],
+                                    None,
+                                    Some(st),
+                                ));
+                                binary(crate::eir::Opcode::Mul, rho, dx2, &mut next, out)
+                            }
+                            None => const_reg(0.0, &mut next, out),
+                        };
+                        let num = binary(crate::eir::Opcode::Sub, sum, rhs, &mut next, out);
+                        let val = binary(crate::eir::Opcode::Div, num, div, &mut next, out);
+                        out.push(crate::physics_eir::instr(
+                            crate::eir::Opcode::WriteFieldCell,
+                            0,
+                            None,
+                            vec![i_r, j_r, val],
+                            None,
+                            Some(target),
+                        ));
+                    }
+                }
+            }
+        }
+        ret(out);
+    }
+}
+
+/// A grid-field **wave equation** solver
+/// (`wave { field = u; prev = u_prev; velocity = c; dt = h }`): a second-order
+/// leapfrog `u_tt = c²∇²u`, integrated as
+/// `u(t+h) = 2u(t) − u(t−h) + (c·h/dx)²·∇²u(t)`. Reads every cell and its
+/// Laplacian from one snapshot (Jacobi), then shifts `prev ← u` and
+/// `u ← u(t+h)`. Stability: the Courant number `c·h/dx ≤ 1/√2` in 2D.
+pub struct WaveSystem {
+    pub field: String,
+    pub prev: String,
+    pub velocity: f64,
+    pub dt: f64,
+    /// Per-step amplitude retention on the temporal term (`1.0` = lossless).
+    pub damping: f64,
+    /// Sponge absorption at the boundary (`0.0` = reflecting, `1.0` = fully
+    /// damped at the edge) over `absorb_width` cells.
+    pub absorb: f64,
+    pub absorb_width: u32,
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+    pub dx: f64,
+    pub run_on: u128,
+}
+impl EirSystem for WaveSystem {
+    fn name(&self) -> &'static str {
+        "physics.wave"
+    }
+    fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
+        let ret = |out: &mut Vec<crate::eir::Instruction>| {
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Return,
+                0,
+                None,
+                vec![],
+                None,
+                None,
+            ));
+        };
+        if entity != self.run_on {
+            ret(out);
+            return;
+        }
+        let (w, h, d) = (self.width, self.height, self.depth);
+        let target =
+            crate::physics_eir::cr(0, crate::physics_eir::field_component_id(&self.field), w);
+        let prev_target =
+            crate::physics_eir::cr(0, crate::physics_eir::field_component_id(&self.prev), w);
+        let mut next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+        let two = const_reg(2.0, &mut next, out);
+        let cfl = const_reg(self.velocity * self.dt / self.dx, &mut next, out);
+        let cfl = binary(crate::eir::Opcode::Mul, cfl, cfl, &mut next, out);
+        // Pass 1 (Jacobi): read u, u_prev and ∇²u for every cell from the same
+        // snapshot.
+        let cells = w as usize * h as usize * d as usize;
+        let mut cur_regs: Vec<u32> = Vec::with_capacity(cells);
+        let mut prev_regs: Vec<u32> = Vec::with_capacity(cells);
+        let mut lap_regs: Vec<u32> = Vec::with_capacity(cells);
+        for k in 0..cells {
+            let i = (k % w as usize) as f64;
+            // Pack `(j, k)` as `j + k·height` — the linear index the
+            // field opcodes fold back into a 3D `[k][j][i]` cell.
+            let j = (((k / w as usize) % h as usize) + (k / (w as usize * h as usize)) * h as usize)
+                as f64;
+            let i_reg = const_reg(i, &mut next, out);
+            let j_reg = const_reg(j, &mut next, out);
+            let cur = next;
+            next += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::ReadFieldCell,
+                cur,
+                Some(crate::eir::ValueType::F64),
+                vec![i_reg, j_reg],
+                None,
+                Some(target),
+            ));
+            let pv = next;
+            next += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::ReadFieldCell,
+                pv,
+                Some(crate::eir::ValueType::F64),
+                vec![i_reg, j_reg],
+                None,
+                Some(prev_target),
+            ));
+            let lap = next;
+            next += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::FieldLaplacian,
+                lap,
+                Some(crate::eir::ValueType::F64),
+                vec![i_reg, j_reg],
+                None,
+                Some(target),
+            ));
+            cur_regs.push(cur);
+            prev_regs.push(pv);
+            lap_regs.push(lap);
+        }
+        // Pass 2: u(t+h) = (2u − u_prev)·keep + cfl·∇²u − γ·(u − u_prev), then
+        // shift u_prev ← u. `keep` is the global retention; `γ` is a graded
+        // sponge coefficient that absorbs outgoing waves near the boundary.
+        let (hd, dd) = (h as usize, d as usize);
+        let (aw, ab) = (self.absorb_width as f64, self.absorb.clamp(0.0, 0.5));
+        let keep = const_reg(self.damping.clamp(0.0, 1.0), &mut next, out);
+        for k in 0..cells {
+            let (iu, ju, ku) = (k % w as usize, (k / w as usize) % hd, k / (w as usize * hd));
+            // Distance to the nearest face, over axes with an interior only, and
+            // the sponge coefficient (0 in the interior, `absorb` at the edge).
+            let mut edge = f64::MAX;
+            if w as usize > 2 {
+                edge = edge.min((iu.min(w as usize - 1 - iu)) as f64);
+            }
+            if hd > 2 {
+                edge = edge.min((ju.min(hd - 1 - ju)) as f64);
+            }
+            if dd > 2 {
+                edge = edge.min((ku.min(dd - 1 - ku)) as f64);
+            }
+            let gamma = if aw > 0.0 && edge < aw {
+                ab * (1.0 - edge / aw)
+            } else {
+                0.0
+            };
+            let i = iu as f64;
+            // Pack `(j, k)` as `j + k·height` — the linear index the
+            // field opcodes fold back into a 3D `[k][j][i]` cell.
+            let j = (ju + ku * hd) as f64;
+            let i_reg = const_reg(i, &mut next, out);
+            let j_reg = const_reg(j, &mut next, out);
+            let twice = binary(crate::eir::Opcode::Mul, two, cur_regs[k], &mut next, out);
+            let diff = binary(crate::eir::Opcode::Sub, twice, prev_regs[k], &mut next, out);
+            let diff = binary(crate::eir::Opcode::Mul, diff, keep, &mut next, out);
+            let wave = binary(crate::eir::Opcode::Mul, cfl, lap_regs[k], &mut next, out);
+            let new = binary(crate::eir::Opcode::Add, diff, wave, &mut next, out);
+            let new = if gamma > 0.0 {
+                let g = const_reg(gamma, &mut next, out);
+                let vel = binary(
+                    crate::eir::Opcode::Sub,
+                    cur_regs[k],
+                    prev_regs[k],
+                    &mut next,
+                    out,
+                );
+                let loss = binary(crate::eir::Opcode::Mul, g, vel, &mut next, out);
+                binary(crate::eir::Opcode::Sub, new, loss, &mut next, out)
+            } else {
+                new
+            };
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::WriteFieldCell,
+                0,
+                None,
+                vec![i_reg, j_reg, cur_regs[k]],
+                None,
+                Some(prev_target),
+            ));
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::WriteFieldCell,
+                0,
+                None,
+                vec![i_reg, j_reg, new],
+                None,
+                Some(target),
+            ));
+        }
+        ret(out);
+    }
+}
+
 /// A Go-like channel send/recv system in the language. A channel is an entity
 /// (declared `chan <name> { value = v }`) holding its latest value in `state[0]`.
 ///
@@ -3422,7 +3847,7 @@ pub struct ChanSystem {
     pub slots: usize,
     pub entity_map: std::collections::BTreeMap<String, u128>,
     pub func_ids: std::collections::BTreeMap<String, u64>,
-    pub field_widths: std::collections::BTreeMap<String, u32>,
+    pub field_dims: std::collections::BTreeMap<String, (u32, u32)>,
     pub namespace: String,
     pub param_names: std::collections::BTreeSet<String>,
     pub state_names: std::collections::BTreeMap<String, usize>,
@@ -3507,7 +3932,7 @@ impl EirSystem for ChanSystem {
                     func_ids: &self.func_ids,
                     namespace: &self.namespace,
                     params: &self.param_names,
-                    field_widths: &self.field_widths,
+                    field_dims: &self.field_dims,
                     current_entity: entity,
                 };
                 let value_reg = lower_expr(expr, &ctx, &mut next_id, out);
@@ -4077,7 +4502,7 @@ struct LowerParts<'a> {
     state_names_by_id:
         &'a std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
     func_ids: &'a std::collections::BTreeMap<String, u64>,
-    field_widths: &'a std::collections::BTreeMap<String, u32>,
+    field_dims: &'a std::collections::BTreeMap<String, (u32, u32)>,
     namespace: &'a str,
     params: &'a std::collections::BTreeSet<String>,
     current_entity: u128,
@@ -4097,7 +4522,7 @@ impl<'a> LowerParts<'a> {
             state_names_by_id: self.state_names_by_id,
             locals,
             func_ids: self.func_ids,
-            field_widths: self.field_widths,
+            field_dims: self.field_dims,
             namespace: self.namespace,
             params: self.params,
             current_entity: self.current_entity,
@@ -4389,14 +4814,17 @@ fn binary(
 }
 
 /// Builds the concrete `EirSystem` list from parsed system declarations.
+#[allow(clippy::too_many_arguments)]
 pub fn build_systems(
     systems: &[SystemDecl],
     entity_ids: &std::collections::BTreeMap<String, u128>,
     nbody_bodies: &[u128],
     func_ids: &std::collections::BTreeMap<String, u64>,
     state_names_by_id: &std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
-    field_widths: &std::collections::BTreeMap<String, u32>,
+    field_dims: &std::collections::BTreeMap<String, (u32, u32)>,
     param_names: &std::collections::BTreeSet<String>,
+    field_info: &std::collections::BTreeMap<String, (u32, u32, u32, f64)>,
+    dynamic: &[u128],
 ) -> Result<Vec<Box<dyn EirSystem>>> {
     // ChanSystem uses the first entity's named-state layout for its send value.
     let state_names = state_names_by_id
@@ -4504,7 +4932,7 @@ pub fn build_systems(
                     slots: crate::components::State::MAX_STATE_SLOTS,
                     entity_map: entity_ids.clone(),
                     func_ids: func_ids.clone(),
-                    field_widths: field_widths.clone(),
+                    field_dims: field_dims.clone(),
                     namespace: s.namespace.clone(),
                     param_names: param_names.clone(),
                     state_names: state_names.clone(),
@@ -4532,13 +4960,17 @@ pub fn build_systems(
                 for (key, text) in &s.update {
                     // Keep the raw LHS (`sN` or a named slot); it is resolved to a
                     // slot index per-entity during lowering.
-                    let idx: usize = if let Some(digit) = key.strip_prefix('s') {
-                        if key.contains('[') {
-                            continue; // dynamic LHS `s[i]`; resolved in lowering
+                    // Only an all-digit `sN` suffix is a numeric slot token; any
+                    // other `s...` name is a named slot (resolved in lowering).
+                    let idx: usize = match key.strip_prefix('s') {
+                        Some(digits)
+                            if !digits.is_empty()
+                                && !key.contains('[')
+                                && digits.bytes().all(|b| b.is_ascii_digit()) =>
+                        {
+                            digits.parse().map_err(|_| error(Status::Invalid, 55))?
                         }
-                        digit.parse().map_err(|_| error(Status::Invalid, 55))?
-                    } else {
-                        continue; // named slot; resolved in lowering against the entity's layout
+                        _ => continue, // named slot or dynamic LHS; handled below
                     };
                     if idx >= crate::components::State::MAX_STATE_SLOTS {
                         return Err(error(Status::Invalid, 52));
@@ -4550,11 +4982,17 @@ pub fn build_systems(
                 // per-entity resolution; dynamic LHS rules (`s[i]`) get their
                 // index expressions parsed now.
                 let mut dyn_rules = Vec::new();
+                let numeric_slot = |key: &str| {
+                    key.strip_prefix('s')
+                        .map(|d| {
+                            !d.is_empty()
+                                && !d.contains('[')
+                                && d.bytes().all(|b| b.is_ascii_digit())
+                        })
+                        .unwrap_or(false)
+                };
                 for (key, text) in &s.update {
-                    if !key.starts_with('s') {
-                        let expr = parse_expr_str(text)?;
-                        rules.push((key.clone(), expr));
-                    } else if key.contains('[') {
+                    if key.starts_with('s') && key.contains('[') {
                         let inner = key
                             .trim_start_matches('s')
                             .trim_start_matches('[')
@@ -4562,6 +5000,9 @@ pub fn build_systems(
                         let idx = parse_expr_str(inner)?;
                         let expr = parse_expr_str(text)?;
                         dyn_rules.push((idx, expr));
+                    } else if !numeric_slot(key) {
+                        let expr = parse_expr_str(text)?;
+                        rules.push((key.clone(), expr));
                     }
                 }
                 if rules.is_empty() && dyn_rules.is_empty() {
@@ -4604,7 +5045,7 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     entity_map: entity_ids.clone(),
                     only,
                     func_ids: func_ids.clone(),
-                    field_widths: field_widths.clone(),
+                    field_dims: field_dims.clone(),
                     namespace: s.namespace.clone(),
                     param_names: param_names.clone(),
                     state_names_by_id: state_names_by_id.clone(),
@@ -4613,33 +5054,22 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
             "rk4" => {
                 let mut rules = Vec::new();
                 for (key, text) in &s.update {
-                    let idx: usize = if let Some(digit) = key.strip_prefix('s') {
-                        if key.contains('[') {
-                            // RK4's working states are compile-time register
-                            // chains; a runtime-index LHS cannot feed them.
-                            return Err(error_at(
-                                Status::Invalid,
-                                73,
-                                s.byte_offset,
-                                "dynamic slot LHS is update-only (rk4 stages need compile-time slots)"
-                                    .to_string(),
-                            ));
+                    if let Some(idx) = numeric_slot(key) {
+                        if idx >= crate::components::State::MAX_STATE_SLOTS {
+                            return Err(error(Status::Invalid, 52));
                         }
-                        digit.parse().map_err(|_| error(Status::Invalid, 55))?
-                    } else {
-                        continue;
-                    };
-                    if idx >= crate::components::State::MAX_STATE_SLOTS {
-                        return Err(error(Status::Invalid, 52));
+                    } else if key.starts_with('s') && key.contains('[') {
+                        // RK4's working states are compile-time register
+                        // chains; a runtime-index LHS cannot feed them.
+                        return Err(error_at(
+                            Status::Invalid,
+                            73,
+                            s.byte_offset,
+                            "dynamic slot LHS is update-only (rk4 stages need compile-time slots)"
+                                .to_string(),
+                        ));
                     }
-                    let expr = parse_expr_str(text)?;
-                    rules.push((key.clone(), expr));
-                }
-                for (key, text) in &s.update {
-                    if !key.starts_with('s') {
-                        let expr = parse_expr_str(text)?;
-                        rules.push((key.clone(), expr));
-                    }
+                    rules.push((key.clone(), parse_expr_str(text)?));
                 }
                 if rules.is_empty() {
                     return Err(error_at(
@@ -4678,7 +5108,7 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     entity_map: entity_ids.clone(),
                     only,
                     func_ids: func_ids.clone(),
-                    field_widths: field_widths.clone(),
+                    field_dims: field_dims.clone(),
                     namespace: s.namespace.clone(),
                     param_names: param_names.clone(),
                     state_names_by_id: state_names_by_id.clone(),
@@ -4717,7 +5147,7 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     entity_map: entity_ids.clone(),
                     only,
                     func_ids: func_ids.clone(),
-                    field_widths: field_widths.clone(),
+                    field_dims: field_dims.clone(),
                     namespace: s.namespace.clone(),
                     param_names: param_names.clone(),
                     state_names_by_id: state_names_by_id.clone(),
@@ -4757,10 +5187,85 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     entity_map: entity_ids.clone(),
                     only,
                     func_ids: func_ids.clone(),
-                    field_widths: field_widths.clone(),
+                    field_dims: field_dims.clone(),
                     namespace: s.namespace.clone(),
                     param_names: param_names.clone(),
                     state_names_by_id: state_names_by_id.clone(),
+                }));
+            }
+            "diffuse" => {
+                let field = s
+                    .string_params
+                    .get("field")
+                    .cloned()
+                    .ok_or(error(Status::Invalid, 62))?;
+                let (w, h, d, _) = *field_info.get(&field).ok_or(error(Status::Invalid, 62))?;
+                out.push(Box::new(DiffuseSystem {
+                    field,
+                    rate: param(&s.params, "rate", s.byte_offset, &s.kind)?,
+                    width: w,
+                    height: h,
+                    depth: d,
+                    run_on: dynamic.first().copied().unwrap_or(0),
+                }));
+            }
+            "poisson" => {
+                let field = s
+                    .string_params
+                    .get("field")
+                    .cloned()
+                    .ok_or(error(Status::Invalid, 62))?;
+                let (w, h, d, dx) = *field_info.get(&field).ok_or(error(Status::Invalid, 62))?;
+                let source = s.string_params.get("source").cloned();
+                if let Some(src) = &source {
+                    if !field_info.contains_key(src) {
+                        return Err(error(Status::Invalid, 62));
+                    }
+                }
+                out.push(Box::new(PoissonSystem {
+                    field,
+                    source,
+                    iters: param(&s.params, "iters", s.byte_offset, &s.kind)? as u32,
+                    scale: s.params.get("scale").copied().unwrap_or(1.0),
+                    width: w,
+                    height: h,
+                    depth: d,
+                    dx,
+                    run_on: dynamic.first().copied().unwrap_or(0),
+                }));
+            }
+            "wave" => {
+                let field = s
+                    .string_params
+                    .get("field")
+                    .cloned()
+                    .ok_or(error(Status::Invalid, 62))?;
+                let prev = s
+                    .string_params
+                    .get("prev")
+                    .cloned()
+                    .ok_or(error(Status::Invalid, 62))?;
+                let (w, h, d, dx) = *field_info.get(&field).ok_or(error(Status::Invalid, 62))?;
+                if !field_info.contains_key(&prev) {
+                    return Err(error(Status::Invalid, 62));
+                }
+                out.push(Box::new(WaveSystem {
+                    field,
+                    prev,
+                    velocity: param(&s.params, "velocity", s.byte_offset, &s.kind)?,
+                    dt: param(&s.params, "dt", s.byte_offset, &s.kind)?,
+                    // Optional per-step retention (1.0 = lossless); a small
+                    // damping keeps reflected waves in a closed box legible.
+                    damping: s.params.get("damping").copied().unwrap_or(1.0),
+                    // Optional sponge layer: outgoing waves are absorbed near
+                    // the boundary instead of reflecting off it.
+                    absorb: s.params.get("absorb").copied().unwrap_or(0.0),
+                    absorb_width: s.params.get("absorb_width").copied().unwrap_or(0.0) as u32,
+                    width: w,
+                    height: h,
+                    depth: d,
+                    dx,
+                    run_on: dynamic.first().copied().unwrap_or(0),
                 }));
             }
             _ => return Err(error(Status::Invalid, 49)),
@@ -4802,7 +5307,10 @@ struct ImportDirective {
 /// One loaded module: its namespace, path, import-stripped source, parsed
 /// program, and its own import directives (with resolved child paths).
 struct ModuleInfo {
+    /// The namespace used by this module's own rules (its first alias).
     ns: String,
+    /// Every namespace this module has been imported under.
+    aliases: Vec<String>,
     path: std::path::PathBuf,
     source: String,
     parsed: ParsedProgram,
@@ -4908,7 +5416,7 @@ fn module_stem(spec: &str) -> String {
 fn collect_module(
     path: &std::path::Path,
     ns: &str,
-    seen: &mut std::collections::BTreeMap<std::path::PathBuf, String>,
+    seen: &mut std::collections::BTreeMap<std::path::PathBuf, usize>,
     out: &mut Vec<ModuleInfo>,
 ) -> Result<()> {
     let canon = path.canonicalize().map_err(|e| {
@@ -4919,10 +5427,15 @@ fn collect_module(
             format!("cannot import {}: {e}", path.display()),
         )
     })?;
-    if seen.contains_key(&canon) {
+    // A module already loaded (e.g. a cycle, or another alias) only gains an
+    // alias; its definitions are merged once and reachable by every alias.
+    if let Some(&idx) = seen.get(&canon) {
+        if !out[idx].aliases.contains(&ns.to_string()) {
+            out[idx].aliases.push(ns.to_string());
+        }
         return Ok(());
     }
-    seen.insert(canon, ns.to_string());
+    seen.insert(canon, out.len());
     let raw = std::fs::read_to_string(path).map_err(|e| {
         error_at(
             Status::Invalid,
@@ -4952,6 +5465,7 @@ fn collect_module(
     let children: Vec<(ImportDirective, std::path::PathBuf)> = imports.clone();
     out.push(ModuleInfo {
         ns: ns.to_string(),
+        aliases: vec![ns.to_string()],
         path: path.to_path_buf(),
         source: stripped,
         parsed,
@@ -4970,7 +5484,9 @@ fn collect_module(
 #[derive(Clone, Debug, Default)]
 pub struct ProgramSources {
     pub root: String,
-    pub modules: Vec<(String, String, String)>,
+    /// Per module: namespace, display path, source, and every alias.
+    pub modules: Vec<(String, String, String, Vec<String>)>,
+    /// `from … import …` bindings: (bare name, qualified name).
     pub aliases: Vec<(String, String)>,
 }
 
@@ -4980,15 +5496,17 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
     let root_parsed = parse(&src.root)?;
     modules.push(ModuleInfo {
         ns: String::new(),
+        aliases: vec![String::new()],
         path: std::path::PathBuf::from("<root>"),
         source: src.root.clone(),
         parsed: root_parsed,
         imports: Vec::new(),
     });
-    for (ns, path, source) in &src.modules {
+    for (ns, path, source, aliases) in &src.modules {
         let parsed = parse(source)?;
         modules.push(ModuleInfo {
             ns: ns.clone(),
+            aliases: aliases.clone(),
             path: std::path::PathBuf::from(path),
             source: source.clone(),
             parsed,
@@ -5002,7 +5520,7 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
 /// program and the sources needed to rebuild it without the filesystem.
 pub fn load_program_sources(path: &std::path::Path) -> Result<(ParsedProgram, ProgramSources)> {
     let mut modules = Vec::new();
-    let mut seen: std::collections::BTreeMap<std::path::PathBuf, String> = Default::default();
+    let mut seen: std::collections::BTreeMap<std::path::PathBuf, usize> = Default::default();
     collect_module(path, "", &mut seen, &mut modules)?;
     // Resolve `from … import …` alias requests against the child's namespace.
     let mut aliases: Vec<(String, String)> = Vec::new();
@@ -5012,7 +5530,8 @@ pub fn load_program_sources(path: &std::path::Path) -> Result<(ParsedProgram, Pr
                 let child_ns = child
                     .canonicalize()
                     .ok()
-                    .and_then(|c| seen.get(&c).cloned())
+                    .and_then(|c| seen.get(&c).copied())
+                    .map(|i| modules[i].ns.clone())
                     .unwrap_or_else(|| module_stem(&d.path));
                 for n in names {
                     aliases.push((n.clone(), format!("{child_ns}.{n}")));
@@ -5024,10 +5543,17 @@ pub fn load_program_sources(path: &std::path::Path) -> Result<(ParsedProgram, Pr
         .first()
         .map(|m| m.source.clone())
         .unwrap_or_default();
-    let exported: Vec<(String, String, String)> = modules
+    let exported: Vec<(String, String, String, Vec<String>)> = modules
         .iter()
         .skip(1)
-        .map(|m| (m.ns.clone(), m.path.display().to_string(), m.source.clone()))
+        .map(|m| {
+            (
+                m.ns.clone(),
+                m.path.display().to_string(),
+                m.source.clone(),
+                m.aliases.clone(),
+            )
+        })
         .collect();
     let sources = ProgramSources {
         root,
@@ -5117,17 +5643,55 @@ fn merge_modules(
             field_seen.insert(f.name.clone(), who.clone());
             model.fields.push(f.clone());
         }
+        // Parameters: one canonical key (the module's primary namespace) plus
+        // an alias entry per other namespace, so `--param` can find every form.
+        let canonical = |n: &str| q(n);
         for (k, v) in &m.parsed.model.params {
-            model.params.insert(q(k), *v);
+            let canon = canonical(k);
+            for a in &m.aliases {
+                let key = if a.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{a}.{k}")
+                };
+                model.params.entry(key.clone()).or_insert(*v);
+                model.param_alias.insert(key, canon.clone());
+            }
+            model.params.entry(canon.clone()).or_insert(*v);
+            model.param_alias.insert(canon.clone(), canon.clone());
         }
         for (k, v) in &m.parsed.model.param_units {
-            model.param_units.insert(q(k), *v);
+            for a in &m.aliases {
+                let key = if a.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{a}.{k}")
+                };
+                model.param_units.insert(key, *v);
+            }
+            model.param_units.insert(canonical(k), *v);
         }
+        // Functions: one declaration per alias (its body is small and the
+        // duplication keeps every alias callable).
         for fd in &m.parsed.funcs {
-            let mut fd = fd.clone();
-            fd.name = q(&fd.name);
-            fd.namespace = m.ns.clone();
-            funcs.push(fd);
+            for a in &m.aliases {
+                let mut fd = fd.clone();
+                fd.name = if a.is_empty() {
+                    fd.name.clone()
+                } else {
+                    format!("{a}.{}", fd.name)
+                };
+                fd.namespace = a.clone();
+                funcs.push(fd);
+            }
+            // The canonical namespace may already be among the aliases.
+            let canon = canonical(&fd.name);
+            if !funcs.iter().any(|f| f.name == canon) {
+                let mut fd = fd.clone();
+                fd.namespace = m.ns.clone();
+                fd.name = canon;
+                funcs.push(fd);
+            }
         }
         for sys in &m.parsed.systems {
             let mut sys = sys.clone();
@@ -5136,13 +5700,20 @@ fn merge_modules(
         }
     }
     for (bare, qualified) in aliases {
-        if funcs.iter().any(|f| f.name == bare) {
-            continue; // a local definition (or earlier import) wins
+        // A function import binds the bare name to a copy of the function.
+        if !funcs.iter().any(|f| f.name == bare) {
+            if let Some(src) = funcs.iter().find(|f| f.name == qualified).cloned() {
+                let mut fd = src;
+                fd.name = bare.clone();
+                funcs.push(fd);
+            }
         }
-        if let Some(src) = funcs.iter().find(|f| f.name == qualified).cloned() {
-            let mut fd = src;
-            fd.name = bare;
-            funcs.push(fd);
+        // A parameter import binds the bare name (alias of the canonical key).
+        if let Some(canon) = model.param_alias.get(&qualified).cloned() {
+            if let Some(v) = model.params.get(&qualified).copied() {
+                model.params.insert(bare.clone(), v);
+                model.param_alias.insert(bare, canon);
+            }
         }
     }
     let mut dup = BTreeMap::new();
@@ -5351,14 +5922,10 @@ fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
         // Rule LHS -> slot index (sN or a named slot).
         let mut rules: Vec<(usize, &str)> = Vec::new();
         for (key, text) in &sys.update {
-            let idx = if let Some(n) = key.strip_prefix('s') {
-                if key.contains('[') {
-                    continue;
-                }
-                match n.parse::<usize>() {
-                    Ok(i) => i,
-                    Err(_) => continue,
-                }
+            let idx = if key.starts_with('s') && key.contains('[') {
+                continue;
+            } else if let Some(i) = numeric_slot(key) {
+                i
             } else {
                 match name_to_slot.get(key) {
                     Some(i) => *i,
@@ -5468,15 +6035,28 @@ pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
             }
         }
     }
-    // Every declared parameter name (qualified), for namespace fallback.
-    let param_names: std::collections::BTreeSet<String> =
-        parsed.model.params.keys().cloned().collect();
-    // Grid field widths (compile-time, from the model) for field cell access.
-    let field_widths: std::collections::BTreeMap<String, u32> = parsed
+    // Grid field dimensions (name -> (width, height, dx)) for the field solvers.
+    let field_info: std::collections::BTreeMap<String, (u32, u32, u32, f64)> = parsed
         .model
         .fields
         .iter()
-        .map(|f| (f.name.clone(), f.width as u32))
+        .map(|f| {
+            (
+                f.name.clone(),
+                (f.width as u32, f.height as u32, f.depth as u32, f.dx),
+            )
+        })
+        .collect();
+    // Every declared parameter name (qualified), for namespace fallback.
+    let param_names: std::collections::BTreeSet<String> =
+        parsed.model.params.keys().cloned().collect();
+    // Grid field dimensions (compile-time, from the model) for field cell
+    // access: name -> (width, height). Height splits the packed 3D `j` index.
+    let field_dims: std::collections::BTreeMap<String, (u32, u32)> = parsed
+        .model
+        .fields
+        .iter()
+        .map(|f| (f.name.clone(), (f.width as u32, f.height as u32)))
         .collect();
     let systems = build_systems(
         &parsed.systems,
@@ -5484,8 +6064,10 @@ pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
         &nbody_entities,
         &func_ids,
         &state_names_by_id,
-        &field_widths,
+        &field_dims,
         &param_names,
+        &field_info,
+        &entities,
     )?;
     let program = PhysicsProgram::build(systems, entities);
     let mut module = program.module.clone();
@@ -5498,7 +6080,7 @@ pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
         let empty_props = std::collections::BTreeMap::new();
         let empty_ents = std::collections::BTreeMap::new();
         let empty_names = std::collections::BTreeMap::new();
-        let empty_widths = std::collections::BTreeMap::new();
+        let empty_dims = std::collections::BTreeMap::new();
         let empty_by_id: std::collections::BTreeMap<
             u128,
             std::collections::BTreeMap<String, usize>,
@@ -5511,7 +6093,7 @@ pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
             state_names: &empty_names,
             state_names_by_id: &empty_by_id,
             func_ids: &func_ids,
-            field_widths: &empty_widths,
+            field_dims: &empty_dims,
             namespace: &f.namespace,
             params: &param_names,
             current_entity: 0,
@@ -5585,6 +6167,9 @@ pub struct LangRuntime {
     channel_ids: Vec<u128>,
     /// Entity id -> name, for presentation labels.
     entity_names: std::collections::BTreeMap<u128, String>,
+    /// Field names that are solver-internal (`wave`'s `prev` time-shift buffer)
+    /// and are not presented as physical fields.
+    hidden_fields: std::collections::BTreeSet<String>,
     /// Optional peer region: when set, `send` also routes to the peer's channel.
     peer_region: Option<pwe_api::RegionId>,
     /// Execution context for `time`/`random`/`emit` (seeded → reproducible).
@@ -5679,12 +6264,22 @@ impl LangRuntime {
             router.channel(ChannelAddr::new(region, ChannelId(cid as u64)), 1);
         }
 
+        // `wave`'s `prev` field is an internal time-shift buffer, not a
+        // physical quantity — keep it out of the 3D view.
+        let hidden_fields: std::collections::BTreeSet<String> = compiled
+            .parsed
+            .systems
+            .iter()
+            .filter(|s| s.kind == "wave")
+            .filter_map(|s| s.string_params.get("prev").cloned())
+            .collect();
         Ok(Self {
             scene,
             program,
             module,
             clock: 0,
             sim_dt,
+            hidden_fields,
             region,
             jit,
             jit_key,
@@ -5787,7 +6382,26 @@ impl LangRuntime {
         &self,
         camera: Option<crate::present::CameraVisual>,
     ) -> crate::present::PresentationFrame {
-        crate::present::snapshot_with(&self.entity_names, &self.channel_ids, &self.scene, camera)
+        let mut frame = crate::present::snapshot_with(
+            &self.entity_names,
+            &self.channel_ids,
+            &self.scene,
+            camera,
+        );
+        if !self.hidden_fields.is_empty() {
+            frame
+                .fields
+                .retain(|f| !self.hidden_fields.contains(&f.name));
+        }
+        frame
+    }
+
+    /// Resets the runtime to a previously captured scene (step 0, cleared
+    /// execution context). Used by the live viewer's Restart.
+    pub fn reset_to(&mut self, scene: Scene) {
+        self.scene = scene;
+        self.clock = 0;
+        self.env = crate::eir::ExecEnv::default();
     }
 
     /// Advances the global simulation clock by one step.
@@ -5829,9 +6443,11 @@ impl LangRuntime {
         self.env.step_dt = self.sim_dt;
         self.env.events.clear();
         crate::eir::drain_due_events(&mut self.env);
-        let writes =
-            self.module
-                .interpret_with_env(&mut rt, &mut self.env, WorldId(0), WorldVersion(0))?;
+        // The module was validated once at compile; executing skips the
+        // dominance re-check every step (vital for unrolled field solvers).
+        let writes = self
+            .module
+            .execute(&mut rt, &mut self.env, WorldId(0), WorldVersion(0))?;
         self.check_invariants(&writes)?;
         apply_writes(&mut self.scene, &writes)?;
         self.advance_clock();
@@ -5846,14 +6462,12 @@ impl LangRuntime {
         self.env.step_dt = self.sim_dt;
         self.env.events.clear();
         crate::eir::drain_due_events(&mut self.env);
-        let writes = self.jit.execute_with_env(
+        let writes = self.jit.execute_with_env_validated(
             &self.jit_key,
             &mut rt,
             &mut self.env,
             WorldId(0),
             WorldVersion(0),
-            Hash256([0; 32]),
-            0,
         )?;
         self.check_invariants(&writes)?;
         apply_writes(&mut self.scene, &writes)?;
@@ -5881,20 +6495,18 @@ impl LangRuntime {
 
         let mut env_a = base.clone();
         let mut rt_a = SceneRuntime::new(&a);
-        let int_writes =
-            self.module
-                .interpret_with_env(&mut rt_a, &mut env_a, WorldId(0), WorldVersion(0))?;
+        let int_writes = self
+            .module
+            .execute(&mut rt_a, &mut env_a, WorldId(0), WorldVersion(0))?;
 
         let mut env_b = base.clone();
         let mut rt_b = SceneRuntime::new(&b);
-        let jit_writes = self.jit.execute_with_env(
+        let jit_writes = self.jit.execute_with_env_validated(
             &self.jit_key,
             &mut rt_b,
             &mut env_b,
             WorldId(0),
             WorldVersion(0),
-            Hash256([0; 32]),
-            0,
         )?;
 
         if int_writes != jit_writes {
@@ -7325,6 +7937,185 @@ mod tests {
             Ok(_) => panic!("duplicate entity must be rejected"),
             Err(e) => assert_eq!(e.detail, 76),
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A bare name that resolves to no local/slot/param reads 0.0 (the
+    /// documented unresolved-reference convention) instead of failing the step
+    /// — an unresolved world-level component must not trip the entity lookup.
+    #[test]
+    fn unresolved_bare_name_reads_zero() {
+        let src = "world { gravity=(0,0,0) entity e { state=(x=0.0) } } \
+                   systems { update { on = e; dt = 0.5 x = 3.0 + zzz } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(1).unwrap();
+        let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+        assert!((st.values[0] - 1.5).abs() < 1e-12, "got {}", st.values[0]);
+    }
+
+    /// The `wave` solver integrates `u_tt = c²∇²u` with a leapfrog over two
+    /// fields: a symmetric initial pulse stays symmetric and splits outwards
+    /// from the centre, and remains finite.
+    #[test]
+    fn wave_solver_propagates_symmetrically() {
+        let src = "world { gravity=(0,0,0) \
+                   field u { width=41; height=1; dx=1.0 } \
+                   field um { width=41; height=1; dx=1.0 } \
+                   entity e { state=(x=0.0) } } \
+                   systems { wave { field = u; prev = um; velocity = 1.0; dt = 0.5 } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.scene.fields.get_mut("u").unwrap().set(20, 0, 1.0);
+        rt.scene.fields.get_mut("um").unwrap().set(20, 0, 1.0);
+        rt.step_cross_n(8).unwrap();
+        let u = rt.scene.fields.get("u").unwrap();
+        for k in 0..20usize {
+            assert!(
+                (u.value(20 - k, 0) - u.value(20 + k, 0)).abs() < 1e-9,
+                "asymmetric at k={k}"
+            );
+        }
+        assert!(u.value(20, 0).abs() < 1.0, "centre should give up energy");
+        assert!(u.value(20, 0).is_finite());
+        assert!(
+            u.value(20 + 5, 0).abs() > 1e-6 || u.value(20 + 8, 0).abs() > 1e-6,
+            "the pulse must have spread outwards"
+        );
+    }
+
+    /// 3D field solvers: `diffuse` is exactly conservative in a 3D grid, and
+    /// `poisson` yields a potential well around a positive source (depth > 1).
+    #[test]
+    fn field_solver_systems_3d() {
+        let d3 = "world { gravity=(0,0,0) field heat { width=5; height=5; depth=5; dx=1.0 } \
+                  entity e { state=(x=0.0) } } \
+                  systems { diffuse { field = heat; rate = 0.1 } \
+                    update { on = e; dt = 1.0 \
+                      let _ = fset(heat, 2.0, 2.0, 2.0, fget(heat, 2.0, 2.0, 2.0) + 1.0) \
+                      x = 0.0 + 1.0 } }";
+        let mut rt = LangRuntime::compile(d3).unwrap();
+        rt.step_cross_n(12).unwrap();
+        let f = rt.scene.fields.get("heat").unwrap();
+        assert_eq!((f.width, f.height, f.depth), (5, 5, 5));
+        assert!(
+            (f.total() - 12.0).abs() < 1e-9,
+            "3D diffuse conserves: {}",
+            f.total()
+        );
+
+        let poi = "world { gravity=(0,0,0) field phi { width=5; height=5; depth=5; dx=1.0 } \
+                   field rho { width=5; height=5; depth=5; dx=1.0 } entity e { state=(x=0.0) } } \
+                   systems { poisson { field = phi; source = rho; iters = 20 } \
+                     update { on = e; dt = 1.0 \
+                       let _ = fset(rho, 2.0, 2.0, 2.0, 1.0) x = 0.0 + 1.0 } }";
+        let mut rt = LangRuntime::compile(poi).unwrap();
+        rt.step_cross_n(2).unwrap();
+        let f = rt.scene.fields.get("phi").unwrap();
+        assert!(
+            f.value3(2, 2, 2) < 0.0,
+            "3D potential well: {}",
+            f.value3(2, 2, 2)
+        );
+    }
+
+    /// A bare name that resolves to no local/slot/param reads 0.0 (the
+    /// numeric `sN` token and must still resolve to its slot.
+    #[test]
+    fn named_slots_starting_with_s_resolve() {
+        let src = "world { gravity=(0,0,0) entity e { state=(speed=0.0, s0x=0.0) } } \
+                   systems { update { on = e; dt = 1.0
+                     speed = 4.0 + 0.0
+                     s0x = 9.0 + 0.0 } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(1).unwrap();
+        let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+        assert_eq!((st.values[0], st.values[1]), (4.0, 9.0));
+    }
+
+    /// Field solver system kinds: `diffuse` conserves the injected total
+    /// exactly (Jacobi sweep), and `poisson` relaxes toward a negative
+    /// potential around a positive source.
+    #[test]
+    fn field_solver_systems() {
+        let src = "world { gravity=(0,0,0) field heat { width=8; height=8; dx=1.0 } \
+                   entity e { state=(x=0.0) } } \
+                   systems { diffuse { field = heat; rate = 0.2 } \
+                     update { on = e; dt = 1.0 \
+                       let _ = fset(heat, 4.0, 4.0, fget(heat, 4.0, 4.0) + 1.0) \
+                       x = 0.0 + 1.0 } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(10).unwrap();
+        let total = rt.scene.fields.get("heat").unwrap().total();
+        assert!(
+            (total - 10.0).abs() < 1e-9,
+            "diffuse must conserve: {total}"
+        );
+
+        let poi = "world { gravity=(0,0,0) field phi { width=6; height=6; dx=1.0 } \
+                   field rho { width=6; height=6; dx=1.0 } entity e { state=(x=0.0) } } \
+                   systems { poisson { field = phi; source = rho; iters = 40 } \
+                     update { on = e; dt = 1.0 \
+                       let _ = fset(rho, 3.0, 3.0, 1.0) x = 0.0 + 1.0 } }";
+        let mut rt = LangRuntime::compile(poi).unwrap();
+        rt.step_cross_n(3).unwrap();
+        let f = rt.scene.fields.get("phi").unwrap();
+        assert!(
+            f.value(3, 3) < 0.0,
+            "positive source yields a negative potential well: {}",
+            f.value(3, 3)
+        );
+    }
+
+    /// Circular imports resolve (a module is loaded once and reachable by every
+    /// alias): `a` imports `b` which imports `a`, and both are called.
+    #[test]
+    fn circular_imports_and_multiple_aliases_resolve() {
+        let dir = std::env::temp_dir().join(format!("pwe_cycle_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("x.pwe"),
+            "world { params { G = 1.0 } }\nfuncs { fx(v) { v + G } }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("a.pwe"),
+            "import \"x\" as alpha\nworld { }\nimport \"b\"\n\
+             systems { update { on = e; dt = 1.0 s0 = alpha.fx(0.0) + b.g(0.0) } }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("b.pwe"),
+            "import \"a\"\nimport \"x\"\nworld { }\n\
+             funcs { g(v) { v + 100.0 } }\n\
+             systems { update { on = e; dt = 1.0 s1 = x.fx(0.0) } }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("main.pwe"),
+            "import \"a\"\nimport \"b\"\nworld { gravity=(0,0,0) entity e { state=(s0=0.0, s1=0.0) } }\n",
+        )
+        .unwrap();
+        let mut rt = LangRuntime::compile_file(&dir.join("main.pwe")).unwrap();
+        // Both aliases of the same module are usable, and the cycle merges once.
+        rt.step_cross_n(1).unwrap();
+        let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+        assert!(
+            st.values[0] > 0.0 && st.values[1] > 0.0,
+            "both alias references resolved: {:?}",
+            st.values
+        );
+        // `--param`-style override reaches every alias of one parameter.
+        let canon = rt
+            .scene
+            .params
+            .keys()
+            .filter(|k| k.ends_with(".G") || *k == "G")
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            canon.len() >= 2,
+            "module imported under two namespaces: {canon:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

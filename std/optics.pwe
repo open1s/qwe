@@ -1,0 +1,17 @@
+# std/optics — light and optics.
+world {
+  params { h_planck = 6.62607015e-34 [kg*m^2*s^-1] c_light = 299792458.0 [m/s] }
+}
+
+funcs {
+  inverse_square_intensity(i0, r) { i0 / (r * r) }
+  beer_lambert(i0, mu, d) { i0 * exp(0.0 - mu * d) }
+  snell_angle(n1, n2, theta) { asin(n1 * sin(theta) / n2) }
+  critical_angle(n1, n2) { asin(n2 / n1) }
+  fresnel_reflectance(n1, n2) { let r = (n1 - n2) / (n1 + n2) return r * r }
+  reflect_axis(v, n_dot_v, n_component) { v - 2.0 * n_dot_v * n_component }
+  wien_peak(temp) { 2.897771955e-3 / temp }
+  photon_energy(freq) { h_planck * freq }
+  photon_energy_wavelength(lambda) { h_planck * c_light / lambda }
+  focal_length(d_o, d_i) { 1.0 / (1.0 / d_o + 1.0 / d_i) }
+}

@@ -79,12 +79,32 @@ pub struct CameraVisual {
     pub target: Vec3,
 }
 
+/// A grid field sent to the viewer. The viewer draws it as a marching-cubes
+/// isosurface: a spherical wavefront reads as a translucent shell that grows
+/// outward and fades. For large grids `stride > 1` subsamples the linear
+/// `[k][j][i]` stream so at most `MAX_FIELD_POINTS` cells are sent per frame.
+#[derive(Clone, Debug)]
+pub struct FieldVisual {
+    pub name: String,
+    pub width: usize,
+    pub height: usize,
+    pub depth: usize,
+    pub dx: f64,
+    pub stride: usize,
+    /// Sampled cell values, in increasing linear-index order.
+    pub cells: Vec<f64>,
+}
+
+/// At most this many field cells ride in one presentation frame.
+const MAX_FIELD_POINTS: usize = 4096;
+
 /// An immutable presentation snapshot of one world state.
 #[derive(Clone, Debug, Default)]
 pub struct PresentationFrame {
     pub time: f64,
     pub entities: Vec<EntityVisual>,
     pub channels: Vec<ChannelVisual>,
+    pub fields: Vec<FieldVisual>,
     pub camera: Option<CameraVisual>,
     /// Bonded entity-id pairs (for molecule rendering): drawn as lines between
     /// the two atoms' positions.
@@ -97,6 +117,7 @@ impl PresentationFrame {
             time,
             entities: Vec::new(),
             channels: Vec::new(),
+            fields: Vec::new(),
             camera: None,
             bonds: Vec::new(),
         }
@@ -185,10 +206,31 @@ pub fn snapshot_with(
     }
     entities.sort_by_key(|e| e.id);
     channel_list.sort_by_key(|c| c.id);
+    // Fields: sampled cell values in linear order, capped by a stride.
+    let mut fields = Vec::new();
+    for (name, f) in &scene.fields {
+        let total = f.cells().len();
+        let stride = if total > MAX_FIELD_POINTS {
+            total.div_ceil(MAX_FIELD_POINTS)
+        } else {
+            1
+        };
+        let cells = f.cells().iter().step_by(stride).copied().collect();
+        fields.push(FieldVisual {
+            name: name.clone(),
+            width: f.width,
+            height: f.height,
+            depth: f.depth,
+            dx: f.dx,
+            stride,
+            cells,
+        });
+    }
     PresentationFrame {
         time: scene.sim_time,
         entities,
         channels: channel_list,
+        fields,
         camera,
         bonds: Vec::new(),
     }
@@ -306,7 +348,30 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
         }
         None => out.push_str("null"),
     }
-    out.push_str(",\"bonds\":[");
+    out.push_str(",\"fields\":[");
+    for (i, f) in frame.fields.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let _ = write!(
+            out,
+            "{{\"name\":\"{}\",\"width\":{},\"height\":{},\"depth\":{},\"dx\":{},\"stride\":{},\"cells\":[",
+            f.name.replace('\\', "\\\\").replace('"', "\\\""),
+            f.width,
+            f.height,
+            f.depth,
+            fmt_f64(f.dx),
+            f.stride
+        );
+        for (j, c) in f.cells.iter().enumerate() {
+            if j > 0 {
+                out.push(',');
+            }
+            out.push_str(&fmt_f64(*c));
+        }
+        out.push_str("]}");
+    }
+    out.push_str("],\"bonds\":[");
     for (i, (a, b)) in frame.bonds.iter().enumerate() {
         if i > 0 {
             out.push(',');
@@ -363,14 +428,16 @@ input[type=range]{{flex:1}}label{{color:#89b4fa}}
 import * as THREE from 'three';
 import {{ OrbitControls }} from 'three/addons/controls/OrbitControls.js';
 import {{ ConvexGeometry }} from 'three/addons/geometries/ConvexGeometry.js';
+import {{ MarchingCubes }} from 'three/addons/objects/MarchingCubes.js';
 import {{ CSS2DRenderer, CSS2DObject }} from 'three/addons/renderers/CSS2DRenderer.js';
 const FRAMES = {frames_json};
 let idx = 0, playing = false;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0e14);
-scene.add(new THREE.GridHelper(20, 20, 0x2a3240, 0x1a2030));
-scene.add(new THREE.AxesHelper(2));
+const gridHelp = new THREE.GridHelper(20, 20, 0x2a3240, 0x1a2030); scene.add(gridHelp);
+const axesHelp = new THREE.AxesHelper(2); scene.add(axesHelp);
 scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+scene.add(new THREE.HemisphereLight(0x9cc4ff, 0x0b0e14, 0.9));
 const dl = new THREE.DirectionalLight(0xffffff, 0.8); dl.position.set(8, 14, 10); scene.add(dl);
 const sunLight = new THREE.PointLight(0xFFD24A, 2, 100); scene.add(sunLight);
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 1000);
@@ -428,6 +495,131 @@ function addVel(x,y,z,vx,vy,vz,color) {{
   const a=new THREE.ArrowHelper(dir,new THREE.Vector3(x,y,z),0.6,0xffffff,0.22,0.14);
   scene.add(a); decals.push(a);
 }}
+const fieldObjects = new Map();
+let fieldExtent = 0;
+const FIELD_RES = 40;
+function clearFields() {{ for (const o of fieldObjects.values()) {{ if (o.mc) {{ scene.remove(o.mc); scene.remove(o.trough.mc); }} if (o.line) scene.remove(o.line); }} fieldObjects.clear(); }}
+// One translucent shell per field, coloured by radius (energy ~ 1/r^2): hot near
+// the source -> cool far away, across the shell's own hue family.
+function makeShell(hot, cool, W, H, D, dx) {{
+  const mat = new THREE.MeshStandardMaterial({{vertexColors:true,color:0xffffff,metalness:0.05,roughness:0.5,transparent:true,opacity:0.72,side:THREE.DoubleSide,emissive:0x06101f,emissiveIntensity:0.12}});
+  const mc = new MarchingCubes(FIELD_RES, mat, false, false, 60000);
+  mc.scale.set(W*dx/2, H*dx/2, D*dx/2);
+  mc.matrixAutoUpdate = false; mc.updateMatrix();
+  scene.add(mc);
+  return {{mc, mat, hot, cool}};
+}}
+function colorShell(sh) {{
+  const g = sh.mc.geometry, pos = g.getAttribute('position');
+  let ca = g.getAttribute('color');
+  if (!ca || ca.count !== pos.count) {{ ca = new THREE.BufferAttribute(new Float32Array(pos.count*3), 3); g.setAttribute('color', ca); }}
+  const nv = Math.min(pos.count, sh.mc.count), root = Math.sqrt(3);
+  for (let i=0; i<nv; i++) {{
+    const x=pos.getX(i), y=pos.getY(i), z=pos.getZ(i);
+    const t=Math.min(1, Math.sqrt(x*x+y*y+z*z)/root);
+    ca.setXYZ(i, sh.hot[0]+(sh.cool[0]-sh.hot[0])*t, sh.hot[1]+(sh.cool[1]-sh.hot[1])*t, sh.hot[2]+(sh.cool[2]-sh.hot[2])*t);
+  }}
+  ca.needsUpdate = true;
+}}
+// Render the field. A 1-D field (height = depth = 1) is drawn as a coloured
+// oscillating line (y = value): a sine standing wave reads as a sine curve.
+// A 2-D/3-D field is drawn as two nested isosurfaces (warm crest + cool trough)
+// whose colour also falls off with radius (energy).
+function renderFields(fields) {{
+  if (!fields) return '';
+  const seen = new Set(); let txt = '';
+  fields.forEach((fl) => {{
+    seen.add(fl.name);
+    const W=fl.width, H=fl.height, D=fl.depth, dx=fl.dx, st=fl.stride||1;
+    let lo=Infinity, hi=-Infinity;
+    for (const v of fl.cells) {{ if (v<lo) lo=v; if (v>hi) hi=v; }}
+    if (!(hi>lo)) return;
+    const full=new Float32Array(W*H*D);
+    if (st===1) {{ for (let i=0;i<fl.cells.length && i<full.length;i++) full[i]=fl.cells[i]; }}
+    else {{ for (let s=0;s<fl.cells.length;s++) {{ const lin=s*st; if (lin<full.length) full[lin]=fl.cells[s]; }} }}
+
+    if (H<=1 && D<=1) {{
+      let ent = fieldObjects.get(fl.name);
+      if (!ent || ent.W!==W) {{
+        if (ent) {{ if (ent.mc) {{ scene.remove(ent.mc); scene.remove(ent.trough.mc); }} if (ent.line) scene.remove(ent.line); }}
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(W*3), 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(W*3), 3));
+        const line = new THREE.Line(geo, new THREE.LineBasicMaterial({{vertexColors:true}}));
+        line.frustumCulled = false; scene.add(line);
+        const pts = new THREE.Points(geo, new THREE.PointsMaterial({{vertexColors:true,size:Math.max(dx*0.8,0.5),sizeAttenuation:true}}));
+        pts.frustumCulled = false; scene.add(pts);
+        ent = {{W, H, D, line, pts}};
+        fieldObjects.set(fl.name, ent);
+      }}
+      const scale = 0.28*W*dx;
+      const pos = ent.line.geometry.getAttribute('position');
+      const col = ent.line.geometry.getAttribute('color');
+      const warm=[1.0,0.55,0.15], cool=[0.15,0.60,1.0];
+      for (let i=0; i<W; i++) {{
+        const v = Math.max(-1.2, Math.min(1.2, full[i]));
+        pos.setXYZ(i, (i-(W-1)/2)*dx, v*scale, 0);
+        const t = Math.min(1, Math.abs(v));
+        const c = v >= 0 ? warm : cool;
+        col.setXYZ(i, c[0]*t+0.06, c[1]*t+0.06, c[2]*t+0.06);
+      }}
+      pos.needsUpdate = true; col.needsUpdate = true;
+      fieldExtent = Math.max(fieldExtent, W*dx, scale*2);
+      txt += fl.name+' 1D sine |u|max='+hi.toFixed(3)+'<br>';
+      return;
+    }}
+
+    let ent = fieldObjects.get(fl.name);
+    if (!ent || ent.W!==W || ent.H!==H || ent.D!==D) {{
+      if (ent) {{ if (ent.mc) {{ scene.remove(ent.mc); scene.remove(ent.trough.mc); }} if (ent.line) scene.remove(ent.line); }}
+      ent = {{ W, H, D,
+        crest:  makeShell([1.0,0.85,0.30], [1.0,0.42,0.10], W, H, D, dx),
+        trough: makeShell([0.30,0.85,1.0], [0.10,0.30,0.95], W, H, D, dx) }};
+      fieldObjects.set(fl.name, ent);
+    }}
+    const R=FIELD_RES;
+    const at=(i,j,k)=>full[k*W*H + j*W + i];
+    const fld=new Float32Array(R*R*R);
+    for (let z=0; z<R; z++) {{
+      const fz=(D===1?0:z/(R-1)*(D-1)), k0=Math.floor(fz), k1=Math.min(k0+1,D-1), tz=fz-k0;
+      for (let y=0; y<R; y++) {{
+        const fy=(H===1?0:y/(R-1)*(H-1)), j0=Math.floor(fy), j1=Math.min(j0+1,H-1), ty=fy-j0;
+        for (let x=0; x<R; x++) {{
+          const fx=(W===1?0:x/(R-1)*(W-1)), i0=Math.floor(fx), i1=Math.min(i0+1,W-1), tx=fx-i0;
+          const c00=at(i0,j0,k0)+(at(i1,j0,k0)-at(i0,j0,k0))*tx;
+          const c10=at(i0,j1,k0)+(at(i1,j1,k0)-at(i0,j1,k0))*tx;
+          const c01=at(i0,j0,k1)+(at(i1,j0,k1)-at(i0,j0,k1))*tx;
+          const c11=at(i0,j1,k1)+(at(i1,j1,k1)-at(i0,j1,k1))*tx;
+          const c0=c00+(c10-c00)*ty, c1=c01+(c11-c01)*ty;
+          fld[z*R*R + y*R + x]=c0+(c1-c0)*tz;
+        }}
+      }}
+    }}
+    for (let p2=0; p2<3; p2++) {{
+      const src = fld.slice();
+      for (let z=1; z<R-1; z++) for (let y=1; y<R-1; y++) for (let x=1; x<R-1; x++) {{
+        const q = z*R*R + y*R + x;
+        fld[q] = (src[q]*6 + src[q-1] + src[q+1] + src[q-R] + src[q+R] + src[q-R*R] + src[q+R*R]) / 12;
+      }}
+    }}
+    let flo=Infinity, fhi=-Infinity;
+    for (const v of fld) {{ if (v<flo) flo=v; if (v>fhi) fhi=v; }}
+    const span=(fhi>flo)?(fhi-flo):1;
+    let peak=0; for (const v of fl.cells) {{ const a=Math.abs(v); if (a>peak) peak=a; }}
+    const b=Math.max(0.6, Math.min(1.0, 0.6 + 0.5*peak));
+    ent.crest.mc.field.set(fld);  ent.crest.mc.isolation  = flo + 0.70*span; ent.crest.mc.update();
+    ent.trough.mc.field.set(fld); ent.trough.mc.isolation = flo + 0.30*span; ent.trough.mc.update();
+    colorShell(ent.crest); colorShell(ent.trough);
+    ent.crest.mat.color.setScalar(b); ent.trough.mat.color.setScalar(b);
+    fieldExtent = Math.max(fieldExtent, W*dx, H*dx, D*dx);
+    const dk=(D>1?('\u00d7'+D):'');
+    txt += fl.name+' '+W+'\u00d7'+H+dk+'  E\u221d|u|max '+peak.toFixed(3)+'<br>';
+  }});
+  for (const [name, ent] of [...fieldObjects]) {{
+    if (!seen.has(name)) {{ if (ent.mc) {{ scene.remove(ent.mc); scene.remove(ent.trough.mc); }} if (ent.line) scene.remove(ent.line); fieldObjects.delete(name); }}
+  }}
+  return txt;
+}}
 function applyFrame(f) {{
   const isMol = f.bonds && f.bonds.length>0;
   for (const m of meshes.values()) scene.remove(m);
@@ -449,9 +641,13 @@ function applyFrame(f) {{
     if (e.state && e.state.length) html += (e.name||('#'+e.id))+' r='+Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y).toFixed(2)+'<br>';
   }}
   if (isMol) addBonds(f);
+  const hasFields = f.fields && f.fields.length;
+  gridHelp.visible = !hasFields; axesHelp.visible = !hasFields;
+  if (hasFields) html += '<hr>' + renderFields(f.fields);
   for (const c of f.channels) html += 'ch#'+c.id+' = '+c.value.toFixed(3)+'<br>';
   panel.innerHTML = html;
   if (f.camera && !cameraSet) {{ camera.position.set(f.camera.pos[0],f.camera.pos[1],f.camera.pos[2]); camera.lookAt(f.camera.target[0],f.camera.target[1],f.camera.target[2]); cameraSet=true; }}
+  else if (fieldExtent>0 && !cameraSet && !userMoved) {{ const e=fieldExtent*2.0; camera.position.set(e,e*0.8,e); camera.lookAt(0,0,0); controls.target.set(0,0,0); controls.update(); cameraSet=true; }}
   document.getElementById('time').textContent = f.time.toFixed(3);
   document.getElementById('frame').textContent = idx;
   const selE = selected ? f.entities.find(e=>e===selected.userData) : null;
@@ -502,16 +698,23 @@ pub struct LiveState {
 /// Serves a live viewer on `127.0.0.1:port` in a background thread. The browser
 /// polls `/state` for the current `LiveState` and `/` for the viewer page.
 /// `state` is updated by the simulation loop as it runs.
-pub fn serve_live(state: Arc<RwLock<LiveState>>, port: u16) -> std::io::Result<()> {
+pub fn serve_live(
+    state: Arc<RwLock<LiveState>>,
+    reset: Arc<std::sync::atomic::AtomicBool>,
+    pause: Arc<std::sync::atomic::AtomicBool>,
+    port: u16,
+) -> std::io::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let page = live_viewer_html();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let state = Arc::clone(&state);
+            let reset = Arc::clone(&reset);
+            let pause = Arc::clone(&pause);
             let page = page.clone();
             std::thread::spawn(move || {
                 let mut stream = stream;
-                let _ = handle_connection(&mut stream, &state, &page);
+                let _ = handle_connection(&mut stream, &state, &reset, &pause, &page);
             });
         }
     });
@@ -521,6 +724,8 @@ pub fn serve_live(state: Arc<RwLock<LiveState>>, port: u16) -> std::io::Result<(
 fn handle_connection(
     stream: &mut TcpStream,
     state: &Arc<RwLock<LiveState>>,
+    reset: &Arc<std::sync::atomic::AtomicBool>,
+    pause: &Arc<std::sync::atomic::AtomicBool>,
     page: &str,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_millis(2000)))?;
@@ -535,6 +740,29 @@ fn handle_connection(
         let live = state.read().unwrap();
         let body = live_state_json(&live);
         ("200 OK", "application/json", body.into_bytes())
+    } else if path == "/reset" {
+        // Restart, paused at step 0 so a viewer can step through from the start.
+        reset.store(true, std::sync::atomic::Ordering::Relaxed);
+        pause.store(true, std::sync::atomic::Ordering::Relaxed);
+        ("200 OK", "text/plain", b"ok".to_vec())
+    } else if path.starts_with("/pause") {
+        let now = if path.contains("on=0") {
+            false
+        } else if path.contains("on=1") {
+            true
+        } else {
+            !pause.load(std::sync::atomic::Ordering::Relaxed)
+        };
+        pause.store(now, std::sync::atomic::Ordering::Relaxed);
+        (
+            "200 OK",
+            "text/plain",
+            if now {
+                b"paused".to_vec()
+            } else {
+                b"running".to_vec()
+            },
+        )
     } else {
         ("404 Not Found", "text/plain", b"not found".to_vec())
     };
@@ -581,6 +809,8 @@ fn live_viewer_html() -> String {
 <div id="proc"></div>
 <div id="panel"></div>
 <div id="conn">connecting…</div>
+<button id="rst" style="position:fixed;right:8px;bottom:8px;z-index:11;background:#3a4a6b;border:none;color:#fff;padding:6px 12px;cursor:pointer;border-radius:4px;font-family:monospace">⟳ Restart</button>
+<button id="pse" style="position:fixed;right:110px;bottom:8px;z-index:11;background:#3a4a6b;border:none;color:#fff;padding:6px 12px;cursor:pointer;border-radius:4px;font-family:monospace">⏸ Pause</button>
 <script type="importmap">{"imports":{
   "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
   "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
@@ -589,10 +819,11 @@ fn live_viewer_html() -> String {
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {ConvexGeometry} from 'three/addons/geometries/ConvexGeometry.js';
+import {MarchingCubes} from 'three/addons/objects/MarchingCubes.js';
 import {CSS2DRenderer,CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
 const scene=new THREE.Scene(); scene.background=new THREE.Color(0x0b0e14);
-scene.add(new THREE.GridHelper(20,20,0x2a3240,0x1a2030)); scene.add(new THREE.AxesHelper(2));
-scene.add(new THREE.AmbientLight(0xffffff,0.5)); const dl=new THREE.DirectionalLight(0xffffff,0.8); dl.position.set(8,14,10); scene.add(dl);
+const gridHelp=new THREE.GridHelper(20,20,0x2a3240,0x1a2030); scene.add(gridHelp); const axesHelp=new THREE.AxesHelper(2); scene.add(axesHelp);
+scene.add(new THREE.AmbientLight(0xffffff,0.5)); scene.add(new THREE.HemisphereLight(0x9cc4ff,0x0b0e14,0.9)); const dl=new THREE.DirectionalLight(0xffffff,0.8); dl.position.set(8,14,10); scene.add(dl);
 const sunLight=new THREE.PointLight(0xFFD24A,2,100); scene.add(sunLight);
 const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.01,1000); camera.position.set(8,8,8);
 const renderer=new THREE.WebGLRenderer({antialias:true}); renderer.setSize(innerWidth,innerHeight);
@@ -626,6 +857,131 @@ function make(kind,dims,radius,points,color,size){
   if(kind==='hull'&&points){const v=points.map(p=>new THREE.Vector3(p[0],p[1],p[2]));let g;try{g=new ConvexGeometry(v);}catch(e){g=new THREE.SphereGeometry(0.1,8,6);}return new THREE.Mesh(g,mat);}
   return new THREE.Mesh(new THREE.SphereGeometry(size/2,20,16),mat);
 }
+const fieldObjects = new Map();
+let fieldExtent = 0;
+const FIELD_RES = 40;
+function clearFields() { for (const o of fieldObjects.values()) { if (o.mc) { scene.remove(o.mc); scene.remove(o.trough.mc); } if (o.line) scene.remove(o.line); if (o.pts) scene.remove(o.pts); } fieldObjects.clear(); }
+// One translucent shell per field, coloured by radius (energy ~ 1/r^2): hot near
+// the source -> cool far away, across the shell's own hue family.
+function makeShell(hot, cool, W, H, D, dx) {
+  const mat = new THREE.MeshStandardMaterial({vertexColors:true,color:0xffffff,metalness:0.05,roughness:0.5,transparent:true,opacity:0.72,side:THREE.DoubleSide,emissive:0x06101f,emissiveIntensity:0.12});
+  const mc = new MarchingCubes(FIELD_RES, mat, false, false, 60000);
+  mc.scale.set(W*dx/2, H*dx/2, D*dx/2);
+  mc.matrixAutoUpdate = false; mc.updateMatrix();
+  scene.add(mc);
+  return {mc, mat, hot, cool};
+}
+function colorShell(sh) {
+  const g = sh.mc.geometry, pos = g.getAttribute('position');
+  let ca = g.getAttribute('color');
+  if (!ca || ca.count !== pos.count) { ca = new THREE.BufferAttribute(new Float32Array(pos.count*3), 3); g.setAttribute('color', ca); }
+  const nv = Math.min(pos.count, sh.mc.count), root = Math.sqrt(3);
+  for (let i=0; i<nv; i++) {
+    const x=pos.getX(i), y=pos.getY(i), z=pos.getZ(i);
+    const t=Math.min(1, Math.sqrt(x*x+y*y+z*z)/root);
+    ca.setXYZ(i, sh.hot[0]+(sh.cool[0]-sh.hot[0])*t, sh.hot[1]+(sh.cool[1]-sh.hot[1])*t, sh.hot[2]+(sh.cool[2]-sh.hot[2])*t);
+  }
+  ca.needsUpdate = true;
+}
+// Render the field. A 1-D field (height = depth = 1) is drawn as a coloured
+// oscillating line (y = value): a sine standing wave reads as a sine curve.
+// A 2-D/3-D field is drawn as two nested isosurfaces (warm crest + cool trough)
+// whose colour also falls off with radius (energy).
+function renderFields(fields) {
+  if (!fields) return '';
+  const seen = new Set(); let txt = '';
+  fields.forEach((fl) => {
+    seen.add(fl.name);
+    const W=fl.width, H=fl.height, D=fl.depth, dx=fl.dx, st=fl.stride||1;
+    let lo=Infinity, hi=-Infinity;
+    for (const v of fl.cells) { if (v<lo) lo=v; if (v>hi) hi=v; }
+    if (!(hi>lo)) return;
+    const full=new Float32Array(W*H*D);
+    if (st===1) { for (let i=0;i<fl.cells.length && i<full.length;i++) full[i]=fl.cells[i]; }
+    else { for (let s=0;s<fl.cells.length;s++) { const lin=s*st; if (lin<full.length) full[lin]=fl.cells[s]; } }
+
+    if (H<=1 && D<=1) {
+      let ent = fieldObjects.get(fl.name);
+      if (!ent || ent.W!==W) {
+        if (ent) { if (ent.mc) { scene.remove(ent.mc); scene.remove(ent.trough.mc); } if (ent.line) scene.remove(ent.line); }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(W*3), 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(W*3), 3));
+        const line = new THREE.Line(geo, new THREE.LineBasicMaterial({vertexColors:true}));
+        line.frustumCulled = false; scene.add(line);
+        const pts = new THREE.Points(geo, new THREE.PointsMaterial({vertexColors:true,size:Math.max(dx*0.8,0.5),sizeAttenuation:true}));
+        pts.frustumCulled = false; scene.add(pts);
+        ent = {W, H, D, line, pts};
+        fieldObjects.set(fl.name, ent);
+      }
+      const scale = 0.28*W*dx;
+      const pos = ent.line.geometry.getAttribute('position');
+      const col = ent.line.geometry.getAttribute('color');
+      const warm=[1.0,0.55,0.15], cool=[0.15,0.60,1.0];
+      for (let i=0; i<W; i++) {
+        const v = Math.max(-1.2, Math.min(1.2, full[i]));
+        pos.setXYZ(i, (i-(W-1)/2)*dx, v*scale, 0);
+        const t = Math.min(1, Math.abs(v));
+        const c = v >= 0 ? warm : cool;
+        col.setXYZ(i, c[0]*t+0.06, c[1]*t+0.06, c[2]*t+0.06);
+      }
+      pos.needsUpdate = true; col.needsUpdate = true;
+      fieldExtent = Math.max(fieldExtent, W*dx, scale*2);
+      txt += fl.name+' 1D sine |u|max='+hi.toFixed(3)+'<br>';
+      return;
+    }
+
+    let ent = fieldObjects.get(fl.name);
+    if (!ent || ent.W!==W || ent.H!==H || ent.D!==D) {
+      if (ent) { if (ent.mc) { scene.remove(ent.mc); scene.remove(ent.trough.mc); } if (ent.line) scene.remove(ent.line); }
+      ent = { W, H, D,
+        crest:  makeShell([1.0,0.85,0.30], [1.0,0.42,0.10], W, H, D, dx),
+        trough: makeShell([0.30,0.85,1.0], [0.10,0.30,0.95], W, H, D, dx) };
+      fieldObjects.set(fl.name, ent);
+    }
+    const R=FIELD_RES;
+    const at=(i,j,k)=>full[k*W*H + j*W + i];
+    const fld=new Float32Array(R*R*R);
+    for (let z=0; z<R; z++) {
+      const fz=(D===1?0:z/(R-1)*(D-1)), k0=Math.floor(fz), k1=Math.min(k0+1,D-1), tz=fz-k0;
+      for (let y=0; y<R; y++) {
+        const fy=(H===1?0:y/(R-1)*(H-1)), j0=Math.floor(fy), j1=Math.min(j0+1,H-1), ty=fy-j0;
+        for (let x=0; x<R; x++) {
+          const fx=(W===1?0:x/(R-1)*(W-1)), i0=Math.floor(fx), i1=Math.min(i0+1,W-1), tx=fx-i0;
+          const c00=at(i0,j0,k0)+(at(i1,j0,k0)-at(i0,j0,k0))*tx;
+          const c10=at(i0,j1,k0)+(at(i1,j1,k0)-at(i0,j1,k0))*tx;
+          const c01=at(i0,j0,k1)+(at(i1,j0,k1)-at(i0,j0,k1))*tx;
+          const c11=at(i0,j1,k1)+(at(i1,j1,k1)-at(i0,j1,k1))*tx;
+          const c0=c00+(c10-c00)*ty, c1=c01+(c11-c01)*ty;
+          fld[z*R*R + y*R + x]=c0+(c1-c0)*tz;
+        }
+      }
+    }
+    for (let p2=0; p2<3; p2++) {
+      const src = fld.slice();
+      for (let z=1; z<R-1; z++) for (let y=1; y<R-1; y++) for (let x=1; x<R-1; x++) {
+        const q = z*R*R + y*R + x;
+        fld[q] = (src[q]*6 + src[q-1] + src[q+1] + src[q-R] + src[q+R] + src[q-R*R] + src[q+R*R]) / 12;
+      }
+    }
+    let flo=Infinity, fhi=-Infinity;
+    for (const v of fld) { if (v<flo) flo=v; if (v>fhi) fhi=v; }
+    const span=(fhi>flo)?(fhi-flo):1;
+    let peak=0; for (const v of fl.cells) { const a=Math.abs(v); if (a>peak) peak=a; }
+    const b=Math.max(0.6, Math.min(1.0, 0.6 + 0.5*peak));
+    ent.crest.mc.field.set(fld);  ent.crest.mc.isolation  = flo + 0.70*span; ent.crest.mc.update();
+    ent.trough.mc.field.set(fld); ent.trough.mc.isolation = flo + 0.30*span; ent.trough.mc.update();
+    colorShell(ent.crest); colorShell(ent.trough);
+    ent.crest.mat.color.setScalar(b); ent.trough.mat.color.setScalar(b);
+    fieldExtent = Math.max(fieldExtent, W*dx, H*dx, D*dx);
+    const dk=(D>1?('\u00d7'+D):'');
+    txt += fl.name+' '+W+'\u00d7'+H+dk+'  E\u221d|u|max '+peak.toFixed(3)+'<br>';
+  });
+  for (const [name, ent] of [...fieldObjects]) {
+    if (!seen.has(name)) { if (ent.mc) { scene.remove(ent.mc); scene.remove(ent.trough.mc); } if (ent.line) scene.remove(ent.line); fieldObjects.delete(name); }
+  }
+  return txt;
+}
 function apply(f){
   const isMol = f.frame.bonds && f.frame.bonds.length > 0;
   for(const m of meshes.values()) scene.remove(m); meshes.clear();
@@ -651,10 +1007,13 @@ function apply(f){
   }
   // Draw bonds (molecule) as lines between bonded atoms.
   if(isMol) addBonds(f.frame);
+  const hasFields=f.frame.fields&&f.frame.fields.length; gridHelp.visible=!hasFields; axesHelp.visible=!hasFields;
+  if(hasFields) html+='<hr>'+renderFields(f.frame.fields);
   for(const c of f.frame.channels) html+='ch#'+c.id+' = '+c.value.toFixed(3)+'<br>';
   panel.innerHTML=html;
   let p=''; for(let i=f.info.length-1;i>=0;i--) p+=f.info[i]+'<br>'; procEl.innerHTML=p;
   if(f.frame.camera&&!cameraInit){camera.position.set(f.frame.camera.pos[0],f.frame.camera.pos[1],f.frame.camera.pos[2]);camera.lookAt(f.frame.camera.target[0],f.frame.camera.target[1],f.frame.camera.target[2]);cameraInit=true;}
+  else if(fieldExtent>0&&!cameraInit){const e=fieldExtent*2.0;camera.position.set(e,e*0.8,e);camera.lookAt(0,0,0);controls.target.set(0,0,0);controls.update();cameraInit=true;}
   // Highlight + inspect the selected body.
   lastFrame=f;
   const selE=selected?f.frame.entities.find(e=>e===selected.userData):null;
@@ -694,6 +1053,10 @@ async function poll(){
   catch(e){conn.style.display='block';conn.textContent='waiting for runtime…';}
   setTimeout(poll,60);
 }
+document.getElementById('rst').onclick=()=>{fetch('/reset').catch(()=>{});};
+let paused=false;
+document.getElementById('pse').onclick=()=>{paused=!paused;fetch('/pause?on='+(paused?1:0)).then(r=>r.text()).then(()=>{document.getElementById('pse').textContent=(paused?'▶ Resume':'⏸ Pause');}).catch(()=>{});};
+document.getElementById('rst').addEventListener('click',()=>{paused=true;document.getElementById('pse').textContent='▶ Resume';});
 poll();
 renderer.setAnimationLoop(()=>{controls.update();renderer.render(scene,camera);labelRenderer.render(scene,camera);});
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);labelRenderer.setSize(innerWidth,innerHeight);});
@@ -730,6 +1093,32 @@ mod tests {
         let vis = &frame.entities[0];
         assert!(matches!(vis.shape, Shape::Sphere { radius } if (radius - 0.5).abs() < 1e-9));
         assert!((vis.position.x - 1.0).abs() < 1e-9);
+    }
+
+    fn scene_with_field() -> Scene {
+        let mut scene = Scene::new(Vec3::ZERO);
+        let mut f = crate::field::Field::new3(2, 2, 2, 1.0);
+        f.set3(1, 1, 1, 0.75);
+        scene.fields.insert("heat".to_string(), f);
+        scene
+    }
+
+    #[test]
+    fn snapshot_captures_3d_fields_and_json() {
+        let frame = snapshot(&scene_with_field(), None);
+        assert_eq!(frame.fields.len(), 1);
+        let fl = &frame.fields[0];
+        assert_eq!((fl.width, fl.height, fl.depth), (2, 2, 2));
+        assert_eq!(fl.cells.len(), 8);
+        assert!(fl.cells.contains(&0.75));
+        let json = frame_to_json(&frame);
+        assert!(json.contains("\"fields\":["), "{json}");
+        assert!(json.contains("\"name\":\"heat\""));
+        assert!(json.contains("\"depth\":2"));
+        // Both viewers render fields.
+        let html = template(&format!("[{json}]"));
+        assert!(html.contains("renderFields"));
+        assert!(html.contains("MarchingCubes"));
     }
 
     #[test]

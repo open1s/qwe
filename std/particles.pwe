@@ -1,0 +1,16 @@
+# std/particles — point/particle kinematics.
+world { }
+
+funcs {
+  terminal_velocity(mass, g, k) { mass * g / k }
+  drag_step(v, k_over_m, dt) { v * (1.0 - k_over_m * dt) }
+  ballistic_y(y0, vy0, g, u) { y0 + vy0 * u - 0.5 * g * u * u }
+  ballistic_x(x0, vx0, u) { x0 + vx0 * u }
+  ballistic_vy(vy0, g, u) { vy0 - g * u }
+  bounce_vy(vy, restitution) { 0.0 - vy * restitution }
+  reflect(v) { 0.0 - v }
+  radius_from_mass(mass, density) { pow(mass / density * 0.238732414637843, 0.3333333333333333) }
+  stopping_distance(v, friction, g) { v * v / (2.0 * friction * g) }
+  freefall_time(h, g) { sqrt(2.0 * h / g) }
+  speed(x, y) { sqrt(x * x + y * y) }
+}

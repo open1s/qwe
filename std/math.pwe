@@ -1,0 +1,26 @@
+# std/math — scalar math helpers. `import "std/math"` then `math.lerp(...)`.
+world { }
+
+funcs {
+  clamp(x, lo, hi) { max(lo, min(x, hi)) }
+  clamp01(x) { max(0.0, min(x, 1.0)) }
+  lerp(a, b, u) { a + (b - a) * u }
+  mix(a, b, u) { a + (b - a) * u }
+  inv_lerp(a, b, x) { (x - a) / (b - a) }
+  remap(x, a0, a1, b0, b1) { b0 + (b1 - b0) * (x - a0) / (a1 - a0) }
+  step(edge, x) { if(x < edge, 0.0, 1.0) }
+  smoothstep(a, b, x) { let u = max(0.0, min((x - a) / (b - a), 1.0)) return u * u * (3.0 - 2.0 * u) }
+  smootherstep(a, b, x) { let u = max(0.0, min((x - a) / (b - a), 1.0)) return u * u * u * (u * (u * 6.0 - 15.0) + 10.0) }
+  wrap(x, lo, hi) { lo + (x - lo) % (hi - lo) }
+  sqr(x) { x * x }
+  deg(rad) { rad * 57.29577951308232 }
+  rad(deg) { deg * 0.017453292519943295 }
+  hypot2(x, y) { sqrt(x * x + y * y) }
+  hypot3(x, y, z) { sqrt(x * x + y * y + z * z) }
+  min3(a, b, c) { min(a, min(b, c)) }
+  max3(a, b, c) { max(a, max(b, c)) }
+  sgn(x) { if(x < 0.0, 0.0 - 1.0, 1.0) }
+  deadzone(x, d) { if(abs(x) < d, 0.0, x) }
+  ease_in(u) { u * u }
+  ease_out(u) { 1.0 - (1.0 - u) * (1.0 - u) }
+}
