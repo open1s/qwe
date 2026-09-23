@@ -293,6 +293,8 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
+    /// Remainder `a % b` (fmod semantics).
+    Rem(Box<Expr>, Box<Expr>),
     /// A comparison `a <op> b`, yielding 1.0 / 0.0.
     Cmp(&'static str, Box<Expr>, Box<Expr>),
     /// Logical conjunction `a and b`: 1.0 iff both operands are nonzero.
@@ -722,6 +724,7 @@ fn build_term(pair: Pair<'_, Rule>) -> Result<Expr> {
         acc = match op.as_str() {
             "*" => Expr::Mul(Box::new(acc), Box::new(rhs)),
             "/" => Expr::Div(Box::new(acc), Box::new(rhs)),
+            "%" => Expr::Rem(Box::new(acc), Box::new(rhs)),
             _ => acc,
         };
     }
@@ -1029,6 +1032,16 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let vec3 = item.into_inner().next().unwrap();
                             model.gravity = parse_vec3(vec3);
                         }
+                        Rule::title_stmt => {
+                            let inner = item.into_inner().next().unwrap();
+                            let text = inner.as_str().trim();
+                            // Strip the surrounding quotes.
+                            model.title = Some(
+                                text.trim_start_matches('"')
+                                    .trim_end_matches('"')
+                                    .to_string(),
+                            );
+                        }
                         Rule::chan_stmt => {
                             let mut inner = item.into_inner();
                             let name = inner.next().unwrap().as_str().to_string();
@@ -1152,6 +1165,11 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     Rule::nbody_field => {
                                         decl.nbody = Some(
                                             field.into_inner().next().unwrap().as_str() == "true",
+                                        )
+                                    }
+                                    Rule::parent_field => {
+                                        decl.parent = Some(
+                                            field.into_inner().next().unwrap().as_str().to_string(),
                                         )
                                     }
                                     Rule::restitution_field => {
@@ -2343,6 +2361,11 @@ fn lower_expr(
             let ra = lower_expr(a, ctx, next_id, out);
             let rb = lower_expr(b, ctx, next_id, out);
             binary(crate::eir::Opcode::Div, ra, rb, next_id, out)
+        }
+        Expr::Rem(a, b) => {
+            let ra = lower_expr(a, ctx, next_id, out);
+            let rb = lower_expr(b, ctx, next_id, out);
+            binary(crate::eir::Opcode::Rem, ra, rb, next_id, out)
         }
         Expr::Cmp(op, a, b) => {
             // Compute the boolean comparison, then Select(cond, 1.0, 0.0).
@@ -3570,6 +3593,7 @@ fn collect_refs(
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
         | Expr::Div(a, b)
+        | Expr::Rem(a, b)
         | Expr::Cmp(_, a, b)
         | Expr::And(a, b)
         | Expr::Or(a, b) => {
@@ -3747,6 +3771,7 @@ fn expr_slot_span(
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
         | Expr::Div(a, b)
+        | Expr::Rem(a, b)
         | Expr::Cmp(_, a, b)
         | Expr::And(a, b)
         | Expr::Or(a, b) => {
@@ -3890,6 +3915,7 @@ fn expr_has_query(expr: &Expr) -> bool {
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
         | Expr::Div(a, b)
+        | Expr::Rem(a, b)
         | Expr::Cmp(_, a, b)
         | Expr::And(a, b)
         | Expr::Or(a, b) => expr_has_query(a) || expr_has_query(b),
@@ -6466,6 +6492,47 @@ mod tests {
         assert_eq!(st.values[3], 1.0, "mass follows the 3 vec slots");
         // `pos.1` (slot 1) reads the pre-step value (simultaneous rules).
         assert_eq!(st.values[5], 0.0);
+    }
+
+    /// The world `title = "..."` and an entity's `parent = <name>` parse into
+    /// the model (`pwe present` uses them for the run-info panel).
+    #[test]
+    fn title_and_parent_parse() {
+        let src = "world { title = \"solar system (8 planets + Moon)\" gravity=(0,0,0) \
+                   entity moon { parent = earth; state=(0) } entity earth { state=(0) } }";
+        let p = parse(src).unwrap();
+        assert_eq!(
+            p.model.title.as_deref(),
+            Some("solar system (8 planets + Moon)")
+        );
+        assert_eq!(p.model.entities[0].parent.as_deref(), Some("earth"));
+        assert_eq!(p.model.entities[1].parent, None);
+    }
+
+    /// `%` is a remainder operator (fmod semantics) — used by grid walks.
+    #[test]
+    fn modulo_operator_computes_remainder() {
+        let src = "world { gravity=(0,0,0) entity e { state=(0,0) } } \
+                   systems { update { on = e; dt = 1.0 s0 = 255.0 % 16.0; s1 = 7.0 % 3.0 } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(1).unwrap();
+        let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+        assert_eq!(st.values[0], 15.0);
+        assert!((st.values[1] - 1.0).abs() < 1e-12);
+    }
+
+    /// An out-of-range grid field access fails the step with a clear error
+    /// instead of panicking in the runtime path.
+    #[test]
+    fn out_of_range_field_access_is_an_error() {
+        let src = "world { gravity=(0,0,0) field g { width=4; height=4; dx=1.0 } \
+                   entity e { state=(0) } } \
+                   systems { update { on = e; dt = 1.0 s0 = fget(g, 2.0, 9.0) } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        match rt.step_cross() {
+            Ok(_) => panic!("out-of-range field access should fail the step"),
+            Err(e) => assert_eq!(e.detail, 7),
+        }
     }
 
     /// `last_event(kind)` reads the most recent event of that kind emitted so

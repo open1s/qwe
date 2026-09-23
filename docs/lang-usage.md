@@ -22,8 +22,8 @@ From the shell, the `pwe` command-line toolchain (crate `pwe-cli`) compiles,
 runs, and presents programs:
 
 ```sh
-pwe compile scene.pwe -o scene.pweb   # .pwe → verified .pweb artifact
-pwe run     scene.pweb --steps 600    # deterministic run, cross-backend each step
+pwe compile scene.pwe -o scene.pweb   # .pwe source → verified .pweb binary
+pwe run     scene.pweb --steps 600    # run the binary, cross-backend each step
 pwe present scene.pweb --port 8000    # live browser 3D viewer
 ```
 

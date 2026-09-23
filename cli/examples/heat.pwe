@@ -1,0 +1,44 @@
+# heat.pwe — heat diffusion on a 2D grid field (the PDE substrate).
+#
+# A held-hot centre cell injects heat every step while a Gauss–Seidel sweep
+# relaxes the whole grid by its Laplacian (`flap` = the zero-flux stencil scaled
+# by 1/dx²), so a steady radial profile forms. `fget`/`fset` read and write
+# field cells; the sweep uses a `for` loop unrolled to straight-line EIR, and
+# each cell sees its neighbours' fresh writes (deterministic Gauss–Seidel).
+# The probe entity reports the centre temperature in ordinary state.
+#
+#   pwe compile cli/examples/heat.pwe -o heat.pweb
+#   pwe run     heat.pweb --steps 400
+#
+# k = 0.2 ≤ 1/4 keeps the explicit 2D Laplacian stable (dx = 1).
+
+world {
+  gravity = (0, 0, 0)
+
+  field temperature { width = 16; height = 16; dx = 1.0 }
+
+  entity probe {
+    state = (x = 8.0, y = 8.0, z = 0.0, center = 0.0)
+    color = 0xFF6B4A
+  }
+}
+
+systems {
+  update { on = probe; dt = 1.0
+    # Held-hot centre: inject heat at (8, 8) every step.
+    let _ = fset(temperature, 8.0, 8.0, fget(temperature, 8.0, 8.0) + 2.0)
+
+    # Diffuse: T += k·∇²T over all 16×16 = 256 cells, row-major.
+    for k in 0..256 {
+      let i = k % 16
+      let j = floor(k / 16.0)
+      let temp = fget(temperature, i, j)
+      let lap = flap(temperature, i, j)
+      let _ = fset(temperature, i, j, temp + 0.2 * lap)
+    }
+
+    # Assign (not integrate) the centre temperature into the probe's state:
+    # center += dt·(−center + T) = T.
+    center = 0.0 - center + fget(temperature, 8.0, 8.0)
+  }
+}

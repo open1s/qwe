@@ -1733,6 +1733,16 @@ fn opcode_from_u16(raw: u16) -> Result<Opcode> {
         x if x == Opcode::Atan2 as u16 => Opcode::Atan2,
         x if x == Opcode::Hypot as u16 => Opcode::Hypot,
         x if x == Opcode::Print as u16 => Opcode::Print,
+        // Extended opcode space (keep in sync with the enum).
+        x if x == Opcode::NeighborCount as u16 => Opcode::NeighborCount,
+        x if x == Opcode::NearestDist as u16 => Opcode::NearestDist,
+        x if x == Opcode::Step as u16 => Opcode::Step,
+        x if x == Opcode::ReadSlotDyn as u16 => Opcode::ReadSlotDyn,
+        x if x == Opcode::WriteSlotDyn as u16 => Opcode::WriteSlotDyn,
+        x if x == Opcode::ReadFieldCell as u16 => Opcode::ReadFieldCell,
+        x if x == Opcode::WriteFieldCell as u16 => Opcode::WriteFieldCell,
+        x if x == Opcode::FieldLaplacian as u16 => Opcode::FieldLaplacian,
+        x if x == Opcode::ReadEvent as u16 => Opcode::ReadEvent,
         _ => return Err(error(Status::EirInvalid, 28, 0)),
     })
 }
@@ -2581,6 +2591,67 @@ mod tests {
                 payload: 99
             }]
         );
+    }
+
+    /// The canonical EIR codec must round-trip every opcode: the decode table
+    /// once drifted (newly added opcodes decoded to `EirInvalid 28`, silently
+    /// breaking the artifact path). Keep this list covering the extended space;
+    /// the exhaustive opcode match in `tests/prop.rs` guards the encode side.
+    #[test]
+    fn extended_opcodes_round_trip_through_the_codec() {
+        let opcodes = [
+            Opcode::NeighborCount,
+            Opcode::NearestDist,
+            Opcode::Step,
+            Opcode::ReadSlotDyn,
+            Opcode::WriteSlotDyn,
+            Opcode::ReadFieldCell,
+            Opcode::WriteFieldCell,
+            Opcode::FieldLaplacian,
+            Opcode::ReadEvent,
+        ];
+        let mut instructions: Vec<Instruction> = opcodes
+            .iter()
+            .enumerate()
+            .map(|(k, &opcode)| Instruction {
+                opcode,
+                result_id: (k as u32) + 1,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: None,
+                target: None,
+            })
+            .collect();
+        instructions.push(Instruction {
+            opcode: Opcode::Return,
+            result_id: 0,
+            result_type: None,
+            operands: vec![],
+            constant: None,
+            target: None,
+        });
+        let module = EirModule {
+            module_hash: Hash256([0; 32]),
+            schema_set_hash: Hash256([0; 32]),
+            domain_ir_hash: Hash256([0; 32]),
+            target_kind: 0,
+            functions: vec![Function {
+                id: 1,
+                effect_mask: 0,
+                argument_count: 0,
+                instructions: instructions.clone(),
+            }],
+        };
+        let bytes = module.encode().expect("encode");
+        let decoded = EirModule::decode(&bytes).expect("decode");
+        let got = &decoded.functions[0].instructions;
+        assert_eq!(got.len(), instructions.len());
+        for (k, want) in opcodes.iter().enumerate() {
+            assert_eq!(
+                got[k].opcode, *want,
+                "{want:?} did not survive the EIR codec round-trip"
+            );
+        }
     }
 
     #[test]

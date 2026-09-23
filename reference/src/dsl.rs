@@ -42,6 +42,8 @@ pub struct EntityDecl {
     /// `false` excludes this entity from the mutual `nbody` system (e.g. a moon
     /// whose motion is driven by a targeted `update` rule instead).
     pub nbody: Option<bool>,
+    /// Optional parent body name (`parent = earth`), for satellites.
+    pub parent: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -67,6 +69,7 @@ impl EntityDecl {
             state_names: None,
             color: None,
             nbody: None,
+            parent: None,
         }
     }
 }
@@ -95,6 +98,8 @@ pub struct FieldDecl {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WorldModel {
     pub gravity: Vec3,
+    /// Optional human-readable title (`title = "..."`), shown by `pwe present`.
+    pub title: Option<String>,
     pub entities: Vec<EntityDecl>,
     pub channels: Vec<ChanDecl>,
     pub fields: Vec<FieldDecl>,
@@ -104,6 +109,7 @@ impl WorldModel {
     pub fn new(gravity: Vec3) -> Self {
         Self {
             gravity,
+            title: None,
             entities: Vec::new(),
             channels: Vec::new(),
             fields: Vec::new(),

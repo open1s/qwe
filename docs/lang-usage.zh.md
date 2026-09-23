@@ -20,8 +20,8 @@ rt.step_cross_n(30)?;                                      // 一次执行 30 �
 在 shell 里，`pwe` 命令行工具（crate `pwe-cli`）可编译、运行、演示程序：
 
 ```sh
-pwe compile scene.pwe -o scene.pweb   # .pwe → 已校验的 .pweb 工件
-pwe run     scene.pweb --steps 600    # 确定性运行，每步跨后端断言
+pwe compile scene.pwe -o scene.pweb   # .pwe 源码 → 已校验的 .pweb 二进制
+pwe run     scene.pweb --steps 600    # 运行二进制，每步跨后端断言
 pwe present scene.pweb --port 8000    # 浏览器实时 3D 查看器
 ```
 

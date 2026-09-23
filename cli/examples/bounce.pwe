@@ -1,0 +1,29 @@
+# bounce.pwe — a ball bouncing on the ground (`gravity` + `integrate` +
+# `ground_contact`): the solid-body physics path, with restitution and a live
+# 3D view of the box colliders.
+#
+#   pwe compile cli/examples/bounce.pwe -o bounce.pweb
+#   pwe run     bounce.pweb --steps 300
+#   pwe present bounce.pweb --port 8000                # live 3D viewer
+#
+# The ball keeps most of its energy on each impact (restitution 0.7) and settles.
+
+world {
+  gravity = (0, -9.81, 0)
+
+  entity ball {
+    position = (0, 6, 0); velocity = (2, 0, 0)
+    mass = 1; dynamic = true; restitution = 0.7
+    sphere = 0.5; color = 0x4AA8FF
+  }
+  entity ground {
+    position = (0, -2, 0); dynamic = false
+    box = (20, 0.5, 20); color = 0x5CD46A
+  }
+}
+
+systems {
+  gravity { gravity_y = -9.81; dt = 1 / 60 }
+  integrate { dt = 1 / 60 }
+  ground_contact { restitution = 0.7 }
+}

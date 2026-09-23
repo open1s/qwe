@@ -6,14 +6,15 @@
 //!   self-describing `.pweb` artifact: the verified canonical (RFC-0021) EIR
 //!   module plus the world-model source the runtime derives its initial scene
 //!   from. Compile failures render the source with a caret.
-//! * `pwe run <artifact.pweb | src.pwe> [--steps N]` — execute deterministically
-//!   (interpreter == JIT, cross-checked every step) and report the outcome.
-//! * `pwe present <artifact.pweb | src.pwe> [--port P]` — execute live and serve
-//!   the browser 3D viewer.
+//! * `pwe run <out.pweb> [--steps N]` — execute the compiled binary
+//!   deterministically (interpreter == JIT, cross-checked every step).
+//! * `pwe present <out.pweb> [--port P]` — execute it live and serve the
+//!   browser 3D viewer.
 //!
 //! Exit codes: 0 success, 1 compile/runtime failure, 2 usage error.
 
 use pwe_api::RegionId;
+use pwe_reference::dsl::WorldModel;
 use pwe_reference::eir::EirModule;
 use pwe_reference::lang::{self, CompiledProgram, LangRuntime};
 use pwe_reference::math::Vec3;
@@ -51,11 +52,12 @@ fn usage() {
          \n\
          USAGE:\n  \
            pwe compile <src.pwe> [-o <out.pweb>]\n  \
-           pwe run     <artifact.pweb | src.pwe> [--steps N]\n  \
-           pwe present <artifact.pweb | src.pwe> [--port P]\n\
+           pwe run     <out.pweb> [--steps N]\n  \
+           pwe present <out.pweb> [--port P]\n\
          \n\
+         Compile source to a .pweb binary, then run the binary (javac/java style).\n\
          A .pweb artifact holds the verified canonical EIR module plus the\n\
-         world-model source; `run` and `present` execute the artifact's EIR."
+         world-model source it derives the initial scene from."
     );
 }
 
@@ -103,32 +105,35 @@ fn unpack(bytes: &[u8]) -> Result<(EirModule, String), String> {
     Ok((eir, source))
 }
 
-/// Loads a runtime from a `.pweb` artifact (magic-detected) or a `.pwe` source.
-fn load(path: &str) -> Result<LangRuntime, String> {
+/// Loads a runtime from a compiled `.pweb` artifact. Like `java` running a
+/// `.class`, `run`/`present` execute the compiled binary — a source must be
+/// compiled first with `pwe compile`.
+fn load(path: &str) -> Result<(LangRuntime, WorldModel), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-    if bytes.starts_with(MAGIC) {
-        // Execute the artifact's compiled EIR; the source only supplies the
-        // initial world model (entity layouts, gravity, fields, channels).
-        let (eir, source) = unpack(&bytes)?;
-        let parsed = lang::parse(&source).map_err(|e| lang::diagnose(&source, &e))?;
-        let scene = parsed.model.build_scene();
-        let program = PhysicsProgram {
-            systems: Vec::new(),
-            entities: Vec::new(),
-            module: eir.clone(),
-        };
-        let compiled = CompiledProgram {
-            parsed,
-            program,
-            eir,
-        };
-        LangRuntime::from_compiled_region(compiled, scene, RegionId(1))
-            .map_err(|e| format!("cannot boot artifact {path}: {e}"))
-    } else {
-        let source = String::from_utf8(bytes)
-            .map_err(|_| format!("{path} is not UTF-8 (source or .pweb expected)"))?;
-        LangRuntime::compile(&source).map_err(|e| lang::diagnose(&source, &e))
+    if !bytes.starts_with(MAGIC) {
+        return Err(format!(
+            "{path} is not a compiled .pweb artifact; compile it first:\n  pwe compile {path}"
+        ));
     }
+    // Execute the artifact's compiled EIR; the embedded world-model source only
+    // supplies the initial scene (entity layouts, gravity, fields, channels).
+    let (eir, source) = unpack(&bytes)?;
+    let parsed = lang::parse(&source).map_err(|e| lang::diagnose(&source, &e))?;
+    let scene = parsed.model.build_scene();
+    let program = PhysicsProgram {
+        systems: Vec::new(),
+        entities: Vec::new(),
+        module: eir.clone(),
+    };
+    let compiled = CompiledProgram {
+        parsed,
+        program,
+        eir,
+    };
+    let model = compiled.parsed.model.clone();
+    let rt = LangRuntime::from_compiled_region(compiled, scene, RegionId(1))
+        .map_err(|e| format!("cannot boot artifact {path}: {e}"))?;
+    Ok((rt, model))
 }
 
 /// Appends `.pweb` to a path stem (`scene.pwe` -> `scene.pweb`).
@@ -249,11 +254,11 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
         }
     }
     let Some(input) = input else {
-        eprintln!("pwe: missing <artifact.pweb | src.pwe>");
+        eprintln!("pwe: missing <out.pweb> (compile a source first: pwe compile <src.pwe>)");
         return 2;
     };
-    let mut rt = match load(&input) {
-        Ok(rt) => rt,
+    let (mut rt, model) = match load(&input) {
+        Ok(pair) => pair,
         Err(msg) => {
             eprintln!("{msg}");
             return 1;
@@ -270,12 +275,12 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
             report(&rt, steps);
             0
         }
-        Some(p) => present_live(rt, p),
+        Some(p) => present_live(rt, &model, p),
     }
 }
 
 /// Executes live and serves the browser viewer until interrupted.
-fn present_live(mut rt: LangRuntime, port: u16) -> i32 {
+fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
     let live = Arc::new(RwLock::new(LiveState::default()));
     if let Err(e) = present::serve_live(Arc::clone(&live), port) {
         eprintln!("pwe: cannot serve on 127.0.0.1:{port}: {e}");
@@ -293,21 +298,57 @@ fn present_live(mut rt: LangRuntime, port: u16) -> i32 {
         let mut g = live.write().unwrap();
         g.step = step;
         g.frame = rt.present_frame(Some(cam));
-        g.info = vec![
-            format!(
-                "pwe — step {step}, t={:.3}s (interpreter == JIT)",
-                rt.scene.sim_time
-            ),
-            format!(
-                "entities: {} | fields: {} | events last step: {}",
-                rt.scene.entities.len(),
-                rt.scene.fields.len(),
-                rt.emitted_events().len(),
-            ),
-        ];
+        g.info = info_lines(&rt, model, step);
         drop(g);
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
+}
+
+/// Composes the live run-info lines for the viewer's top-left panel: a compact
+/// per-body radius summary (r from the central body, nearest the origin, as the
+/// viewer computes it), an extra "from <parent>" distance for satellites
+/// (`parent = <name>`), and the step + model title line at the bottom.
+fn info_lines(rt: &LangRuntime, model: &WorldModel, step: u64) -> Vec<String> {
+    let frame = rt.present_frame(None);
+    let from_origin = |p: Vec3| (p.x * p.x + p.y * p.y + p.z * p.z).sqrt();
+    let central = frame
+        .entities
+        .iter()
+        .min_by(|a, b| {
+            from_origin(a.position)
+                .partial_cmp(&from_origin(b.position))
+                .unwrap()
+        })
+        .map(|e| e.position);
+    let by_name: std::collections::BTreeMap<String, Vec3> = frame
+        .entities
+        .iter()
+        .map(|e| (e.name.clone(), e.position))
+        .collect();
+    let mut entries: Vec<String> = Vec::new();
+    for e in &frame.entities {
+        let r = central
+            .map(|c| (e.position - c).length())
+            .unwrap_or_else(|| from_origin(e.position));
+        let parent = model
+            .entities
+            .get((e.id.saturating_sub(1)) as usize)
+            .and_then(|d| d.parent.as_deref());
+        match parent.and_then(|p| by_name.get(p).map(|pp| (p, *pp))) {
+            Some((pname, ppos)) => entries.push(format!(
+                "{}: {r:.2} from sun, {:.3} from {pname}",
+                e.name,
+                (e.position - ppos).length()
+            )),
+            None => entries.push(format!("{} {r:.2}", e.name)),
+        }
+    }
+    let mut lines: Vec<String> = entries.chunks(5).map(|c| c.join("  ")).collect();
+    let title = model.title.as_deref().unwrap_or("PWE run");
+    lines.push(format!("step {step}: {title}"));
+    // The viewer renders `info` bottom-up (its last element is the top line).
+    lines.reverse();
+    lines
 }
 
 /// Frames the camera on the scene's initial extent (a simple auto-fit).

@@ -1,0 +1,66 @@
+# solar.pwe — a solar system: mutually gravitating bodies (`nbody`).
+#
+# Bodies in an nbody model carry `state = (px, py, pz, vx, vy, vz, m)`; the
+# system computes the pairwise inverse-square force and integrates (symplectic
+# Euler) every step. Each planet starts at its circular-orbit speed
+# `v = sqrt(G·M_sun / r)` with G = 1, M_sun = 1000. The Moon rides a
+# circular orbit of its own just outside the Earth's (a co-orbital companion
+# about 2 units away). Orbital radii use a compressed scale (real ratios span
+# 4 orders of magnitude).
+#
+#   cargo build --release -p pwe-cli          # ~10x faster for many-body runs
+#   pwe compile cli/examples/solar.pwe -o solar.pweb
+#   pwe run     solar.pweb --steps 2000
+#   pwe present solar.pweb --port 8000        # live 3D viewer: legend (right),
+#                                             # per-body radii + title (left)
+
+world {
+  title = "solar system (8 planets + Moon)"
+  gravity = (0, 0, 0)
+
+  entity sun {
+    state = (0, 0, 0,   0, 0, 0,      1000)
+    sphere = 1.6; color = 0xFFD24A
+  }
+  entity mercury {
+    state = (2.01, 0, 0,   0, 22.305, 0,    0.05)
+    sphere = 0.18; color = 0xB0B0B8
+  }
+  entity venus {
+    state = (2.1284, 2.1284, 0,   -12.889, 12.889, 0,   0.4)
+    sphere = 0.3; color = 0xE8C46A
+  }
+  entity earth {
+    state = (0, 3.98, 0,   -15.851, 0, 0,   0.05)
+    sphere = 0.32; color = 0x4AA8FF
+  }
+  entity moon {
+    parent = earth
+    state = (-1.980, 3.693, 0,   -13.613, -7.300, 0,   0.02)
+    sphere = 0.12; color = 0xC8C8D0
+  }
+  entity mars {
+    state = (-3.882, 3.882, 0,   -9.543, -9.543, 0,   0.1)
+    sphere = 0.24; color = 0xFF6B4A
+  }
+  entity jupiter {
+    state = (-8.01, 0, 0,   0, -11.173, 0,   2)
+    sphere = 0.9; color = 0xE0A96D
+  }
+  entity saturn {
+    state = (-7.0357, -7.0357, 0,   7.089, -7.089, 0,   1)
+    sphere = 0.8; color = 0xE3D9A0
+  }
+  entity uranus {
+    state = (0, -12.94, 0,   8.791, 0, 0,   0.5)
+    sphere = 0.55; color = 0x7FD8E8
+  }
+  entity neptune {
+    state = (11.2925, -11.2925, 0,   5.596, 5.596, 0,   0.5)
+    sphere = 0.55; color = 0x5B7BE8
+  }
+}
+
+systems {
+  nbody { G = 1.0; dt = 0.004 }
+}

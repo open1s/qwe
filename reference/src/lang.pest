@@ -24,8 +24,11 @@ param_list = { ident ~ ("," ~ ident)* }
 
 // -- world model -------------------------------------------------------------
 world_section = { "world" ~ "{" ~ world_item* ~ "}" }
-world_item = _{ gravity_stmt | chan_stmt | entity_stmt | field_stmt }
+world_item = _{ gravity_stmt | chan_stmt | entity_stmt | field_stmt | title_stmt }
 gravity_stmt = { "gravity" ~ "=" ~ vec3 }
+// A human-readable title for the run (shown by `pwe present`).
+title_stmt = { "title" ~ "=" ~ string }
+string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 chan_stmt = { "chan" ~ ident ~ "{" ~ "value" ~ "=" ~ value ~ ";"? ~ "}" }
 entity_stmt = { "entity" ~ ident ~ "{" ~ entity_field* ~ "}" }
 // A deterministic scalar grid field (PDE substrate): `field name { width = w; height = h; dx = d }`.
@@ -41,6 +44,8 @@ state_item = { ("vec" ~ ASCII_DIGIT+ ~ ident) | (ident ~ "=" ~ value) | value }
 mass_field = { "mass" ~ "=" ~ value ~ ";"? }
 dynamic_field = { "dynamic" ~ "=" ~ boolean ~ ";"? }
 nbody_field = { "nbody" ~ "=" ~ boolean ~ ";"? }
+// `parent = <name>` marks a satellite (shown as a relative distance in `pwe present`).
+parent_field = { "parent" ~ "=" ~ ident ~ ";"? }
 restitution_field = { "restitution" ~ "=" ~ value ~ ";"? }
 friction_field = { "friction" ~ "=" ~ value ~ ";"? }
 box_field = { "box" ~ "=" ~ vec3 ~ ";"? }
@@ -50,8 +55,8 @@ camera_field = { "camera" ~ "=" ~ boolean ~ ";"? }
 color_field = { "color" ~ "=" ~ color ~ ";"? }
 color = @{ "0x" ~ ASCII_HEX_DIGIT+ }
 entity_field = _{ position_field | velocity_field | state_field | mass_field | dynamic_field
-                 | nbody_field | restitution_field | friction_field | box_field | sphere_field
-                 | hull_field | camera_field | color_field }
+                 | nbody_field | parent_field | restitution_field | friction_field | box_field
+                 | sphere_field | hull_field | camera_field | color_field }
 
 hull_list = { "[" ~ vec3 ~ ("," ~ vec3)* ~ "]" }
 vec3 = { "(" ~ value ~ "," ~ value ~ "," ~ value ~ ")" }
@@ -108,7 +113,7 @@ cmp_op = { "<=" | ">=" | "==" | "!=" | "<" | ">" }
 additive = { term ~ (add_op ~ term)* }
 add_op = { "+" | "-" }
 term = { factor ~ (term_op ~ factor)* }
-term_op = { "*" | "/" }
+term_op = { "*" | "/" | "%" }
 factor = { unary | number | call | "(" ~ expr ~ ")" | slot | slot_dyn | entity_ref | time | constant | state_name }
 // Dynamic slot read: `s[i]` reads the State slot at a runtime index.
 slot_dyn = { "s" ~ "[" ~ expr ~ "]" }

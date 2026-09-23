@@ -67,10 +67,21 @@ Like `javac`/`java` for the PWE language:
 ```sh
 cargo build -p pwe-cli
 
-pwe compile scene.pwe -o scene.pweb      # .pwe source -> verified .pweb artifact
-pwe run     scene.pweb --steps 600       # deterministic run; interpreter == JIT each step
-pwe run     scene.pwe --steps 600        # sources run directly too
+pwe compile scene.pwe -o scene.pweb      # source -> verified .pweb binary
+pwe run     scene.pweb --steps 600       # run the binary (interpreter == JIT each step)
 pwe present scene.pweb --port 8000       # live browser 3D viewer (http://localhost:8000)
+```
+
+Ready-to-run examples live in `cli/examples/`:
+
+```sh
+pwe compile cli/examples/solar.pwe  -o solar.pweb  && pwe present solar.pweb --port 8000
+pwe compile cli/examples/bounce.pwe -o bounce.pweb && pwe run bounce.pweb --steps 300
+pwe compile cli/examples/heat.pwe   -o heat.pweb   && pwe run heat.pweb --steps 400
+
+# `present` shows a top-right legend (color, name, r from the central body) and
+# a top-left run-info panel (per-body radii, satellite distances, step + title).
+# For many-body runs build in release: cargo build --release -p pwe-cli
 ```
 
 A `.pweb` artifact is a self-describing container (magic + version) holding the

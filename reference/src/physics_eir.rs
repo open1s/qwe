@@ -118,6 +118,13 @@ impl EirRuntime for SceneRuntime<'_> {
         if let Some(f) = self.field_ids.get(&target.component) {
             let idx = (target.offset / field::STATE_SLOT_BYTES) as usize;
             let (i, j) = (idx % f.width, idx / f.width);
+            if j >= f.height {
+                return Err(pwe_api::Error {
+                    status: pwe_api::Status::Invalid,
+                    detail: 7,
+                    byte_offset: 0,
+                });
+            }
             Ok(f.value(i, j).to_bits())
         } else {
             let e = self
@@ -220,6 +227,13 @@ impl EirRuntime for SceneRuntime<'_> {
             byte_offset: 0,
         })?;
         let (ii, jj) = (i as usize, j as usize);
+        if ii >= f.width || jj >= f.height {
+            return Err(pwe_api::Error {
+                status: pwe_api::Status::Invalid,
+                detail: 7,
+                byte_offset: 0,
+            });
+        }
         // The Field's zero-flux stencil (off-edge neighbors = center), scaled
         // by 1/dx²; each cell prefers any in-interpretation write (the same
         // overlay `read_field` sees).
@@ -1222,7 +1236,15 @@ pub fn apply_writes(scene: &mut Scene, writes: &[crate::eir::WorldWrite]) -> Res
             // linear index rides in the offset.
             if let Some(f) = scene.fields.get_mut(name) {
                 let idx = (w.offset / field::STATE_SLOT_BYTES) as usize;
-                f.set(idx % f.width, idx / f.width, f64::from_bits(w.value));
+                let (i, j) = (idx % f.width, idx / f.width);
+                if j >= f.height {
+                    return Err(pwe_api::Error {
+                        status: pwe_api::Status::Invalid,
+                        detail: 7,
+                        byte_offset: 0,
+                    });
+                }
+                f.set(i, j, f64::from_bits(w.value));
             }
             continue;
         }
