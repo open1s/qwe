@@ -49,7 +49,7 @@ systems {
 | `chan <name> { value = v }` | 通道实体；最新值保存在 `state[0]`。 |
 | `field <name> { width = w; height = h; dx = d }` | 确定性标量网格场（PDE 基底）：规则经 `fget`/`fset`/`flap` 读写单元。 |
 | `params { G = 1.0; k = 3.0 }` | 运行时可设置的模型参数；规则按名读取，可用 `pwe run --param G=2` 覆盖（同一工件、不同配置）。 |
-| `import "rel/path.pwe"` | 在此处内联另一文件的片段（world 项 / 系统项 / 函数），递归解析、编译期合并为单一自包含程序。 |
+| `import "pkg/mod"` | Python 式模块导入：加载 `pkg/mod.pwe`（目录则加载其 `__init__.pwe` 包），并对其**函数与参数**做命名空间限定（`mod.f(...)`、`mod.G`）。`import "mod" as m` 绑定 `m`；`from "mod" import f, G` 直接绑定裸名。实体 / 系统 / 场合并进同一个世界（重名报错）。 |
 | `title = "..."` | 运行标题，`pwe present` 展示。 |
 | `entity <name> { fields }` | 一个物体。字段见下表。 |
 
@@ -214,6 +214,23 @@ systems {
 * `nearest_dx/dy/dz()`——各轴上 `(最近邻居 − 自身)` 的偏移（独存为 0），
   规则可据此靠近或远离最近体。
 * 仅在系统规则及其 `let` 块内有效——函数体内无效（无实体上下文；detail 70）。
+
+### 模块与包
+
+每个 `.pwe` 文件是一个**模块**。`import` 遵循 Python 语义：
+
+```pwe
+import "physics"                 # physics.G、physics.thrust(m)
+import "physics" as ph           # ph.G
+from "physics" import thrust     # thrust(m)（裸名）
+```
+
+* **包**即目录：`import "shapes"` 加载 `shapes/__init__.pwe`；嵌套路径
+  `import "lib/kepler"` 加载 `lib/kepler.pwe`。
+* **函数与参数**按模块加命名空间：模块自身的规则先在其命名空间内解析裸名、
+  再回退到全局。实体、系统、场、通道属世界内容、扁平合并（跨模块实体/场重名
+  即编译错误）。
+* 循环导入可容忍（模块只加载一次）；缺文件、实体/场重名会报错（detail 76）。
 
 ### 计划事件（离散事件调度）
 

@@ -254,6 +254,9 @@ pub struct SystemDecl {
     /// Byte offset of this system's opening brace in the source (for
     /// diagnostics).
     pub byte_offset: usize,
+    /// The module namespace this system came from ("" for the root program);
+    /// unqualified function/parameter references resolve within it first.
+    pub namespace: String,
 }
 
 /// A statement in an `update` rule body. Loops keep their structure (count /
@@ -797,6 +800,7 @@ fn build_factor(pair: Pair<'_, Rule>) -> Result<Expr> {
             Ok(Expr::Const(c))
         }
         Rule::state_name => Ok(Expr::Name(inner.as_str().to_string())),
+        Rule::namespaced => Ok(Expr::Name(inner.as_str().to_string())),
         Rule::expr => build_expr(inner),
         Rule::call => build_call(inner),
         _ => Err(error(Status::Invalid, 56)),
@@ -1051,6 +1055,9 @@ pub struct ParsedProgram {
 #[derive(Clone, Debug)]
 pub struct FuncDecl {
     pub name: String,
+    /// The module namespace this function belongs to ("" for the root); its
+    /// body resolves unqualified parameter/slot names within it first.
+    pub namespace: String,
     pub params: Vec<String>,
     /// Statements before the `return` (lets / loops), in order.
     pub stmts: Vec<UpdateStmt>,
@@ -1339,6 +1346,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         update: std::collections::BTreeMap::new(),
                         update_stmts: Vec::new(),
                         param_units: std::collections::BTreeMap::new(),
+                        namespace: String::new(),
                         string_params: std::collections::BTreeMap::new(),
                         byte_offset: sys_off,
                     };
@@ -1410,6 +1418,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                     };
                     funcs.push(FuncDecl {
                         name,
+                        namespace: String::new(),
                         params,
                         stmts,
                         body,
@@ -1465,6 +1474,10 @@ pub struct UpdateSystem {
     pub func_ids: std::collections::BTreeMap<String, u64>,
     /// Grid field name -> width (compile-time, from the model).
     pub field_widths: std::collections::BTreeMap<String, u32>,
+    /// Module namespace of this system's rules.
+    pub namespace: String,
+    /// Every declared parameter name (qualified), for namespace fallback.
+    pub param_names: std::collections::BTreeSet<String>,
     /// Per-entity named state slot -> index (from `state = (x = 0, …)`).
     pub state_names_by_id:
         std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
@@ -1678,6 +1691,8 @@ impl EirSystem for UpdateSystem {
                 state_names: &sn,
                 state_names_by_id: &self.state_names_by_id,
                 func_ids: &self.func_ids,
+                namespace: &self.namespace,
+                params: &self.param_names,
                 field_widths: &self.field_widths,
                 current_entity: entity,
             };
@@ -1692,6 +1707,8 @@ impl EirSystem for UpdateSystem {
                 state_names_by_id: &self.state_names_by_id,
                 locals: &locals,
                 func_ids: &self.func_ids,
+                namespace: &self.namespace,
+                params: &self.param_names,
                 field_widths: &self.field_widths,
                 current_entity: entity,
             };
@@ -1881,6 +1898,8 @@ pub struct Rk4System {
     pub only: Option<std::collections::BTreeSet<u128>>,
     pub func_ids: std::collections::BTreeMap<String, u64>,
     pub field_widths: std::collections::BTreeMap<String, u32>,
+    pub namespace: String,
+    pub param_names: std::collections::BTreeSet<String>,
     pub state_names_by_id:
         std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
 }
@@ -2132,6 +2151,8 @@ impl EirSystem for Rk4System {
                     state_names: &sn,
                     state_names_by_id: &self.state_names_by_id,
                     func_ids: &self.func_ids,
+                    namespace: &self.namespace,
+                    params: &self.param_names,
                     field_widths: &self.field_widths,
                     current_entity: entity,
                 };
@@ -2145,6 +2166,8 @@ impl EirSystem for Rk4System {
                     state_names_by_id: &self.state_names_by_id,
                     locals: &locals,
                     func_ids: &self.func_ids,
+                    namespace: &self.namespace,
+                    params: &self.param_names,
                     field_widths: &self.field_widths,
                     current_entity: entity,
                 };
@@ -2190,6 +2213,8 @@ impl EirSystem for Rk4System {
                     state_names_by_id: &self.state_names_by_id,
                     locals: &glocals,
                     func_ids: &self.func_ids,
+                    namespace: &self.namespace,
+                    params: &self.param_names,
                     field_widths: &self.field_widths,
                     current_entity: entity,
                 };
@@ -2325,6 +2350,11 @@ struct LowerCtx<'a> {
     /// Grid field name -> width (compile-time, from the model), for
     /// `fget`/`fset`/`flap` cell access.
     field_widths: &'a std::collections::BTreeMap<String, u32>,
+    /// The module namespace of the system being lowered; unqualified function
+    /// and parameter references resolve within it first.
+    namespace: &'a str,
+    /// Every declared parameter name (qualified), for `namespace` fallback.
+    params: &'a std::collections::BTreeSet<String>,
     /// The entity whose rule is being lowered; spatial queries
     /// (`neighbor_count`/`nearest_dist`) target it. 0 in function bodies,
     /// where queries are rejected at compile time.
@@ -2413,57 +2443,81 @@ fn lower_expr(
             ctx.prop_regs.get(&(id, *kind)).copied().unwrap_or(0)
         }
         Expr::Name(name) => {
-            // A `let` local takes precedence for a bare name; otherwise resolve
-            // a named state slot: `x`, `@name.x`, or `@name.state.x`.
+            // Resolution order:
+            //   1. a `let` local (bare names only),
+            //   2. an own named state slot (bare names only),
+            //   3. a model parameter — bare (`G`) or module-qualified (`mod.G`),
+            //   4. a cross-entity named state slot (`@name.x` / `@name.state.x`).
             if !name.contains('.') {
                 if let Some(&reg) = ctx.locals.get(name.as_str()) {
                     return reg;
                 }
-            }
-            let (entity_key, slot_name) = match name.split_once('.') {
-                None => (None, name.as_str()),
-                Some((ent, rest)) => {
-                    let rest = rest.strip_prefix("state.").unwrap_or(rest);
-                    (Some(ent.to_string()), rest)
+                if let Some(slot) = ctx.state_names.get(name.as_str()).copied() {
+                    return ctx.slot_regs.get(slot).copied().unwrap_or(0);
                 }
+            }
+            // A parameter: the exact name (module-qualified) or the system's
+            // module namespace applied to a bare name, else globally bare.
+            let param_canonical: Option<&str> = if ctx.params.contains(name.as_str()) {
+                Some(name.as_str())
+            } else {
+                None
             };
-            match entity_key {
-                None => {
-                    match ctx.state_names.get(slot_name).copied() {
-                        Some(slot) => ctx.slot_regs.get(slot).copied().unwrap_or(0),
-                        // Not a named state slot: read it as a model parameter
-                        // (`pwe.lang.param.<name>`). Undeclared names read 0.0.
-                        None => {
-                            let r = *next_id;
-                            *next_id += 1;
-                            out.push(crate::physics_eir::instr(
-                                crate::eir::Opcode::ReadView,
-                                r,
-                                Some(crate::eir::ValueType::F64),
-                                vec![],
-                                None,
-                                Some(crate::physics_eir::cr(
-                                    0,
-                                    crate::physics_eir::param_component_id(slot_name),
-                                    0,
-                                )),
-                            ));
-                            r
-                        }
-                    }
+            let qualified = if param_canonical.is_none() && !ctx.namespace.is_empty() {
+                let q = format!("{}.{}", ctx.namespace, name);
+                if ctx.params.contains(&q) {
+                    Some(q)
+                } else {
+                    None
                 }
-                Some(ent) => {
-                    let id = ctx.entity_map.get(&ent).copied().unwrap_or(u128::MAX);
-                    // Resolve the slot name against the target entity's layout.
-                    let slot = ctx
-                        .state_names_by_id
-                        .get(&id)
-                        .and_then(|m| m.get(slot_name))
-                        .copied()
-                        .unwrap_or(0);
-                    ctx.ref_regs.get(&(id, slot)).copied().unwrap_or(0)
-                }
+            } else {
+                None
+            };
+            if let Some(canonical) = param_canonical.or(qualified.as_deref()) {
+                let r = *next_id;
+                *next_id += 1;
+                out.push(crate::physics_eir::instr(
+                    crate::eir::Opcode::ReadView,
+                    r,
+                    Some(crate::eir::ValueType::F64),
+                    vec![],
+                    None,
+                    Some(crate::physics_eir::cr(
+                        0,
+                        crate::physics_eir::param_component_id(canonical),
+                        0,
+                    )),
+                ));
+                return r;
             }
+            // Cross-entity named state slot.
+            if let Some((ent, rest)) = name.split_once('.') {
+                let slot_name = rest.strip_prefix("state.").unwrap_or(rest);
+                let id = ctx.entity_map.get(ent).copied().unwrap_or(u128::MAX);
+                let slot = ctx
+                    .state_names_by_id
+                    .get(&id)
+                    .and_then(|m| m.get(slot_name))
+                    .copied()
+                    .unwrap_or(0);
+                return ctx.ref_regs.get(&(id, slot)).copied().unwrap_or(0);
+            }
+            // An undeclared bare name: read 0.0 (via an unset parameter).
+            let r = *next_id;
+            *next_id += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::ReadView,
+                r,
+                Some(crate::eir::ValueType::F64),
+                vec![],
+                None,
+                Some(crate::physics_eir::cr(
+                    0,
+                    crate::physics_eir::param_component_id(name),
+                    0,
+                )),
+            ));
+            r
         }
         Expr::Add(a, b) => {
             let ra = lower_expr(a, ctx, next_id, out);
@@ -2585,7 +2639,15 @@ fn lower_expr(
         }
         Expr::Call(name, args) => {
             // A user-defined function (not a builtin) lowers to an EIR `CALL`.
-            if let Some(&target) = ctx.func_ids.get(*name) {
+            // Unqualified names resolve within the system's module first.
+            let qualified = if ctx.namespace.is_empty() {
+                None
+            } else {
+                ctx.func_ids
+                    .get(&format!("{}.{}", ctx.namespace, name))
+                    .copied()
+            };
+            if let Some(target) = qualified.or_else(|| ctx.func_ids.get(*name).copied()) {
                 let mut operands = vec![target as u32];
                 for a in args {
                     operands.push(lower_expr(a, ctx, next_id, out));
@@ -2952,6 +3014,10 @@ pub struct InvariantSystem {
     pub func_ids: std::collections::BTreeMap<String, u64>,
     /// Grid field name -> width (compile-time, from the model).
     pub field_widths: std::collections::BTreeMap<String, u32>,
+    /// Module namespace of this system's rules.
+    pub namespace: String,
+    /// Every declared parameter name (qualified), for namespace fallback.
+    pub param_names: std::collections::BTreeSet<String>,
     /// Per-entity named state slot -> index (from `state = (x = 0, …)`).
     pub state_names_by_id:
         std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
@@ -3083,6 +3149,8 @@ impl EirSystem for InvariantSystem {
             state_names: &sn,
             state_names_by_id: &self.state_names_by_id,
             func_ids: &self.func_ids,
+            namespace: &self.namespace,
+            params: &self.param_names,
             field_widths: &self.field_widths,
             current_entity: entity,
         };
@@ -3155,6 +3223,10 @@ pub struct WatchSystem {
     pub func_ids: std::collections::BTreeMap<String, u64>,
     /// Grid field name -> width (compile-time, from the model).
     pub field_widths: std::collections::BTreeMap<String, u32>,
+    /// Module namespace of this system's rules.
+    pub namespace: String,
+    /// Every declared parameter name (qualified), for namespace fallback.
+    pub param_names: std::collections::BTreeSet<String>,
     /// Per-entity named state slot -> index (from `state = (x = 0, …)`).
     pub state_names_by_id:
         std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
@@ -3270,6 +3342,8 @@ impl EirSystem for WatchSystem {
             state_names: &sn,
             state_names_by_id: &self.state_names_by_id,
             func_ids: &self.func_ids,
+            namespace: &self.namespace,
+            params: &self.param_names,
             field_widths: &self.field_widths,
             current_entity: entity,
         };
@@ -3349,6 +3423,8 @@ pub struct ChanSystem {
     pub entity_map: std::collections::BTreeMap<String, u128>,
     pub func_ids: std::collections::BTreeMap<String, u64>,
     pub field_widths: std::collections::BTreeMap<String, u32>,
+    pub namespace: String,
+    pub param_names: std::collections::BTreeSet<String>,
     pub state_names: std::collections::BTreeMap<String, usize>,
 }
 
@@ -3429,6 +3505,8 @@ impl EirSystem for ChanSystem {
                     state_names_by_id: &std::collections::BTreeMap::new(),
                     locals: &std::collections::BTreeMap::new(),
                     func_ids: &self.func_ids,
+                    namespace: &self.namespace,
+                    params: &self.param_names,
                     field_widths: &self.field_widths,
                     current_entity: entity,
                 };
@@ -4000,6 +4078,8 @@ struct LowerParts<'a> {
         &'a std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
     func_ids: &'a std::collections::BTreeMap<String, u64>,
     field_widths: &'a std::collections::BTreeMap<String, u32>,
+    namespace: &'a str,
+    params: &'a std::collections::BTreeSet<String>,
     current_entity: u128,
 }
 
@@ -4018,6 +4098,8 @@ impl<'a> LowerParts<'a> {
             locals,
             func_ids: self.func_ids,
             field_widths: self.field_widths,
+            namespace: self.namespace,
+            params: self.params,
             current_entity: self.current_entity,
         }
     }
@@ -4314,6 +4396,7 @@ pub fn build_systems(
     func_ids: &std::collections::BTreeMap<String, u64>,
     state_names_by_id: &std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
     field_widths: &std::collections::BTreeMap<String, u32>,
+    param_names: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<Box<dyn EirSystem>>> {
     // ChanSystem uses the first entity's named-state layout for its send value.
     let state_names = state_names_by_id
@@ -4422,6 +4505,8 @@ pub fn build_systems(
                     entity_map: entity_ids.clone(),
                     func_ids: func_ids.clone(),
                     field_widths: field_widths.clone(),
+                    namespace: s.namespace.clone(),
+                    param_names: param_names.clone(),
                     state_names: state_names.clone(),
                 };
                 match op {
@@ -4520,6 +4605,8 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     only,
                     func_ids: func_ids.clone(),
                     field_widths: field_widths.clone(),
+                    namespace: s.namespace.clone(),
+                    param_names: param_names.clone(),
                     state_names_by_id: state_names_by_id.clone(),
                 }));
             }
@@ -4592,6 +4679,8 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     only,
                     func_ids: func_ids.clone(),
                     field_widths: field_widths.clone(),
+                    namespace: s.namespace.clone(),
+                    param_names: param_names.clone(),
                     state_names_by_id: state_names_by_id.clone(),
                 }));
             }
@@ -4629,6 +4718,8 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     only,
                     func_ids: func_ids.clone(),
                     field_widths: field_widths.clone(),
+                    namespace: s.namespace.clone(),
+                    param_names: param_names.clone(),
                     state_names_by_id: state_names_by_id.clone(),
                 }));
             }
@@ -4667,6 +4758,8 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     only,
                     func_ids: func_ids.clone(),
                     field_widths: field_widths.clone(),
+                    namespace: s.namespace.clone(),
+                    param_names: param_names.clone(),
                     state_names_by_id: state_names_by_id.clone(),
                 }));
             }
@@ -4696,22 +4789,128 @@ pub struct CompiledProgram {
 }
 
 /// Compiles PWE source end-to-end: parse → build systems → lower to EIR.
-/// Parses an `import "relative/path.pwe"` directive at the start of a line,
-/// returning the path and any remainder of the line (preserved verbatim so
-/// `world { import "x" }` keeps its closing brace).
-fn parse_import_line(line: &str) -> Option<(&str, &str)> {
-    let rest = line.trim_start().strip_prefix("import")?;
-    let rest = rest.trim_start();
-    // Require a quote so `imported = …` is not mistaken for an import.
-    let rest = rest.strip_prefix('"')?;
-    let end = rest.find('"')?;
-    Some((&rest[..end], &rest[end + 1..]))
+/// A Python-style import directive:
+/// `import "pkg/mod"`, `import "pkg/mod" as m`, or `from "pkg/mod" import a, b`.
+#[derive(Clone, Debug)]
+struct ImportDirective {
+    path: String,
+    alias: Option<String>,
+    /// `Some(names)` for `from … import …` (bind these names unqualified).
+    names: Option<Vec<String>>,
 }
 
-fn resolve_import_file(
+/// One loaded module: its namespace, path, import-stripped source, parsed
+/// program, and its own import directives (with resolved child paths).
+struct ModuleInfo {
+    ns: String,
+    path: std::path::PathBuf,
+    source: String,
+    parsed: ParsedProgram,
+    imports: Vec<(ImportDirective, std::path::PathBuf)>,
+}
+
+fn ident_tokens(text: &str) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    for part in text.split(',') {
+        let t = part.trim();
+        if t.is_empty() || !t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        out.push(t.to_string());
+    }
+    Some(out)
+}
+
+/// Parses a Python-style import directive at the start of a line, returning it
+/// and the remainder of the line (preserved so `world { import "x" }` keeps
+/// its brace).
+fn parse_import_line(line: &str) -> Option<(ImportDirective, String)> {
+    let t = line.trim_start();
+    if let Some(rest) = t.strip_prefix("import") {
+        let rest = rest.trim_start();
+        let rest = rest.strip_prefix('"')?;
+        let end = rest.find('"')?;
+        let path = rest[..end].to_string();
+        let mut tail = rest[end + 1..].to_string();
+        let trimmed = tail.trim_start();
+        let alias = if let Some(a) = trimmed.strip_prefix("as") {
+            let a = a.trim_start();
+            let name: String = a
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if name.is_empty() {
+                return None;
+            }
+            tail = a[name.len()..].to_string();
+            Some(name)
+        } else {
+            None
+        };
+        return Some((
+            ImportDirective {
+                path,
+                alias,
+                names: None,
+            },
+            tail,
+        ));
+    }
+    if let Some(rest) = t.strip_prefix("from") {
+        let rest = rest.trim_start();
+        let rest = rest.strip_prefix('"')?;
+        let end = rest.find('"')?;
+        let path = rest[..end].to_string();
+        let rest = rest[end + 1..].trim_start();
+        let rest = rest.strip_prefix("import")?;
+        let rest = rest.trim_start();
+        // The name list runs to end of line (trailing `;`, `}`, or comment).
+        let list_end = rest.find([';', '}', '#']).unwrap_or(rest.len());
+        let names = ident_tokens(&rest[..list_end])?;
+        let tail = rest[list_end..].to_string();
+        return Some((
+            ImportDirective {
+                path,
+                alias: None,
+                names: Some(names),
+            },
+            tail,
+        ));
+    }
+    None
+}
+
+/// Resolves an import spec against a directory: `pkg/mod` -> `pkg/mod.pwe`;
+/// a directory `pkg` -> `pkg/__init__.pwe` (a package).
+fn resolve_module_path(dir: &std::path::Path, spec: &str) -> std::path::PathBuf {
+    let joined = dir.join(spec);
+    if joined.is_dir() {
+        joined.join("__init__.pwe")
+    } else if joined.extension().is_some() {
+        joined
+    } else {
+        joined.with_extension("pwe")
+    }
+}
+
+/// The default namespace of an import spec: its last path segment.
+fn module_stem(spec: &str) -> String {
+    let last = spec.rsplit('/').next().unwrap_or(spec);
+    if last == "__init__" {
+        spec.rsplit('/').nth(1).unwrap_or(spec).to_string()
+    } else {
+        last.trim_end_matches(".pwe").to_string()
+    }
+}
+
+/// Recursively loads a module and its imports (deduplicated by canonical path;
+/// a module keeps the namespace of the first import that reached it).
+fn collect_module(
     path: &std::path::Path,
-    stack: &mut Vec<std::path::PathBuf>,
-) -> Result<String> {
+    ns: &str,
+    seen: &mut std::collections::BTreeMap<std::path::PathBuf, String>,
+    out: &mut Vec<ModuleInfo>,
+) -> Result<()> {
     let canon = path.canonicalize().map_err(|e| {
         error_at(
             Status::Invalid,
@@ -4720,15 +4919,11 @@ fn resolve_import_file(
             format!("cannot import {}: {e}", path.display()),
         )
     })?;
-    if stack.contains(&canon) {
-        return Err(error_at(
-            Status::Invalid,
-            76,
-            0,
-            format!("import cycle through {}", path.display()),
-        ));
+    if seen.contains_key(&canon) {
+        return Ok(());
     }
-    let src = std::fs::read_to_string(path).map_err(|e| {
+    seen.insert(canon, ns.to_string());
+    let raw = std::fs::read_to_string(path).map_err(|e| {
         error_at(
             Status::Invalid,
             76,
@@ -4737,40 +4932,235 @@ fn resolve_import_file(
         )
     })?;
     let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
-    stack.push(canon);
-    let mut out = String::new();
-    for line in src.lines() {
+    let mut stripped = String::new();
+    let mut imports = Vec::new();
+    for line in raw.lines() {
         match parse_import_line(line) {
-            Some((rel, tail)) => {
-                let child = dir.join(rel);
-                let text = resolve_import_file(&child, stack)?;
-                out.push_str(&text);
-                if !text.ends_with('\n') {
-                    out.push('\n');
-                }
-                out.push_str(tail);
-                out.push('\n');
+            Some((d, tail)) => {
+                let child = resolve_module_path(&dir, &d.path);
+                imports.push((d, child));
+                stripped.push_str(&tail);
+                stripped.push('\n');
             }
             None => {
-                out.push_str(line);
-                out.push('\n');
+                stripped.push_str(line);
+                stripped.push('\n');
             }
         }
     }
-    stack.pop();
-    Ok(out)
+    let parsed = parse(&stripped)?;
+    let children: Vec<(ImportDirective, std::path::PathBuf)> = imports.clone();
+    out.push(ModuleInfo {
+        ns: ns.to_string(),
+        path: path.to_path_buf(),
+        source: stripped,
+        parsed,
+        imports,
+    });
+    for (d, child) in children {
+        let default_ns = d.alias.clone().unwrap_or_else(|| module_stem(&d.path));
+        collect_module(&child, &default_ns, seen, out)?;
+    }
+    Ok(())
 }
 
-/// Reads a program file and recursively inlines its `import "…"` fragments,
-/// yielding one self-contained source. Detect cycles and missing files.
-pub fn load_source(path: &std::path::Path) -> Result<String> {
-    resolve_import_file(path, &mut Vec::new())
+/// A program's sources: the root source plus every imported module (namespace,
+/// display path, import-stripped source) and the resolved `from`-import aliases.
+/// Stored in the compiled artifact so it stays self-contained.
+#[derive(Clone, Debug, Default)]
+pub struct ProgramSources {
+    pub root: String,
+    pub modules: Vec<(String, String, String)>,
+    pub aliases: Vec<(String, String)>,
 }
 
-/// Compiles a program file with its imports resolved (see [`load_source`]).
+/// Parses each stored source and merges them (in-memory; no filesystem).
+pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
+    let mut modules = Vec::new();
+    let root_parsed = parse(&src.root)?;
+    modules.push(ModuleInfo {
+        ns: String::new(),
+        path: std::path::PathBuf::from("<root>"),
+        source: src.root.clone(),
+        parsed: root_parsed,
+        imports: Vec::new(),
+    });
+    for (ns, path, source) in &src.modules {
+        let parsed = parse(source)?;
+        modules.push(ModuleInfo {
+            ns: ns.clone(),
+            path: std::path::PathBuf::from(path),
+            source: source.clone(),
+            parsed,
+            imports: Vec::new(),
+        });
+    }
+    merge_modules(modules, src.aliases.clone())
+}
+
+/// Loads a program file and its module imports, returning both the merged
+/// program and the sources needed to rebuild it without the filesystem.
+pub fn load_program_sources(path: &std::path::Path) -> Result<(ParsedProgram, ProgramSources)> {
+    let mut modules = Vec::new();
+    let mut seen: std::collections::BTreeMap<std::path::PathBuf, String> = Default::default();
+    collect_module(path, "", &mut seen, &mut modules)?;
+    // Resolve `from … import …` alias requests against the child's namespace.
+    let mut aliases: Vec<(String, String)> = Vec::new();
+    for m in &modules {
+        for (d, child) in &m.imports {
+            if let Some(names) = &d.names {
+                let child_ns = child
+                    .canonicalize()
+                    .ok()
+                    .and_then(|c| seen.get(&c).cloned())
+                    .unwrap_or_else(|| module_stem(&d.path));
+                for n in names {
+                    aliases.push((n.clone(), format!("{child_ns}.{n}")));
+                }
+            }
+        }
+    }
+    let root = modules
+        .first()
+        .map(|m| m.source.clone())
+        .unwrap_or_default();
+    let exported: Vec<(String, String, String)> = modules
+        .iter()
+        .skip(1)
+        .map(|m| (m.ns.clone(), m.path.display().to_string(), m.source.clone()))
+        .collect();
+    let sources = ProgramSources {
+        root,
+        modules: exported,
+        aliases: aliases.clone(),
+    };
+    let parsed = merge_modules(modules, aliases)?;
+    Ok((parsed, sources))
+}
+
+/// Loads a program file and its module imports into one merged program.
+pub fn load_program(path: &std::path::Path) -> Result<ParsedProgram> {
+    Ok(load_program_sources(path)?.0)
+}
+
+/// Compiles a program file with its module imports resolved.
 pub fn compile_file(path: &std::path::Path) -> Result<CompiledProgram> {
-    let source = load_source(path)?;
-    compile(&source)
+    let (parsed, _) = load_program_sources(path)?;
+    compile_program(parsed)
+}
+
+/// Merges loaded modules into one program. Entities, channels, fields, and
+/// systems are world content and merge flatly (duplicate names are an error);
+/// functions and parameters are namespaced (`module::name`), with `from`
+/// imports additionally bound bare.
+fn merge_modules(
+    modules: Vec<ModuleInfo>,
+    aliases: Vec<(String, String)>,
+) -> Result<ParsedProgram> {
+    use std::collections::BTreeMap;
+    let mut model = crate::dsl::WorldModel::default();
+    let mut systems: Vec<SystemDecl> = Vec::new();
+    let mut funcs: Vec<FuncDecl> = Vec::new();
+    let mut entity_seen: BTreeMap<String, String> = Default::default();
+    let mut field_seen: BTreeMap<String, String> = Default::default();
+    let mut channel_seen: BTreeMap<String, String> = Default::default();
+    let mut gravity_set = false;
+    for m in &modules {
+        let q = |n: &str| -> String {
+            if m.ns.is_empty() {
+                n.to_string()
+            } else {
+                format!("{}.{}", m.ns, n)
+            }
+        };
+        let who = m.path.display().to_string();
+        if !gravity_set {
+            model.gravity = m.parsed.model.gravity;
+            gravity_set = true;
+        }
+        if model.title.is_none() {
+            model.title = m.parsed.model.title.clone();
+        }
+        for e in &m.parsed.model.entities {
+            if let Some(prev) = entity_seen.get(&e.name) {
+                return Err(error_at(
+                    Status::Invalid,
+                    76,
+                    0,
+                    format!("entity `{}` defined in both `{prev}` and `{who}`", e.name),
+                ));
+            }
+            entity_seen.insert(e.name.clone(), who.clone());
+            model.entities.push(e.clone());
+        }
+        for c in &m.parsed.model.channels {
+            if channel_seen.contains_key(&c.name) {
+                return Err(error_at(
+                    Status::Invalid,
+                    76,
+                    0,
+                    format!("channel `{}` defined twice", c.name),
+                ));
+            }
+            channel_seen.insert(c.name.clone(), who.clone());
+            model.channels.push(c.clone());
+        }
+        for f in &m.parsed.model.fields {
+            if field_seen.contains_key(&f.name) {
+                return Err(error_at(
+                    Status::Invalid,
+                    76,
+                    0,
+                    format!("field `{}` defined twice", f.name),
+                ));
+            }
+            field_seen.insert(f.name.clone(), who.clone());
+            model.fields.push(f.clone());
+        }
+        for (k, v) in &m.parsed.model.params {
+            model.params.insert(q(k), *v);
+        }
+        for (k, v) in &m.parsed.model.param_units {
+            model.param_units.insert(q(k), *v);
+        }
+        for fd in &m.parsed.funcs {
+            let mut fd = fd.clone();
+            fd.name = q(&fd.name);
+            fd.namespace = m.ns.clone();
+            funcs.push(fd);
+        }
+        for sys in &m.parsed.systems {
+            let mut sys = sys.clone();
+            sys.namespace = m.ns.clone();
+            systems.push(sys);
+        }
+    }
+    for (bare, qualified) in aliases {
+        if funcs.iter().any(|f| f.name == bare) {
+            continue; // a local definition (or earlier import) wins
+        }
+        if let Some(src) = funcs.iter().find(|f| f.name == qualified).cloned() {
+            let mut fd = src;
+            fd.name = bare;
+            funcs.push(fd);
+        }
+    }
+    let mut dup = BTreeMap::new();
+    for f in &funcs {
+        if dup.insert(f.name.clone(), ()).is_some() {
+            return Err(error_at(
+                Status::Invalid,
+                76,
+                0,
+                format!("function `{}` defined twice", f.name),
+            ));
+        }
+    }
+    Ok(ParsedProgram {
+        model,
+        systems,
+        funcs,
+    })
 }
 
 /// Dimensional-analysis environment: declared slot/parameter units and the
@@ -5019,7 +5409,11 @@ right-hand side (`dt·expr`) has `{rhs_name}`"
 
 /// Compiles PWE source end-to-end: parse → build systems → lower to EIR.
 pub fn compile(source: &str) -> Result<CompiledProgram> {
-    let parsed = parse(source)?;
+    compile_program(parse(source)?)
+}
+
+/// Compiles an already-parsed (and merged) program to EIR.
+pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
     check_dimensions(&parsed)?;
     // Entity name -> scene id (ids are 1-based model order, matching build_scene).
     let mut entity_ids: std::collections::BTreeMap<String, u128> = parsed
@@ -5074,6 +5468,9 @@ pub fn compile(source: &str) -> Result<CompiledProgram> {
             }
         }
     }
+    // Every declared parameter name (qualified), for namespace fallback.
+    let param_names: std::collections::BTreeSet<String> =
+        parsed.model.params.keys().cloned().collect();
     // Grid field widths (compile-time, from the model) for field cell access.
     let field_widths: std::collections::BTreeMap<String, u32> = parsed
         .model
@@ -5088,6 +5485,7 @@ pub fn compile(source: &str) -> Result<CompiledProgram> {
         &func_ids,
         &state_names_by_id,
         &field_widths,
+        &param_names,
     )?;
     let program = PhysicsProgram::build(systems, entities);
     let mut module = program.module.clone();
@@ -5114,6 +5512,8 @@ pub fn compile(source: &str) -> Result<CompiledProgram> {
             state_names_by_id: &empty_by_id,
             func_ids: &func_ids,
             field_widths: &empty_widths,
+            namespace: &f.namespace,
+            params: &param_names,
             current_entity: 0,
         };
         let mut next_id = arg_count + 1;
@@ -6864,36 +7264,65 @@ mod tests {
         assert!((fires - 2.0).abs() < 1e-12, "fires={fires}");
     }
 
-    /// `import "…"` fragments are inlined recursively into one self-contained
-    /// source; cycles and missing files are reported.
+    /// Python-style modules: `import "m"` binds namespace `m` (`m::f`, `m::G`),
+    /// `from "m" import f` binds bare, packages resolve via `__init__.pwe`, and
+    /// a module's own systems resolve their bare parameter/function names within
+    /// their own namespace.
     #[test]
-    fn imports_inline_fragments() {
-        let dir = std::env::temp_dir().join(format!("pwe_import_test_{}", std::process::id()));
+    fn modules_packages_and_namespaces() {
+        let dir = std::env::temp_dir().join(format!("pwe_modules_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("sub")).unwrap();
-        std::fs::write(dir.join("sub/atoms.pwe"), "entity a { state=(x=1.0) }\n").unwrap();
+        std::fs::create_dir_all(dir.join("shapes")).unwrap();
         std::fs::write(
-            dir.join("bodies.pwe"),
-            "# fragment\nimport \"sub/atoms.pwe\"\nentity b { state=(x=2.0) }\n",
+            dir.join("shapes/__init__.pwe"),
+            "world { entity body { state=(x=1.0, vx=0.0) } }\n",
         )
         .unwrap();
         std::fs::write(
+            dir.join("physics.pwe"),
+            "world { params { G = 2.0 } }\nfuncs { thrust(m) { m * 0.5 } }\n\
+             systems { update { on = body; dt = 0.1 vx = 0.0 - G * x } }\n",
+        )
+        .unwrap();
+        // Qualified access (`physics.G`, `physics.thrust`) + package entity.
+        std::fs::write(
             dir.join("main.pwe"),
-            "world { gravity=(0,0,0)\n import \"bodies.pwe\" }\n             systems { update { on = a; dt = 1.0 x = 0.0 - x } }\n",
+            "world { gravity=(0,0,0)\n import \"shapes\"\n import \"physics\" }\n\
+             systems { update { on = body; dt = 0.1 \
+               vx = 0.0 - physics.G * x + 0.0 * physics.thrust(2.0) } }\n",
         )
         .unwrap();
         let rt = LangRuntime::compile_file(&dir.join("main.pwe")).unwrap();
-        assert_eq!(rt.scene.entities.len(), 2, "both imported entities present");
-        // Cycle detection.
-        std::fs::write(dir.join("c1.pwe"), "import \"c2.pwe\"\n").unwrap();
-        std::fs::write(dir.join("c2.pwe"), "import \"c1.pwe\"\n").unwrap();
-        match LangRuntime::compile_file(&dir.join("c1.pwe")) {
-            Ok(_) => panic!("import cycle must be rejected"),
+        assert_eq!(rt.scene.entities.len(), 1, "package entity present");
+        assert_eq!(rt.scene.params.get("physics.G").copied(), Some(2.0));
+        // `from … import …` binds bare.
+        std::fs::write(
+            dir.join("from.pwe"),
+            "from \"physics\" import thrust\n\
+             world { gravity=(0,0,0)\n import \"shapes\" }\n\
+             systems { update { on = body; dt = 0.1 vx = 0.0 - 0.0 * x + 0.0 * thrust(3.0) } }\n",
+        )
+        .unwrap();
+        LangRuntime::compile_file(&dir.join("from.pwe")).unwrap();
+        // Missing module.
+        std::fs::write(
+            dir.join("missing.pwe"),
+            "world { gravity=(0,0,0) }\nimport \"nope\"\n",
+        )
+        .unwrap();
+        match LangRuntime::compile_file(&dir.join("missing.pwe")) {
+            Ok(_) => panic!("missing module must fail"),
             Err(e) => assert_eq!(e.detail, 76),
         }
-        // Missing file.
-        match LangRuntime::compile_file(&dir.join("nope.pwe")) {
-            Ok(_) => panic!("missing import must be rejected"),
+        // Duplicate entity across modules.
+        std::fs::write(dir.join("dup.pwe"), "world { entity body { state=(0) } }\n").unwrap();
+        std::fs::write(
+            dir.join("dup2.pwe"),
+            "world { gravity=(0,0,0) }\nimport \"shapes\"\nimport \"dup\"\n",
+        )
+        .unwrap();
+        match LangRuntime::compile_file(&dir.join("dup2.pwe")) {
+            Ok(_) => panic!("duplicate entity must be rejected"),
             Err(e) => assert_eq!(e.detail, 76),
         }
         let _ = std::fs::remove_dir_all(&dir);

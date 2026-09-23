@@ -52,7 +52,7 @@ Comments: `#` or `//` to end of line. Whitespace is insignificant.
 | `entity <name> { fields }` | A body. Fields below. |
 | `field <name> { width = w; height = h; dx = d }` | A deterministic scalar grid field (the PDE substrate): cells read/written by rules via `fget`/`fset`/`flap`. |
 | `params { G = 1.0; k = 3.0 }` | Runtime-settable model parameters; rules read them by name, overridable with `pwe run --param G=2` (same artifact, different configuration). |
-| `import "rel/path.pwe"` | Inlines another file's fragment (world items, system items, or funcs) here, recursively; resolved at compile time into one self-contained program. |
+| `import "pkg/mod"` | Python-style module import: loads `pkg/mod.pwe` (a directory loads its `__init__.pwe` package) and namespaces its **functions and parameters** (`mod.f(...)`, `mod.G`). `import "mod" as m` binds `m`; `from "mod" import f, G` binds them bare. Entities / systems / fields merge into the one world (duplicate names are an error). |
 | `title = "..."` | Human-readable run title, shown by `pwe present`. |
 
 ### Entity fields
@@ -208,6 +208,37 @@ comparison rejection.
   product; `vdist(x1,y1,z1, x2,y2,z2)` — distance between two points. Pure
   arithmetic (no new opcodes); combine with `neighbor_count`/`nearest_dist`
   for spatial models.
+
+### Modules and packages
+
+A `.pwe` file is a **module**. `import` follows Python:
+
+```pwe
+import "physics"                 # physics.G, physics.thrust(m)
+import "physics" as ph           # ph.G
+from "physics" import thrust     # thrust(m)  (bare)
+```
+
+* A **package** is a directory: `import "shapes"` loads `shapes/__init__.pwe`.
+  Nested paths work: `import "lib/kepler"` loads `lib/kepler.pwe`.
+* **Functions and parameters** are namespaced by the module: a module's own
+  rules resolve their bare names within their own namespace first, then
+  globally. Entities, systems, fields and channels are world content and merge
+  flatly (a duplicate entity/field name across modules is a compile error).
+* Cycles are tolerated (a module is loaded once); missing files and duplicate
+  entity/field names are reported (detail 76).
+
+```pwe
+# physics.pwe
+world { params { G = 2.0 } }
+funcs { accel(m, r) { G * m / (r * r) } }
+```
+```pwe
+# main.pwe
+import "physics"
+world { gravity = (0, 0, 0) }
+systems { update { dt = 0.01 a = physics.accel(physics.G, r) } }
+```
 
 ### Scheduled events (discrete-event scheduling)
 

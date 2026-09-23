@@ -88,8 +88,8 @@ pwe compile cli/examples/spring/spring.pwe -o spring.pweb && pwe run spring.pweb
 ```
 
 The language also supports **model parameters** (`params { G = 1.0 }`, overridden
-with `--param G=2` on the same artifact), **multi-file composition**
-(`import "other.pwe"` fragments resolved at compile time), **scheduled events**
+with `--param G=2` on the same artifact), **Python-style modules**
+(`import "mod"` / `import "mod" as m` / `from "mod" import f`; packages via directories + `__init__.pwe`; functions and parameters namespaced as `mod.name`), **scheduled events**
 (`at(T)` / `periodic(P)`, exact-once on the step grid), and **gradual
 dimensional analysis** (opt-in `[m/s^2]` unit annotations checked against rules).
 

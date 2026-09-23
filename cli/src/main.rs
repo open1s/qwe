@@ -16,7 +16,7 @@
 use pwe_api::RegionId;
 use pwe_reference::dsl::WorldModel;
 use pwe_reference::eir::EirModule;
-use pwe_reference::lang::{self, CompiledProgram, LangRuntime};
+use pwe_reference::lang::{self, CompiledProgram, LangRuntime, ProgramSources};
 use pwe_reference::math::Vec3;
 use pwe_reference::physics_eir::PhysicsProgram;
 use pwe_reference::present::{self, CameraVisual, LiveState};
@@ -25,7 +25,7 @@ use std::sync::{Arc, RwLock};
 
 /// Artifact container magic and format version.
 const MAGIC: &[u8; 4] = b"PWEB";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -66,25 +66,68 @@ fn usage() {
 // Artifact container
 // ---------------------------------------------------------------------------
 
-/// Packs a compiled module plus its source into the `.pweb` container:
-/// `magic | version u16 | flags u16 | eir_len u64 | source_len u64 | eir | source`.
-fn pack(eir: &EirModule, source: &str) -> Result<Vec<u8>, String> {
+/// Packs a compiled module plus its (module-resolved) sources into the
+/// `.pweb` container:
+/// `magic | version | flags | eir_len | root_len | eir | root | modules… | aliases…`.
+fn pack(eir: &EirModule, sources: &ProgramSources) -> Result<Vec<u8>, String> {
     let eir_bytes = eir
         .encode()
         .map_err(|e| format!("cannot encode EIR: {e}"))?;
-    let mut out = Vec::with_capacity(24 + eir_bytes.len() + source.len());
+    let mut out = Vec::new();
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&VERSION.to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(&(eir_bytes.len() as u64).to_le_bytes());
-    out.extend_from_slice(&(source.len() as u64).to_le_bytes());
+    out.extend_from_slice(&(sources.root.len() as u64).to_le_bytes());
     out.extend_from_slice(&eir_bytes);
-    out.extend_from_slice(source.as_bytes());
+    out.extend_from_slice(sources.root.as_bytes());
+    out.extend_from_slice(&(sources.modules.len() as u32).to_le_bytes());
+    for (ns, path, src) in &sources.modules {
+        for part in [ns.as_str(), path.as_str(), src.as_str()] {
+            out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+            out.extend_from_slice(part.as_bytes());
+        }
+    }
+    out.extend_from_slice(&(sources.aliases.len() as u32).to_le_bytes());
+    for (bare, qualified) in &sources.aliases {
+        for part in [bare.as_str(), qualified.as_str()] {
+            out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+            out.extend_from_slice(part.as_bytes());
+        }
+    }
     Ok(out)
 }
 
+fn take_u32(bytes: &[u8], cursor: &mut usize, what: &str) -> Result<u32, String> {
+    let v = u32::from_le_bytes(
+        bytes
+            .get(*cursor..*cursor + 4)
+            .ok_or_else(|| format!("truncated artifact: {what}"))?
+            .try_into()
+            .unwrap(),
+    );
+    *cursor += 4;
+    Ok(v)
+}
+
+fn take_str<'a>(bytes: &'a [u8], cursor: &mut usize, what: &str) -> Result<&'a str, String> {
+    let n = u32::from_le_bytes(
+        bytes
+            .get(*cursor..*cursor + 4)
+            .ok_or_else(|| format!("truncated artifact: {what} length"))?
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    *cursor += 4;
+    let raw = bytes
+        .get(*cursor..*cursor + n)
+        .ok_or_else(|| format!("truncated artifact: {what}"))?;
+    *cursor += n;
+    std::str::from_utf8(raw).map_err(|_| format!("artifact {what} is not UTF-8"))
+}
+
 /// Unpacks a `.pweb` container, decoding and re-validating the EIR module.
-fn unpack(bytes: &[u8]) -> Result<(EirModule, String), String> {
+fn unpack(bytes: &[u8]) -> Result<(EirModule, ProgramSources), String> {
     if bytes.len() < 24 || &bytes[..4] != MAGIC {
         return Err("not a .pweb artifact (bad magic)".to_string());
     }
@@ -93,17 +136,40 @@ fn unpack(bytes: &[u8]) -> Result<(EirModule, String), String> {
         return Err(format!("unsupported .pweb version {version}"));
     }
     let eir_len = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) as usize;
-    let source_len = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+    let root_len = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
     let eir_bytes = bytes
         .get(24..24 + eir_len)
         .ok_or("truncated artifact: EIR section")?;
-    let source_bytes = bytes
-        .get(24 + eir_len..24 + eir_len + source_len)
+    let root_bytes = bytes
+        .get(24 + eir_len..24 + eir_len + root_len)
         .ok_or("truncated artifact: source section")?;
     let eir = EirModule::decode(eir_bytes).map_err(|e| format!("artifact EIR is invalid: {e}"))?;
-    let source =
-        String::from_utf8(source_bytes.to_vec()).map_err(|_| "artifact source is not UTF-8")?;
-    Ok((eir, source))
+    let root =
+        String::from_utf8(root_bytes.to_vec()).map_err(|_| "artifact source is not UTF-8")?;
+    let mut cursor = 24 + eir_len + root_len;
+    let module_count = take_u32(bytes, &mut cursor, "module count")?;
+    let mut modules = Vec::with_capacity(module_count as usize);
+    for _ in 0..module_count {
+        let ns = take_str(bytes, &mut cursor, "module namespace")?.to_string();
+        let path = take_str(bytes, &mut cursor, "module path")?.to_string();
+        let src = take_str(bytes, &mut cursor, "module source")?.to_string();
+        modules.push((ns, path, src));
+    }
+    let alias_count = take_u32(bytes, &mut cursor, "alias count")?;
+    let mut aliases = Vec::with_capacity(alias_count as usize);
+    for _ in 0..alias_count {
+        let bare = take_str(bytes, &mut cursor, "alias")?.to_string();
+        let qualified = take_str(bytes, &mut cursor, "alias target")?.to_string();
+        aliases.push((bare, qualified));
+    }
+    Ok((
+        eir,
+        ProgramSources {
+            root,
+            modules,
+            aliases,
+        },
+    ))
 }
 
 /// Loads a runtime from a compiled `.pweb` artifact. Like `java` running a
@@ -116,10 +182,10 @@ fn load(path: &str) -> Result<(LangRuntime, WorldModel), String> {
             "{path} is not a compiled .pweb artifact; compile it first:\n  pwe compile {path}"
         ));
     }
-    // Execute the artifact's compiled EIR; the embedded world-model source only
-    // supplies the initial scene (entity layouts, gravity, fields, channels).
-    let (eir, source) = unpack(&bytes)?;
-    let parsed = lang::parse(&source).map_err(|e| lang::diagnose(&source, &e))?;
+    // Execute the artifact's compiled EIR; the embedded sources only supply the
+    // initial scene (entity layouts, gravity, fields, channels, parameters).
+    let (eir, sources) = unpack(&bytes)?;
+    let parsed = lang::merge_sources(&sources).map_err(|e| lang::diagnose(&sources.root, &e))?;
     let scene = parsed.model.build_scene();
     let program = PhysicsProgram {
         systems: Vec::new(),
@@ -184,17 +250,17 @@ fn cmd_compile(args: &[String]) -> i32 {
         return 2;
     };
     let output = output.unwrap_or_else(|| with_extension(&input, "pweb"));
-    // Resolve `import "…"` fragments into one self-contained source.
-    let source = match lang::load_source(std::path::Path::new(&input)) {
-        Ok(s) => s,
+    // Resolve Python-style `import` modules into one program.
+    let (parsed, sources) = match lang::load_program_sources(std::path::Path::new(&input)) {
+        Ok(pair) => pair,
         Err(e) => {
             eprintln!("{}", lang::diagnose("", &e));
             return 1;
         }
     };
-    match lang::compile(&source) {
+    match lang::compile_program(parsed) {
         Ok(compiled) => {
-            let bytes = match pack(&compiled.eir, &source) {
+            let bytes = match pack(&compiled.eir, &sources) {
                 Ok(b) => b,
                 Err(msg) => {
                     eprintln!("pwe: {msg}");
@@ -211,7 +277,7 @@ fn cmd_compile(args: &[String]) -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("{}", lang::diagnose(&source, &e));
+            eprintln!("{}", lang::diagnose(&sources.root, &e));
             1
         }
     }

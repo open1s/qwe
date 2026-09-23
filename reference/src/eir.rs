@@ -1281,7 +1281,14 @@ impl EirModule {
                         let time = env.time + delay;
                         // Keep the queue sorted by time (stable for equal times).
                         let pos = env.queue.partition_point(|e| e.time <= time);
-                        env.queue.insert(pos, ScheduledEvent { time, kind, payload });
+                        env.queue.insert(
+                            pos,
+                            ScheduledEvent {
+                                time,
+                                kind,
+                                payload,
+                            },
+                        );
                     }
                     pcs[depth - 1] += 1;
                 }

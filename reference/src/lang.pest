@@ -124,7 +124,7 @@ additive = { term ~ (add_op ~ term)* }
 add_op = { "+" | "-" }
 term = { factor ~ (term_op ~ factor)* }
 term_op = { "*" | "/" | "%" }
-factor = { unary | number | call | "(" ~ expr ~ ")" | slot | slot_dyn | entity_ref | time | constant | state_name }
+factor = { unary | number | call | "(" ~ expr ~ ")" | slot | slot_dyn | entity_ref | time | constant | namespaced | state_name }
 // Dynamic slot read: `s[i]` reads the State slot at a runtime index.
 slot_dyn = { "s" ~ "[" ~ expr ~ "]" }
 unary = { "-" ~ factor | not_op ~ factor }
@@ -133,11 +133,13 @@ call = { func_name ~ "(" ~ expr? ~ ("," ~ expr)* ~ ")" }
 // Any identifier may be called; builtins (sin cos exp ln sqrt pow min max if
 // random emit) are special-cased in lowering, everything else resolves to a
 // user-defined function from the `funcs` section.
-func_name = @{ ident }
+func_name = @{ ident ~ ("." ~ ident)* }
 slot = @{ "s" ~ ASCII_DIGIT+ }
 entity_ref = { "@" ~ ident ~ "." ~ ( slot | prop_path ) }
 prop_path = { ident ~ ("." ~ (ident | ASCII_DIGIT+))* }
 state_name = @{ ident }
+// A namespaced member reference (`module::param`).
+namespaced = @{ ident ~ "." ~ ident ~ ("." ~ ident)* }
 time = @{ "t" ~ !(ASCII_ALPHANUMERIC | "_") }
 constant = @{ ("pi" | "e") ~ !(ASCII_ALPHANUMERIC | "_") }
 

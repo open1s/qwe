@@ -1,14 +1,12 @@
-# law.pwe — system items for the spring example (imported by spring.pwe).
-#
-# A damped harmonic oscillator, probed by scheduled events:
-#   k·x         (1/s^2 · m = m/s^2)   spring acceleration
-#   damping·vx  (1/s · m/s = m/s^2)   viscous damping
-#   periodic    a 1 Hz sampling pulse
-#   at(5.0)     a one-shot kick at t = 5 s
+# law.pwe — a module contributing behaviour (systems). Its rules read the
+# parameters declared by the importing program (bare `k`, `damping`).
+world { }
 
-update { on = osc; dt = 0.02 [s]
-  vx = 0.0 - k * x - damping * vx
-  x = vx
-  beat = if(periodic(1.0), 1.0, 0.0)
-  kick = if(at(5.0), 1.0, 0.0)
+systems {
+  update { on = osc; dt = 0.02 [s]
+    vx = 0.0 - k * x - damping * vx
+    x = vx
+    beat = if(periodic(1.0), 1.0, 0.0)
+    kick = if(at(5.0), 1.0, 0.0)
+  }
 }
