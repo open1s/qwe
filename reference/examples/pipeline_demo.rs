@@ -37,6 +37,7 @@ fn main() -> pwe_api::Result<()> {
         color: None,
         nbody: None,
         parent: None,
+        state_units: None,
     });
     model.entities.push(pwe_reference::dsl::EntityDecl {
         name: "ground".into(),
@@ -55,6 +56,7 @@ fn main() -> pwe_api::Result<()> {
         color: None,
         nbody: None,
         parent: None,
+        state_units: None,
     });
     println!("== 1. world (dsl WorldModel) ==");
     println!(

@@ -78,11 +78,20 @@ Ready-to-run examples live in `cli/examples/`:
 pwe compile cli/examples/solar.pwe  -o solar.pweb  && pwe present solar.pweb --port 8000
 pwe compile cli/examples/bounce.pwe -o bounce.pweb && pwe run bounce.pweb --steps 300
 pwe compile cli/examples/heat.pwe   -o heat.pweb   && pwe run heat.pweb --steps 400
+pwe compile cli/examples/flock.pwe  -o flock.pweb  && pwe present flock.pweb --port 8000
+pwe compile cli/examples/spring/spring.pwe -o spring.pweb && pwe run spring.pweb --steps 400 \
+  --param k=16.0    # multi-file (imports) + params + units + scheduled events
 
 # `present` shows a top-right legend (color, name, r from the central body) and
 # a top-left run-info panel (per-body radii, satellite distances, step + title).
 # For many-body runs build in release: cargo build --release -p pwe-cli
 ```
+
+The language also supports **model parameters** (`params { G = 1.0 }`, overridden
+with `--param G=2` on the same artifact), **multi-file composition**
+(`import "other.pwe"` fragments resolved at compile time), **scheduled events**
+(`at(T)` / `periodic(P)`, exact-once on the step grid), and **gradual
+dimensional analysis** (opt-in `[m/s^2]` unit annotations checked against rules).
 
 A `.pweb` artifact is a self-describing container (magic + version) holding the
 verified canonical (RFC-0021) EIR module plus the world-model source the runtime

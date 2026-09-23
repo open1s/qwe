@@ -1,0 +1,12 @@
+# parts.pwe — world items for the spring example (imported by spring.pwe).
+#
+# State-slot units are declared in [ ], and checked at compile time.
+
+entity osc {
+  state = (x = 1.0 [m], vx = 0.0 [m/s], beat = 0.0, kick = 0.0)
+  sphere = 0.3; color = 0x4AA8FF
+}
+entity anchor {
+  position = (0, -1.5, 0); dynamic = false
+  sphere = 0.15; color = 0x888888
+}

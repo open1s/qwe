@@ -46,6 +46,9 @@ pub struct Scene {
     pub entities: BTreeMap<EntityId, Entity>,
     /// Deterministic scalar grid fields (the PDE substrate), keyed by name.
     pub fields: BTreeMap<String, crate::field::Field>,
+    /// Model parameters (`params { … }`), read by rules and overridable at
+    /// runtime; part of world state (hashed/snapshotted like everything else).
+    pub params: BTreeMap<String, f64>,
     /// Gravity applied to dynamic bodies each step (meters/second^2).
     pub gravity: Vec3,
     /// Global simulation clock (seconds), read by `t` in `update` expressions.
@@ -59,6 +62,7 @@ impl Scene {
         Self {
             entities: BTreeMap::new(),
             fields: BTreeMap::new(),
+            params: BTreeMap::new(),
             gravity,
             sim_time: 0.0,
             random_state: 0x9E37_79B9_7F4A_7C15,

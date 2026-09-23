@@ -136,6 +136,8 @@ pub fn detail_name(detail: u32) -> &'static str {
         72 => "substeps must be an integer in 1..=1000",
         73 => "dynamic slot LHS is update-only (rk4 stages need compile-time slots)",
         75 => "field needs width and height ≥ 1",
+        76 => "import failed (missing file, bad directive, or cycle)",
+        77 => "dimension mismatch (see declared units)",
         _ => "unspecified compile error",
     }
 }
@@ -247,6 +249,8 @@ pub struct SystemDecl {
     pub update_stmts: Vec<UpdateStmt>,
     /// Ident-valued params (e.g. `chan = ping`).
     pub string_params: std::collections::BTreeMap<String, String>,
+    /// Declared units for scalar params (e.g. `dt = 0.01 s`).
+    pub param_units: std::collections::BTreeMap<String, crate::units::Dim>,
     /// Byte offset of this system's opening brace in the source (for
     /// diagnostics).
     pub byte_offset: usize,
@@ -395,6 +399,19 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
             decl.string_params.insert(key, rhs.as_str().to_string());
         }
         _ => {}
+    }
+    // Optional trailing unit annotation (`dt = 0.01 s`): compile-time only.
+    if let Some(unit) = inner.next() {
+        if unit.as_rule() == Rule::unit_expr {
+            if let Ok(d) = unit
+                .as_str()
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<crate::units::Dim>()
+            {
+                decl.param_units.insert(first.as_str().to_string(), d);
+            }
+        }
     }
     Ok(())
 }
@@ -847,6 +864,38 @@ fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
             }
             "nearest_dist"
         }
+        // Scheduled events (discrete-event scheduling on the step grid).
+        "schedule" => {
+            if args.len() != 4 {
+                return Err(error(Status::Invalid, 59));
+            }
+            "schedule"
+        }
+        "at" => {
+            if args.len() != 1 {
+                return Err(error(Status::Invalid, 59));
+            }
+            "at"
+        }
+        "periodic" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(error(Status::Invalid, 59));
+            }
+            "periodic"
+        }
+        // Neighborhood aggregates / directional sensing.
+        "neighbor_mean" => {
+            if args.len() != 2 {
+                return Err(error(Status::Invalid, 59));
+            }
+            "neighbor_mean"
+        }
+        "nearest_dx" | "nearest_dy" | "nearest_dz" => {
+            if !args.is_empty() {
+                return Err(error(Status::Invalid, 59));
+            }
+            Box::leak(name.clone().into_boxed_str())
+        }
         // Statistical noise: `noise()` (standard normal, Box–Muller).
         "noise" => {
             if !args.is_empty() {
@@ -1074,6 +1123,37 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 dx,
                             });
                         }
+                        Rule::params_stmt => {
+                            // The repetition flattens to `ident`, `value`,
+                            // `unit_expr`?, `ident`, `value`, … Tokens are
+                            // classified by rule kind rather than position.
+                            let mut pending_key: Option<String> = None;
+                            for pair in item.into_inner() {
+                                match pair.as_rule() {
+                                    Rule::ident => pending_key = Some(pair.as_str().to_string()),
+                                    Rule::value => {
+                                        if let (Some(k), Some(v)) = (
+                                            pending_key.take(),
+                                            parse_scalar_number(pair.as_str().trim()),
+                                        ) {
+                                            model.params.insert(k, v);
+                                        }
+                                    }
+                                    Rule::unit_expr => {
+                                        if let (Some(k), Ok(d)) = (
+                                            pending_key.clone(),
+                                            pair.as_str()
+                                                .trim_start_matches('[')
+                                                .trim_end_matches(']')
+                                                .parse::<crate::units::Dim>(),
+                                        ) {
+                                            model.param_units.insert(k, d);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                         Rule::entity_stmt => {
                             let mut inner = item.into_inner();
                             let name = inner.next().unwrap().as_str().to_string();
@@ -1099,6 +1179,21 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                             Rule::named_state => {
                                                 let mut values = Vec::new();
                                                 let mut names = Vec::new();
+                                                let mut units: Vec<Option<crate::units::Dim>> =
+                                                    Vec::new();
+                                                // `ident = value <unit>?` -> named slot with an
+                                                // optional compile-time dimension annotation.
+                                                let push_unit = |it: &mut pest::iterators::Pairs<'_, Rule>,
+                                                                 units: &mut Vec<Option<crate::units::Dim>>| {
+                                                    let u = it.next().and_then(|p| {
+                                                        p.as_str()
+                                                            .trim_start_matches('[')
+                                                            .trim_end_matches(']')
+                                                            .parse::<crate::units::Dim>()
+                                                            .ok()
+                                                    });
+                                                    units.push(u);
+                                                };
                                                 for item in list.into_inner() {
                                                     // `vec3 pos` -> N consecutive slots named
                                                     // `pos`, `pos.0`, … `pos.{N-1}` (zero-init).
@@ -1126,6 +1221,8 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                                             names
                                                                 .push(Some(format!("{vname}.{k}")));
                                                             values.push(0.0);
+                                                            // `vecN` has no per-component unit.
+                                                            units.push(None);
                                                         }
                                                         continue;
                                                     }
@@ -1138,17 +1235,22 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                                             values.push(parse_value(
                                                                 it.next().unwrap(),
                                                             ));
+                                                            push_unit(&mut it, &mut units);
                                                         }
                                                         // bare `value` -> positional slot.
                                                         Some(p) => {
                                                             names.push(None);
                                                             values.push(parse_value(p));
+                                                            push_unit(&mut it, &mut units);
                                                         }
                                                         None => {}
                                                     }
                                                 }
                                                 decl.state = Some(values);
                                                 decl.state_names = Some(names);
+                                                if units.iter().any(|u| u.is_some()) {
+                                                    decl.state_units = Some(units);
+                                                }
                                             }
                                             _ => {}
                                         }
@@ -1236,6 +1338,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         vec_params: std::collections::BTreeMap::new(),
                         update: std::collections::BTreeMap::new(),
                         update_stmts: Vec::new(),
+                        param_units: std::collections::BTreeMap::new(),
                         string_params: std::collections::BTreeMap::new(),
                         byte_offset: sys_off,
                     };
@@ -2326,8 +2429,28 @@ fn lower_expr(
             };
             match entity_key {
                 None => {
-                    let slot = ctx.state_names.get(slot_name).copied().unwrap_or(0);
-                    ctx.slot_regs.get(slot).copied().unwrap_or(0)
+                    match ctx.state_names.get(slot_name).copied() {
+                        Some(slot) => ctx.slot_regs.get(slot).copied().unwrap_or(0),
+                        // Not a named state slot: read it as a model parameter
+                        // (`pwe.lang.param.<name>`). Undeclared names read 0.0.
+                        None => {
+                            let r = *next_id;
+                            *next_id += 1;
+                            out.push(crate::physics_eir::instr(
+                                crate::eir::Opcode::ReadView,
+                                r,
+                                Some(crate::eir::ValueType::F64),
+                                vec![],
+                                None,
+                                Some(crate::physics_eir::cr(
+                                    0,
+                                    crate::physics_eir::param_component_id(slot_name),
+                                    0,
+                                )),
+                            ));
+                            r
+                        }
+                    }
                 }
                 Some(ent) => {
                     let id = ctx.entity_map.get(&ent).copied().unwrap_or(u128::MAX);
@@ -2593,14 +2716,43 @@ fn lower_expr(
                     ));
                     out_reg
                 }
-                "neighbor_count" | "nearest_dist" => {
+                "at" | "periodic" | "schedule" => {
+                    // Scheduled events: `at`/`periodic` probe the step's time
+                    // window; `schedule(gate, delay, kind, payload)` pushes an
+                    // event into the queue when `gate` is nonzero.
+                    let op = match *name {
+                        "at" => crate::eir::Opcode::FiredAt,
+                        "periodic" => crate::eir::Opcode::FiredEvery,
+                        _ => crate::eir::Opcode::ScheduleEvent,
+                    };
+                    let operands: Vec<u32> = args
+                        .iter()
+                        .map(|a| lower_expr(a, ctx, next_id, out))
+                        .collect();
+                    let out_reg = *next_id;
+                    *next_id += 1;
+                    out.push(crate::physics_eir::instr(
+                        op,
+                        out_reg,
+                        Some(crate::eir::ValueType::F64),
+                        operands,
+                        None,
+                        None,
+                    ));
+                    out_reg
+                }
+                "neighbor_count" | "nearest_dist" | "neighbor_mean" | "nearest_dx"
+                | "nearest_dy" | "nearest_dz" => {
                     // Spatial queries read the world via the EirRuntime: the
                     // target is the rule's own entity (compile-time), the
                     // radius a runtime value. Rejected in function bodies.
-                    let op = if *name == "neighbor_count" {
-                        crate::eir::Opcode::NeighborCount
-                    } else {
-                        crate::eir::Opcode::NearestDist
+                    let op = match *name {
+                        "neighbor_count" => crate::eir::Opcode::NeighborCount,
+                        "nearest_dist" => crate::eir::Opcode::NearestDist,
+                        "neighbor_mean" => crate::eir::Opcode::NeighborMean,
+                        "nearest_dx" => crate::eir::Opcode::NearestOffsetX,
+                        "nearest_dy" => crate::eir::Opcode::NearestOffsetY,
+                        _ => crate::eir::Opcode::NearestOffsetZ,
                     };
                     let operands: Vec<u32> = args
                         .iter()
@@ -3906,7 +4058,15 @@ fn has_control(stmts: &[LetStmt]) -> bool {
 fn expr_has_query(expr: &Expr) -> bool {
     match expr {
         Expr::Call(name, args) => {
-            if *name == "neighbor_count" || *name == "nearest_dist" {
+            if matches!(
+                *name,
+                "neighbor_count"
+                    | "nearest_dist"
+                    | "neighbor_mean"
+                    | "nearest_dx"
+                    | "nearest_dy"
+                    | "nearest_dz"
+            ) {
                 return true;
             }
             args.iter().any(expr_has_query)
@@ -4536,8 +4696,331 @@ pub struct CompiledProgram {
 }
 
 /// Compiles PWE source end-to-end: parse → build systems → lower to EIR.
+/// Parses an `import "relative/path.pwe"` directive at the start of a line,
+/// returning the path and any remainder of the line (preserved verbatim so
+/// `world { import "x" }` keeps its closing brace).
+fn parse_import_line(line: &str) -> Option<(&str, &str)> {
+    let rest = line.trim_start().strip_prefix("import")?;
+    let rest = rest.trim_start();
+    // Require a quote so `imported = …` is not mistaken for an import.
+    let rest = rest.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some((&rest[..end], &rest[end + 1..]))
+}
+
+fn resolve_import_file(
+    path: &std::path::Path,
+    stack: &mut Vec<std::path::PathBuf>,
+) -> Result<String> {
+    let canon = path.canonicalize().map_err(|e| {
+        error_at(
+            Status::Invalid,
+            76,
+            0,
+            format!("cannot import {}: {e}", path.display()),
+        )
+    })?;
+    if stack.contains(&canon) {
+        return Err(error_at(
+            Status::Invalid,
+            76,
+            0,
+            format!("import cycle through {}", path.display()),
+        ));
+    }
+    let src = std::fs::read_to_string(path).map_err(|e| {
+        error_at(
+            Status::Invalid,
+            76,
+            0,
+            format!("cannot read {}: {e}", path.display()),
+        )
+    })?;
+    let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+    stack.push(canon);
+    let mut out = String::new();
+    for line in src.lines() {
+        match parse_import_line(line) {
+            Some((rel, tail)) => {
+                let child = dir.join(rel);
+                let text = resolve_import_file(&child, stack)?;
+                out.push_str(&text);
+                if !text.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(tail);
+                out.push('\n');
+            }
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    stack.pop();
+    Ok(out)
+}
+
+/// Reads a program file and recursively inlines its `import "…"` fragments,
+/// yielding one self-contained source. Detect cycles and missing files.
+pub fn load_source(path: &std::path::Path) -> Result<String> {
+    resolve_import_file(path, &mut Vec::new())
+}
+
+/// Compiles a program file with its imports resolved (see [`load_source`]).
+pub fn compile_file(path: &std::path::Path) -> Result<CompiledProgram> {
+    let source = load_source(path)?;
+    compile(&source)
+}
+
+/// Dimensional-analysis environment: declared slot/parameter units and the
+/// inferred units of `let` locals.
+struct DimEnv<'a> {
+    slot_dims: &'a [crate::units::MaybeDim],
+    name_to_slot: &'a std::collections::BTreeMap<String, usize>,
+    params: &'a std::collections::BTreeMap<String, crate::units::Dim>,
+    locals: std::collections::BTreeMap<String, crate::units::MaybeDim>,
+}
+
+impl DimEnv<'_> {
+    fn of_expr(&self, expr: &Expr) -> Result<crate::units::MaybeDim> {
+        use crate::units::{div, mul, unify, Dim, MaybeDim};
+        let err = || error(Status::Invalid, 77);
+        Ok(match expr {
+            Expr::Const(_) => None,
+            Expr::Time => Some(Dim::seconds()),
+            Expr::Slot(i) => self.slot_dims.get(*i).copied().flatten(),
+            Expr::SlotDyn(_) => None,
+            Expr::Name(n) => {
+                if let Some(d) = self.locals.get(n.as_str()) {
+                    *d
+                } else if let Some(slot) = self.name_to_slot.get(n.as_str()) {
+                    self.slot_dims.get(*slot).copied().flatten()
+                } else {
+                    self.params.get(n.as_str()).copied()
+                }
+            }
+            Expr::Ref(..) | Expr::PropRef(..) => None,
+            Expr::Neg(a) => self.of_expr(a)?,
+            Expr::Add(a, b) | Expr::Sub(a, b) => {
+                unify(self.of_expr(a)?, self.of_expr(b)?).map_err(|_| err())?
+            }
+            Expr::Mul(a, b) => mul(self.of_expr(a)?, self.of_expr(b)?),
+            Expr::Div(a, b) => div(self.of_expr(a)?, self.of_expr(b)?),
+            // Remainder / comparison require compatible operands.
+            Expr::Rem(a, b) => unify(self.of_expr(a)?, self.of_expr(b)?).map_err(|_| err())?,
+            Expr::Cmp(_, a, b) => {
+                unify(self.of_expr(a)?, self.of_expr(b)?).map_err(|_| err())?;
+                None
+            }
+            Expr::And(a, b) | Expr::Or(a, b) => {
+                unify(self.of_expr(a)?, Some(Dim::ZERO)).map_err(|_| err())?;
+                unify(self.of_expr(b)?, Some(Dim::ZERO)).map_err(|_| err())?;
+                None
+            }
+            Expr::Not(a) => {
+                unify(self.of_expr(a)?, Some(Dim::ZERO)).map_err(|_| err())?;
+                None
+            }
+            Expr::Call(name, args) => {
+                let arg = |i: usize| -> Result<MaybeDim> {
+                    args.get(i).map(|e| self.of_expr(e)).unwrap_or(Ok(None))
+                };
+                let dimensionless = |d: MaybeDim| -> Result<()> {
+                    unify(d, Some(Dim::ZERO)).map_err(|_| err()).map(|_| ())
+                };
+                match *name {
+                    // Transcendental functions require a dimensionless argument.
+                    "sin" | "cos" | "exp" | "ln" | "log10" | "log2" | "sinh" | "cosh" | "tanh"
+                    | "asin" | "acos" | "atan" => {
+                        dimensionless(arg(0)?)?;
+                        None
+                    }
+                    // Dim-preserving unary functions.
+                    "abs" | "floor" | "ceil" | "round" | "sign" => arg(0)?,
+                    "sqrt" => match arg(0)? {
+                        Some(d) => Some(d.sqrt().ok_or_else(err)?),
+                        None => None,
+                    },
+                    "pow" => {
+                        dimensionless(arg(1)?)?;
+                        None
+                    }
+                    "hypot" => unify(arg(0)?, arg(1)?).map_err(|_| err())?,
+                    "min" | "max" => unify(arg(0)?, arg(1)?).map_err(|_| err())?,
+                    "if" => {
+                        dimensionless(arg(0)?)?;
+                        unify(arg(1)?, arg(2)?).map_err(|_| err())?
+                    }
+                    "print" => arg(0)?,
+                    _ => None,
+                }
+            }
+        })
+    }
+
+    fn of_lets(&mut self, stmts: &[LetStmt]) -> Result<()> {
+        for s in stmts {
+            match s {
+                LetStmt::Let(name, e) => {
+                    let d = self.of_expr(e)?;
+                    self.locals.insert(name.clone(), d);
+                }
+                LetStmt::Repeat(_, body) | LetStmt::For(_, _, _, body) => self.of_lets(body)?,
+                LetStmt::Break(g) | LetStmt::Continue(g) => {
+                    if let Some(e) = g {
+                        self.of_expr(e)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Checks `update`/`rk4` rules against declared units. Graded: a value with no
+/// declared unit is a wildcard and never errors, so unit-free models (and
+/// unannotated parts of annotated models) pass. Assumes `dt` is in seconds.
+fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
+    use crate::units::{unify, MaybeDim};
+    // Merged slot dimensions by index (declarations across entities agree in
+    // practice; the first non-None wins) and the named layout of the first
+    // entity that declares names.
+    let mut slot_dims: Vec<MaybeDim> = Vec::new();
+    let mut name_to_slot: std::collections::BTreeMap<String, usize> = Default::default();
+    let mut any_units = false;
+    for e in &parsed.model.entities {
+        if let Some(names) = &e.state_names {
+            for (slot, n) in names.iter().enumerate() {
+                if let Some(n) = n {
+                    name_to_slot.entry(n.clone()).or_insert(slot);
+                }
+            }
+        }
+        if let Some(units) = &e.state_units {
+            if units.len() > slot_dims.len() {
+                slot_dims.resize(units.len(), None);
+            }
+            for (slot, u) in units.iter().enumerate() {
+                if u.is_some() {
+                    any_units = true;
+                    if slot_dims[slot].is_none() {
+                        slot_dims[slot] = *u;
+                    }
+                }
+            }
+        }
+    }
+    if !parsed.model.param_units.is_empty() {
+        any_units = true;
+    }
+    if !any_units {
+        return Ok(());
+    }
+    for sys in &parsed.systems {
+        // Check every declared expression for internal consistency: rule bodies
+        // and `let`s (update/rk4), the `when` gate, `invariant`/`watch` exprs.
+        {
+            let env = DimEnv {
+                slot_dims: &slot_dims,
+                name_to_slot: &name_to_slot,
+                params: &parsed.model.param_units,
+                locals: Default::default(),
+            };
+            if let Some(w) = sys.string_params.get("when") {
+                if let Ok(e) = parse_expr_str(w) {
+                    let d = env.of_expr(&e)?;
+                    if unify(d, Some(crate::units::Dim::ZERO)).is_err() {
+                        return Err(error_at(
+                            Status::Invalid,
+                            77,
+                            sys.byte_offset,
+                            "`when` gate must be dimensionless".to_string(),
+                        ));
+                    }
+                }
+            }
+            if matches!(sys.kind.as_str(), "invariant" | "watch") {
+                if let Some(text) = sys.update.get("expr") {
+                    if let Ok(e) = parse_expr_str(text) {
+                        env.of_expr(&e)?;
+                    }
+                }
+            }
+        }
+        if sys.kind != "update" && sys.kind != "rk4" {
+            continue;
+        }
+        // `dt` is the step's time scale; use its declared unit, else seconds.
+        let dt_dim = sys
+            .param_units
+            .get("dt")
+            .copied()
+            .unwrap_or_else(crate::units::Dim::seconds);
+        let lets = to_let_stmts(&sys.update_stmts)?;
+        // Rule LHS -> slot index (sN or a named slot).
+        let mut rules: Vec<(usize, &str)> = Vec::new();
+        for (key, text) in &sys.update {
+            let idx = if let Some(n) = key.strip_prefix('s') {
+                if key.contains('[') {
+                    continue;
+                }
+                match n.parse::<usize>() {
+                    Ok(i) => i,
+                    Err(_) => continue,
+                }
+            } else {
+                match name_to_slot.get(key) {
+                    Some(i) => *i,
+                    None => continue,
+                }
+            };
+            rules.push((idx, text.as_str()));
+        }
+        for (idx, text) in rules {
+            let lhs = slot_dims.get(idx).copied().flatten();
+            let expr = match parse_expr_str(text) {
+                Ok(e) => e,
+                Err(_) => continue, // rule parse errors surface elsewhere
+            };
+            let mut env = DimEnv {
+                slot_dims: &slot_dims,
+                name_to_slot: &name_to_slot,
+                params: &parsed.model.param_units,
+                locals: Default::default(),
+            };
+            env.of_lets(&lets)?;
+            let rhs = env.of_expr(&expr)?;
+            // `slot += dt · expr` with dt in seconds.
+            let scaled: MaybeDim = rhs.map(|d| d.times(dt_dim));
+            if unify(lhs, scaled).is_err() {
+                let lhs_name = match lhs {
+                    Some(d) => d.name(),
+                    None => "1".to_string(),
+                };
+                let rhs_name = match scaled {
+                    Some(d) => d.name(),
+                    None => "1".to_string(),
+                };
+                return Err(error_at(
+                    Status::Invalid,
+                    77,
+                    sys.byte_offset,
+                    format!(
+                        "rule `{text}` is not dimensionally consistent: `{lhs_name}` expected, \
+right-hand side (`dt·expr`) has `{rhs_name}`"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Compiles PWE source end-to-end: parse → build systems → lower to EIR.
 pub fn compile(source: &str) -> Result<CompiledProgram> {
     let parsed = parse(source)?;
+    check_dimensions(&parsed)?;
     // Entity name -> scene id (ids are 1-based model order, matching build_scene).
     let mut entity_ids: std::collections::BTreeMap<String, u128> = parsed
         .model
@@ -4715,6 +5198,13 @@ impl LangRuntime {
     /// Compiles source and boots a runtime with an executable scene.
     pub fn compile(source: &str) -> Result<Self> {
         let compiled = compile(source)?;
+        let scene = compiled.parsed.model.build_scene();
+        Self::from_compiled_region(compiled, scene, RegionId(1))
+    }
+
+    /// Compiles a program file with its `import` fragments resolved.
+    pub fn compile_file(path: &std::path::Path) -> Result<Self> {
+        let compiled = compile_file(path)?;
         let scene = compiled.parsed.model.build_scene();
         Self::from_compiled_region(compiled, scene, RegionId(1))
     }
@@ -4936,7 +5426,9 @@ impl LangRuntime {
         let mut rt = SceneRuntime::new(&self.scene);
         self.env.time = self.scene.sim_time;
         self.env.step = self.clock;
+        self.env.step_dt = self.sim_dt;
         self.env.events.clear();
+        crate::eir::drain_due_events(&mut self.env);
         let writes =
             self.module
                 .interpret_with_env(&mut rt, &mut self.env, WorldId(0), WorldVersion(0))?;
@@ -4951,7 +5443,9 @@ impl LangRuntime {
         let mut rt = SceneRuntime::new(&self.scene);
         self.env.time = self.scene.sim_time;
         self.env.step = self.clock;
+        self.env.step_dt = self.sim_dt;
         self.env.events.clear();
+        crate::eir::drain_due_events(&mut self.env);
         let writes = self.jit.execute_with_env(
             &self.jit_key,
             &mut rt,
@@ -4979,7 +5473,9 @@ impl LangRuntime {
             let mut e = self.env.clone();
             e.time = self.scene.sim_time;
             e.step = self.clock;
+            e.step_dt = self.sim_dt;
             e.events.clear();
+            crate::eir::drain_due_events(&mut e);
             e
         };
 
@@ -5004,9 +5500,9 @@ impl LangRuntime {
         if int_writes != jit_writes {
             return Err(error(Status::EirInvalid, 50));
         }
-        // Both backends share the emit contract: their event streams must
-        // agree byte-for-byte too.
-        if env_a.events != env_b.events {
+        // Both backends share the emit/schedule contract: their event streams
+        // and dynamic event queues must agree too.
+        if env_a.events != env_b.events || env_a.queue != env_b.queue {
             return Err(error(Status::EirInvalid, 50));
         }
         // An invariant violation fails the step before any write is applied.
@@ -6294,7 +6790,198 @@ mod tests {
         );
     }
 
+    /// Gradual dimensional analysis: a correctly unit-annotated model compiles;
+    /// an inconsistent rule is rejected with detail 77. Unit-free models are
+    /// unaffected (wildcards never error).
+    #[test]
+    fn units_check_consistent_and_reject_mismatch() {
+        let ok = "world { gravity=(0,0,0) params { k = 4.0 [1/s^2] } \
+                  entity e { state = (x = 1.0 [m], vx = 0.0 [m/s]) } } \
+                  systems { update { on = e; dt = 0.1 [s] \
+                    vx = 0.0 - k * x \n x = vx } }";
+        LangRuntime::compile(ok).unwrap();
+
+        let bad = "world { gravity=(0,0,0) params { k = 4.0 [1/s^2] } \
+                   entity e { state = (x = 1.0 [m], vx = 0.0 [m/s]) } } \
+                   systems { update { on = e; dt = 0.1 [s] \
+                     x = 0.0 - k * x \n vx = vx } }";
+        match LangRuntime::compile(bad) {
+            Ok(_) => panic!("dimension mismatch must be rejected"),
+            Err(e) => assert_eq!(e.detail, 77),
+        }
+
+        // Unannotated model: never errors.
+        let free = "world { gravity=(0,0,0) entity e { state=(x=1.0) } } \
+                    systems { update { on = e; dt = 0.1; x = 0.0 - x } }";
+        LangRuntime::compile(free).unwrap();
+    }
+
+    /// Units also cover `when` gates (must be dimensionless) and the internal
+    /// consistency of `invariant` expressions.
+    #[test]
+    fn units_cover_when_and_invariant() {
+        let bad_when = "world { gravity=(0,0,0) entity e { state=(x=1.0 [m]) } } \
+                        systems { update { on = e; dt = 0.1 when = x x = 0.0 - x } }";
+        match LangRuntime::compile(bad_when) {
+            Ok(_) => panic!("a dimensioned `when` gate must be rejected"),
+            Err(e) => assert_eq!(e.detail, 77),
+        }
+        // `x` (m) + `t` (s) is dimensionally inconsistent inside an invariant.
+        let bad_inv = "world { gravity=(0,0,0) entity e { state=(x=1.0 [m]) } } \
+                       systems { invariant { on = e; expr = x + t } }";
+        match LangRuntime::compile(bad_inv) {
+            Ok(_) => panic!("m + s must be rejected"),
+            Err(e) => assert_eq!(e.detail, 77),
+        }
+        // A dimensionless gate over a dimensioned model is fine.
+        let ok = "world { gravity=(0,0,0) \
+                  entity e { state=(x=1.0 [m], vx=0.5 [m/s], gate=0.0) } } \
+                  systems { update { on = e; dt = 0.1 [s] when = gate > 0.0 x = vx } }";
+        LangRuntime::compile(ok).unwrap();
+    }
+
+    /// Scheduled events: `at(T)` fires in exactly one step (the window that
+    /// contains `T`); `periodic(P)` fires once per period.
+    #[test]
+    fn scheduled_events_fire_exactly_once() {
+        let src = "world { gravity=(0,0,0) entity e { state=(x=0.0, fires=0.0) } } \
+                   systems { update { on = e; dt = 0.5 \
+                     x = 0.0 + 1.0 \
+                     fires = if(at(1.0), 1.0, 0.0) + if(periodic(1.0), 1.0, 0.0) } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        // 6 steps at dt=0.5 -> t = 0, 0.5, 1.0, 1.5, 2.0, 2.5.
+        rt.step_cross_n(6).unwrap();
+        let fires = rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[1];
+        // at(1.0) fires once; periodic(1.0) fires at t=0,1,2 (three times).
+        // fires += dt * (1 + 3) = 0.5 * 4 = 2.0.
+        assert!((fires - 2.0).abs() < 1e-12, "fires={fires}");
+    }
+
+    /// `import "…"` fragments are inlined recursively into one self-contained
+    /// source; cycles and missing files are reported.
+    #[test]
+    fn imports_inline_fragments() {
+        let dir = std::env::temp_dir().join(format!("pwe_import_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub/atoms.pwe"), "entity a { state=(x=1.0) }\n").unwrap();
+        std::fs::write(
+            dir.join("bodies.pwe"),
+            "# fragment\nimport \"sub/atoms.pwe\"\nentity b { state=(x=2.0) }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("main.pwe"),
+            "world { gravity=(0,0,0)\n import \"bodies.pwe\" }\n             systems { update { on = a; dt = 1.0 x = 0.0 - x } }\n",
+        )
+        .unwrap();
+        let rt = LangRuntime::compile_file(&dir.join("main.pwe")).unwrap();
+        assert_eq!(rt.scene.entities.len(), 2, "both imported entities present");
+        // Cycle detection.
+        std::fs::write(dir.join("c1.pwe"), "import \"c2.pwe\"\n").unwrap();
+        std::fs::write(dir.join("c2.pwe"), "import \"c1.pwe\"\n").unwrap();
+        match LangRuntime::compile_file(&dir.join("c1.pwe")) {
+            Ok(_) => panic!("import cycle must be rejected"),
+            Err(e) => assert_eq!(e.detail, 76),
+        }
+        // Missing file.
+        match LangRuntime::compile_file(&dir.join("nope.pwe")) {
+            Ok(_) => panic!("missing import must be rejected"),
+            Err(e) => assert_eq!(e.detail, 76),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `params { … }` declares runtime-settable model parameters that rules
+    /// read by name (overridable on the scene before running).
+    #[test]
+    fn model_params_read_and_override() {
+        let src =
+            "world { gravity=(0,0,0) params { G = 10.0 } entity e { state=(x=1.0,vx=0.0) } } \
+                   systems { update { on = e; dt = 0.1; vx = 0.0 - G * x; x = vx } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        assert_eq!(rt.scene.params.get("G").copied(), Some(10.0));
+        rt.step_cross_n(5).unwrap();
+        let a = rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[1];
+        // Same model, overridden parameter -> different trajectory.
+        let mut rt2 = LangRuntime::compile(src).unwrap();
+        rt2.scene.params.insert("G".to_string(), 1.0);
+        rt2.step_cross_n(5).unwrap();
+        let b = rt2
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[1];
+        assert_ne!(a, b, "overriding G must change the trajectory");
+    }
+
+    /// Neighborhood aggregates and directional sensing: `neighbor_mean`    /// Neighborhood aggregates and directional sensing: `neighbor_mean`
+    /// averages a State slot over neighbours within a radius (0 when none),
+    /// and `nearest_dx/dy/dz` give the offset to the closest neighbour.
+    #[test]
+    fn neighborhood_aggregates_and_offsets() {
+        let src = "world { gravity=(0,0,0) \
+                   entity a { state=(x=0.0, y=0.0, z=0.0, vx=10.0, vy=0.0, vz=0.0) } \
+                   entity b { state=(x=2.0, y=0.0, z=0.0, vx=20.0, vy=0.0, vz=0.0) } \
+                   entity c { state=(x=9.0, y=0.0, z=0.0, vx=90.0, vy=0.0, vz=0.0) } } \
+                   systems { update { on = a; dt = 1.0 \
+                     let n = neighbor_count(3.0) \
+                     let mx = neighbor_mean(0.0, 3.0) \
+                     let mv = neighbor_mean(3.0, 3.0) \
+                     s6 = n; s7 = mx; s8 = mv; s9 = nearest_dx(); s10 = nearest_dy() } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(1).unwrap();
+        let v = &rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values;
+        assert_eq!(v[6], 1.0, "one neighbour within 3.0 (b, not c)");
+        assert_eq!(v[7], 2.0, "mean x of neighbours = b.x");
+        assert_eq!(v[8], 20.0, "mean vx of neighbours = b.vx");
+        assert_eq!(v[9], 2.0, "nearest_dx = b.x - a.x");
+        assert_eq!(v[10], 0.0, "nearest_dy");
+
+        // Alone: aggregate and offset are 0.
+        let lone = "world { gravity=(0,0,0) entity only { state=(0.0,0.0,0.0) } } \
+                    systems { update { on = only; dt = 1.0 \
+                      s3 = neighbor_mean(0.0, 5.0); s4 = nearest_dx() } }";
+        let mut rt = LangRuntime::compile(lone).unwrap();
+        rt.step_cross_n(1).unwrap();
+        let v = &rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values;
+        assert_eq!(v[3], 0.0);
+        assert_eq!(v[4], 0.0);
+    }
+
     /// A spatial query in a function body is rejected at compile time: there
+    /// is no per-entity context to target.    /// A spatial query in a function body is rejected at compile time: there
     /// is no per-entity context to target.
     #[test]
     fn spatial_query_rejected_in_function_body() {

@@ -52,10 +52,11 @@ fn usage() {
          \n\
          USAGE:\n  \
            pwe compile <src.pwe> [-o <out.pweb>]\n  \
-           pwe run     <out.pweb> [--steps N]\n  \
-           pwe present <out.pweb> [--port P]\n\
+           pwe run     <out.pweb> [--steps N] [--param K=V]...\n  \
+           pwe present <out.pweb> [--port P] [--param K=V]...\n\
          \n\
          Compile source to a .pweb binary, then run the binary (javac/java style).\n\
+         --param overrides a declared model parameter at run time.\n\
          A .pweb artifact holds the verified canonical EIR module plus the\n\
          world-model source it derives the initial scene from."
     );
@@ -183,10 +184,11 @@ fn cmd_compile(args: &[String]) -> i32 {
         return 2;
     };
     let output = output.unwrap_or_else(|| with_extension(&input, "pweb"));
-    let source = match std::fs::read_to_string(&input) {
+    // Resolve `import "…"` fragments into one self-contained source.
+    let source = match lang::load_source(std::path::Path::new(&input)) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("pwe: cannot read {input}: {e}");
+            eprintln!("{}", lang::diagnose("", &e));
             return 1;
         }
     };
@@ -223,6 +225,7 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     let mut input: Option<String> = None;
     let mut steps: u64 = 60;
     let mut port = present_default;
+    let mut params: Vec<(String, f64)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -232,6 +235,21 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
                     return 2;
                 };
                 steps = v;
+            }
+            "--param" | "-P" => {
+                let Some(spec) = it.next() else {
+                    eprintln!("pwe: --param needs NAME=VALUE");
+                    return 2;
+                };
+                let Some((k, v)) = spec.split_once('=') else {
+                    eprintln!("pwe: --param expects NAME=VALUE, got '{spec}'");
+                    return 2;
+                };
+                let Some(v) = v.parse::<f64>().ok() else {
+                    eprintln!("pwe: --param value must be a number, got '{v}'");
+                    return 2;
+                };
+                params.push((k.to_string(), v));
             }
             "--port" | "-p" => {
                 let Some(v) = it.next().and_then(|s| s.parse::<u16>().ok()) else {
@@ -264,6 +282,20 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
             return 1;
         }
     };
+    // Apply `--param` overrides (declared parameters only, so typos are caught).
+    for (k, v) in &params {
+        if !model.params.contains_key(k) {
+            let declared: Vec<&str> = model.params.keys().map(String::as_str).collect();
+            let list = if declared.is_empty() {
+                "none".to_string()
+            } else {
+                declared.join(", ")
+            };
+            eprintln!("pwe: unknown parameter '{k}' (declared: {list})");
+            return 2;
+        }
+        rt.scene.params.insert(k.clone(), *v);
+    }
     match port {
         None => {
             for k in 0..steps {

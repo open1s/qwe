@@ -51,6 +51,20 @@ pub fn check_id() -> ComponentTypeId {
     canonical_component_id("pwe.lang", "check", 1)
 }
 
+/// Canonical `ComponentTypeId` for a named model parameter
+/// (`pwe.lang.param.<name>`); rules read parameters through `read_field`.
+///
+/// Parameters are a language-owned addressing scheme, not WIR schema
+/// components, so the id is derived directly (domain-separated SHA-256 of the
+/// raw name) rather than through `ComponentIdentity` — parameter names may be
+/// uppercase or otherwise outside the schema's lowercase name grammar.
+pub fn param_component_id(name: &str) -> ComponentTypeId {
+    let mut input = b"pwe.lang.param/v1\0".to_vec();
+    input.extend_from_slice(name.as_bytes());
+    let h = crate::sha256::digest(&input);
+    ComponentTypeId(h.0[..16].try_into().unwrap())
+}
+
 /// Canonical `ComponentTypeId` for a named grid field (`pwe.lang.field.<name>`);
 /// the EIR runtime addresses field cells with this component id, and the
 /// field's width rides in the ComponentRef's offset.
@@ -87,6 +101,8 @@ pub struct SceneRuntime<'a> {
     /// Canonical field component id -> the scene's grid field, for
     /// `ReadFieldCell`/`FieldLaplacian` cell access.
     field_ids: std::collections::BTreeMap<ComponentTypeId, &'a crate::field::Field>,
+    /// Canonical parameter component id -> the parameter value.
+    param_ids: std::collections::BTreeMap<ComponentTypeId, f64>,
 }
 
 impl<'a> SceneRuntime<'a> {
@@ -95,10 +111,15 @@ impl<'a> SceneRuntime<'a> {
         for (name, f) in &scene.fields {
             field_ids.insert(field_component_id(name), f);
         }
+        let mut param_ids = std::collections::BTreeMap::new();
+        for (name, v) in &scene.params {
+            param_ids.insert(param_component_id(name), *v);
+        }
         Self {
             scene,
             pending: std::collections::BTreeMap::new(),
             field_ids,
+            param_ids,
         }
     }
 }
@@ -112,6 +133,11 @@ impl EirRuntime for SceneRuntime<'_> {
         // The global simulation clock (`t`) does not belong to any entity.
         if target.component == sim_time_id() {
             return Ok(self.scene.sim_time.to_bits());
+        }
+        // A model parameter: not tied to any entity. Checked first so a
+        // parameter read never falls through to the entity lookup.
+        if let Some(v) = self.param_ids.get(&target.component) {
+            return Ok(v.to_bits());
         }
         // A grid field cell: the linear index rides in the offset. Checked
         // before the entity lookup — fields do not belong to any entity.
@@ -213,6 +239,46 @@ impl EirRuntime for SceneRuntime<'_> {
             }
         }
         Ok(best.to_bits())
+    }
+    fn query_neighbor_mean(&self, entity: u128, slot: u32, radius: f64) -> Result<f64> {
+        let origin = self.position_of(entity)?;
+        let mut sum = 0.0;
+        let mut n = 0u64;
+        for (&id, e) in &self.scene.entities {
+            if id.0 == entity || e.camera.is_some() {
+                continue;
+            }
+            if origin.distance(self.effective_position(e, id.0)) > radius {
+                continue;
+            }
+            // Read the neighbor's State slot through `read_field` so it honors
+            // any in-interpretation write (the same overlay as every read).
+            let raw = self.read_field(crate::eir::ComponentRef {
+                entity: id.0,
+                component: state_id(),
+                offset: slot.wrapping_mul(field::STATE_SLOT_BYTES),
+            })?;
+            sum += f64::from_bits(raw);
+            n += 1;
+        }
+        Ok(if n == 0 { 0.0 } else { sum / n as f64 })
+    }
+    fn query_nearest_offset(&self, entity: u128) -> Result<(f64, f64, f64)> {
+        let origin = self.position_of(entity)?;
+        let mut best = f64::MAX;
+        let mut off = (0.0, 0.0, 0.0);
+        for (&id, e) in &self.scene.entities {
+            if id.0 == entity || e.camera.is_some() {
+                continue;
+            }
+            let p = self.effective_position(e, id.0);
+            let d = origin.distance(p);
+            if d < best {
+                best = d;
+                off = (p.x - origin.x, p.y - origin.y, p.z - origin.z);
+            }
+        }
+        Ok(off)
     }
     fn field_laplacian(
         &self,

@@ -1,0 +1,49 @@
+# flock.pwe — a boids-style swarm: neighborhood sensing drives emergence.
+#
+# One rule set applies to every dynamic body (no `on =` target). Each boid
+# senses its neighbours and steers by three classic rules plus a weak pull to
+# the origin so the flock stays on screen:
+#
+#   cohesion   `neighbor_mean(0/1, r)` — steer toward the local centre
+#   alignment  `neighbor_mean(3/4, r)` — match the local heading
+#   separation `nearest_dx/dy()`       — steer away from the closest boid
+#
+# State layout per boid is `(x, y, z, vx, vy, vz)` (slots 0..5); the queries
+# read those slots directly.
+#
+#   cargo build --release -p pwe-cli
+#   pwe compile cli/examples/flock.pwe -o flock.pweb
+#   pwe present flock.pweb --port 8000      # live 3D viewer
+
+world {
+  title = "boids swarm (cohesion + alignment + separation)"
+  gravity = (0, 0, 0)
+
+  entity b1 { state = (x= 5.0, y= 0.0, z=0.0, vx= 0.0, vy= 0.4, vz=0.0); sphere = 0.22; color = 0x8BD3FF }
+  entity b2 { state = (x= 4.0, y= 3.0, z=0.0, vx=-0.3, vy= 0.2, vz=0.0); sphere = 0.22; color = 0x8BD3FF }
+  entity b3 { state = (x= 1.0, y= 4.5, z=0.0, vx=-0.5, vy= 0.0, vz=0.0); sphere = 0.22; color = 0x8BD3FF }
+  entity b4 { state = (x=-3.0, y= 4.0, z=0.0, vx=-0.4, vy=-0.2, vz=0.0); sphere = 0.22; color = 0x8BD3FF }
+  entity b5 { state = (x=-5.0, y= 0.0, z=0.0, vx= 0.0, vy=-0.4, vz=0.0); sphere = 0.22; color = 0x8BD3FF }
+  entity b6 { state = (x=-3.0, y=-4.0, z=0.0, vx= 0.4, vy=-0.2, vz=0.0); sphere = 0.22; color = 0x8BD3FF }
+  entity b7 { state = (x= 1.0, y=-4.5, z=0.0, vx= 0.5, vy= 0.0, vz=0.0); sphere = 0.22; color = 0x8BD3FF }
+  entity b8 { state = (x= 4.0, y=-3.0, z=0.0, vx= 0.3, vy= 0.2, vz=0.0); sphere = 0.22; color = 0x8BD3FF }
+  entity b9 { state = (x= 0.0, y= 1.8, z=0.0, vx= 0.2, vy=-0.1, vz=0.0); sphere = 0.22; color = 0x8BD3FF }
+  entity b10{ state = (x=-1.5, y=-1.0, z=0.0, vx=-0.1, vy= 0.2, vz=0.0); sphere = 0.22; color = 0x8BD3FF }
+}
+
+systems {
+  update { dt = 0.1
+    let n   = neighbor_count(4.0)
+    let cx  = neighbor_mean(0.0, 4.0)
+    let cy  = neighbor_mean(1.0, 4.0)
+    let ax  = neighbor_mean(3.0, 4.0)
+    let ay  = neighbor_mean(4.0, 4.0)
+    let dxn = nearest_dx()
+    let dyn = nearest_dy()
+    let inv = 1.0 / (1.0 + dxn * dxn + dyn * dyn)
+    vx = 1.5 * (if(n > 0.0, cx, 0.0) - x) + 0.8 * (if(n > 0.0, ax, 0.0) - vx) - 6.0 * dxn * inv - 0.05 * x - 0.5 * vx
+    vy = 1.5 * (if(n > 0.0, cy, 0.0) - y) + 0.8 * (if(n > 0.0, ay, 0.0) - vy) - 6.0 * dyn * inv - 0.05 * y - 0.5 * vy
+    x = vx
+    y = vy
+  }
+}

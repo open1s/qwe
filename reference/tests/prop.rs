@@ -298,6 +298,13 @@ fn random_instruction(rng: &mut Rng, next: &mut u32) -> Instruction {
         | Opcode::WriteFieldCell
         | Opcode::FieldLaplacian
         | Opcode::ReadEvent
+        | Opcode::NeighborMean
+        | Opcode::NearestOffsetX
+        | Opcode::NearestOffsetY
+        | Opcode::NearestOffsetZ
+        | Opcode::FiredAt
+        | Opcode::FiredEvery
+        | Opcode::ScheduleEvent
         | Opcode::Sin
         | Opcode::Cos
         | Opcode::Exp

@@ -51,6 +51,9 @@ Comments: `#` or `//` to end of line. Whitespace is insignificant.
 | `chan <name> { value = v }` | A channel entity; holds its latest value in `state[0]`. |
 | `entity <name> { fields }` | A body. Fields below. |
 | `field <name> { width = w; height = h; dx = d }` | A deterministic scalar grid field (the PDE substrate): cells read/written by rules via `fget`/`fset`/`flap`. |
+| `params { G = 1.0; k = 3.0 }` | Runtime-settable model parameters; rules read them by name, overridable with `pwe run --param G=2` (same artifact, different configuration). |
+| `import "rel/path.pwe"` | Inlines another file's fragment (world items, system items, or funcs) here, recursively; resolved at compile time into one self-contained program. |
+| `title = "..."` | Human-readable run title, shown by `pwe present`. |
 
 ### Entity fields
 
@@ -206,6 +209,42 @@ comparison rejection.
   arithmetic (no new opcodes); combine with `neighbor_count`/`nearest_dist`
   for spatial models.
 
+### Scheduled events (discrete-event scheduling)
+
+Scheduled events fire **exactly once**, on the step whose time window
+`[t, t + dt)` contains the scheduled instant — deterministic, stateless, and
+independent of the integration method.
+
+* `at(T)` — 1.0 in the one step that reaches time `T`, else 0.0.
+* `periodic(P)` / `periodic(P, phase)` — 1.0 once per period `P` seconds.
+* Compose with rules for impulses, and with `emit`/`last_event` for event-driven
+  reactions. Requires `P > dt`.
+
+### Units (gradual dimensional analysis)
+
+Units are **opt-in and checked at compile time**. Anything unannotated is a
+wildcard that never errors, so unit-free models are unaffected. Annotations go
+after a value, in square brackets:
+
+```pwe
+world {
+    params { k = 4.0 [1/s^2] }
+    entity e { state = (x = 1.0 [m], vx = 0.0 [m/s]) }
+}
+systems {
+    update { on = e; dt = 0.1 [s]
+        vx = 0.0 - k * x     # 1/s^2 · m · s = m/s  matches vx
+        x = vx               # m/s · s = m          matches x
+    }
+}
+```
+
+Base units: `m`, `kg`, `s`, `A`, `K`, `mol`, `cd`, combined with `*`, `/`, `^`
+(`[m/s^2]`, `[kg*m/s^2]`, `[1/s]`, `[m^3*kg^-1*s^-2]`). Each rule is checked as
+`slot += dt · expr` (using `dt`'s declared unit, else seconds); a mismatch is a
+compile error (detail 77). Transcendental functions require dimensionless
+arguments; `sqrt` halves exponents.
+
 ### Grid fields (PDE substrate)
 
 Declared with `field <name> { width = w; height = h; dx = d }` in the world
@@ -237,6 +276,11 @@ other world state).
   Deterministic (sorted id scan).
 * `nearest_dist()` — distance to the nearest other entity; `f64::MAX` when the
   current entity is alone. Deterministic.
+* `neighbor_mean(slot, r)` — mean of the State slot `slot` over the neighbours
+  within `r` (0 when there are none). Average positions (`slot` 0/1/2) or
+  velocities (`slot` 3/4/5) for cohesion/alignment — the flocking primitive.
+* `nearest_dx/dy/dz()` — the offset `(nearest neighbour − self)` per axis
+  (0 when alone), so a rule can steer toward or away from the closest body.
 * Valid only inside system rules and their `let` blocks — not function bodies
   (no entity context there; detail 70).
 

@@ -44,6 +44,10 @@ pub struct EntityDecl {
     pub nbody: Option<bool>,
     /// Optional parent body name (`parent = earth`), for satellites.
     pub parent: Option<String>,
+    /// Optional per-slot dimensions (`state = (x = 0 m, vx = 0 m/s)`), aligned
+    /// with `state` by index; `None` marks an unannotated slot. Compile-time
+    /// only (gradual dimensional analysis).
+    pub state_units: Option<Vec<Option<crate::units::Dim>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -70,6 +74,7 @@ impl EntityDecl {
             color: None,
             nbody: None,
             parent: None,
+            state_units: None,
         }
     }
 }
@@ -100,6 +105,11 @@ pub struct WorldModel {
     pub gravity: Vec3,
     /// Optional human-readable title (`title = "..."`), shown by `pwe present`.
     pub title: Option<String>,
+    /// Runtime-settable model parameters (`params { G = 1.0 }`), overridable
+    /// with `pwe run --param G=2`.
+    pub params: std::collections::BTreeMap<String, f64>,
+    /// Declared units for parameters (`G = 6.7e-11 m^3*kg^-1*s^-2`).
+    pub param_units: std::collections::BTreeMap<String, crate::units::Dim>,
     pub entities: Vec<EntityDecl>,
     pub channels: Vec<ChanDecl>,
     pub fields: Vec<FieldDecl>,
@@ -110,6 +120,8 @@ impl WorldModel {
         Self {
             gravity,
             title: None,
+            params: std::collections::BTreeMap::new(),
+            param_units: std::collections::BTreeMap::new(),
             entities: Vec::new(),
             channels: Vec::new(),
             fields: Vec::new(),
@@ -120,6 +132,7 @@ impl WorldModel {
     pub fn build_scene(&self) -> crate::scene::Scene {
         use crate::components::{Collider, RigidBody, Transform, Velocity};
         let mut scene = crate::scene::Scene::new(self.gravity);
+        scene.params = self.params.clone();
         for decl in &self.fields {
             scene.fields.insert(
                 decl.name.clone(),

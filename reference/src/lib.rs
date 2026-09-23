@@ -34,6 +34,7 @@ pub mod sensor_eir;
 pub mod sha256;
 pub mod simulation;
 pub mod snapshot;
+pub mod units;
 pub mod wir;
 pub mod wire;
 

@@ -173,6 +173,31 @@ pub enum Opcode {
     /// id. Yields the payload as f64, or 0.0 when no event of that kind has
     /// been emitted (deterministic reverse scan).
     ReadEvent = 216,
+    // -- neighborhood aggregates / directional sensing (spatial queries v2) --
+    /// Mean of a State slot over the neighbors within `radius` of the target
+    /// entity (0.0 when there are none). Operands: slot value id, radius value
+    /// id. Target = the sensing entity.
+    NeighborMean = 217,
+    /// X component of `(nearest neighbor position - target entity position)`;
+    /// 0.0 when the target entity is alone. Target = the sensing entity.
+    NearestOffsetX = 218,
+    /// Y component of the nearest-neighbor offset (see `NearestOffsetX`).
+    NearestOffsetY = 219,
+    /// Z component of the nearest-neighbor offset (see `NearestOffsetX`).
+    NearestOffsetZ = 220,
+    // -- scheduled events (discrete-event scheduling on the step grid) --
+    /// Fires (1.0) exactly in the one step whose time window
+    /// `[time, time + step_dt)` contains the instant `T`; 0.0 otherwise.
+    /// Operand 0 = T. Exact-once, stateless, deterministic.
+    FiredAt = 221,
+    /// Fires (1.0) in the step whose window contains a periodic instant
+    /// `phase + k·period`; 0.0 otherwise. Operands: period, phase (default 0).
+    FiredEvery = 222,
+    /// Schedule an event `(kind, payload)` to fire `delay` seconds from now,
+    /// but only when `gate` (operand 0) is nonzero. Operands: gate, delay,
+    /// kind, payload. Yields nothing. Gate on a per-step pulse (`at`/`periodic`
+    /// or `last_event`) to schedule exactly once.
+    ScheduleEvent = 223,
     Return = 0x8000,
     /// Unconditional branch to an instruction index (block target). Single
     /// operand = target index.
@@ -260,6 +285,16 @@ pub struct EmittedEvent {
     pub payload: u64,
 }
 
+/// A dynamically scheduled event: `(kind, payload)` to fire at simulation
+/// time `time`. The queue is kept sorted by time (stable for ties), so due
+/// events are delivered in deterministic order.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScheduledEvent {
+    pub time: f64,
+    pub kind: u32,
+    pub payload: u64,
+}
+
 /// A small deterministic PRNG (xorshift64*), seeded from a fixed domain constant
 /// so that `RANDOM` is reproducible across runs (replay-stable) while remaining
 /// a declared nondeterministic effect.
@@ -303,6 +338,13 @@ pub struct ExecEnv {
     pub log: Vec<String>,
     /// Host-advanced step counter read by `STEP` (deterministic scheduling).
     pub step: u64,
+    /// Host-set length of the current step's time window (seconds); the
+    /// scheduled-event opcodes fire when `[time, time + step_dt)` covers a
+    /// scheduled instant.
+    pub step_dt: f64,
+    /// Dynamic event queue (see [`ScheduledEvent`]); due events are moved into
+    /// `events` at the start of each step, in time order.
+    pub queue: Vec<ScheduledEvent>,
 }
 impl Default for ExecEnv {
     fn default() -> Self {
@@ -312,6 +354,8 @@ impl Default for ExecEnv {
             events: Vec::new(),
             log: Vec::new(),
             step: 0,
+            step_dt: 0.0,
+            queue: Vec::new(),
         }
     }
 }
@@ -319,6 +363,23 @@ impl Default for ExecEnv {
 /// Maximum CALL nesting depth. Exceeding it traps (guards against unbounded
 /// or cyclic recursion).
 pub const MAX_CALL_DEPTH: usize = 256;
+
+/// Moves every queued event whose time has been reached into `events`, in
+/// time order. Called by the host at the start of each step (matching the
+/// scheduled-event window semantics).
+pub fn drain_due_events(env: &mut ExecEnv) {
+    let now = env.time;
+    let n = env.queue.partition_point(|e| e.time <= now);
+    let due: Vec<EmittedEvent> = env
+        .queue
+        .drain(..n)
+        .map(|e| EmittedEvent {
+            kind: e.kind,
+            payload: e.payload,
+        })
+        .collect();
+    env.events.extend(due);
+}
 
 /// Byte stride of the canonical State component's scalar slots (fixed-width
 /// f64 fields). `ReadSlotDyn`/`WriteSlotDyn` compute their runtime offset as
@@ -342,6 +403,13 @@ pub trait EirRuntime {
     /// Distance to the nearest entity other than `entity`; `f64::MAX` when
     /// there is no other entity. Same determinism as `query_neighbor_count`.
     fn query_nearest_dist(&self, entity: u128) -> Result<u64>;
+    /// Mean of the State slot `slot` over the entities (other than `entity`)
+    /// within `radius` of `entity`'s position; 0.0 when there are none. Same
+    /// determinism as `query_neighbor_count`.
+    fn query_neighbor_mean(&self, entity: u128, slot: u32, radius: f64) -> Result<f64>;
+    /// `(nearest neighbor position - entity position)`; `(0, 0, 0)` when the
+    /// entity is alone. Same determinism as `query_neighbor_count`.
+    fn query_nearest_offset(&self, entity: u128) -> Result<(f64, f64, f64)>;
     /// Discrete Laplacian of a grid field cell (the Field's zero-flux
     /// stencil) for the field identified by `component`, at cell `(i, j)` on
     /// a grid of the given `width`. Deterministic.
@@ -569,6 +637,39 @@ impl EirModule {
                     }
                     Some(ValueType::F64)
                 }
+                Opcode::NeighborMean => {
+                    if instruction.operands.len() != 2 || instruction.target.is_none() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::NearestOffsetX | Opcode::NearestOffsetY | Opcode::NearestOffsetZ => {
+                    if !instruction.operands.is_empty() || instruction.target.is_none() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::FiredAt => {
+                    if instruction.operands.len() != 1 || instruction.target.is_some() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::FiredEvery => {
+                    if instruction.operands.is_empty()
+                        || instruction.operands.len() > 2
+                        || instruction.target.is_some()
+                    {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::ScheduleEvent => {
+                    if instruction.operands.len() != 4 || instruction.target.is_some() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    None
+                }
                 Opcode::ReadSlotDyn => {
                     if instruction.operands.len() != 1 || instruction.target.is_none() {
                         return Err(error(Status::EirInvalid, 4, index));
@@ -736,9 +837,15 @@ impl EirModule {
                     Opcode::Eq | Opcode::Ne | Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => {
                         Some(ValueType::Bool)
                     }
-                    Opcode::ReadView | Opcode::NeighborCount | Opcode::NearestDist => {
-                        Some(ValueType::F64)
-                    }
+                    Opcode::ReadView
+                    | Opcode::NeighborCount
+                    | Opcode::NearestDist
+                    | Opcode::NeighborMean
+                    | Opcode::NearestOffsetX
+                    | Opcode::NearestOffsetY
+                    | Opcode::NearestOffsetZ
+                    | Opcode::FiredAt
+                    | Opcode::FiredEvery => Some(ValueType::F64),
                     Opcode::Step => Some(ValueType::F64),
                     Opcode::ReadSlotDyn => Some(ValueType::F64),
                     Opcode::ReadFieldCell | Opcode::FieldLaplacian | Opcode::ReadEvent => {
@@ -1125,6 +1232,106 @@ impl EirModule {
                 Opcode::Step => {
                     let s = env.step as f64;
                     stacks[depth - 1].insert(instruction.result_id, Immediate::F64(s));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::NeighborMean => {
+                    let target = instruction.target.ok_or(error(Status::EirInvalid, 23, 0))?;
+                    let slot = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[0])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))?,
+                    ) as u32;
+                    let radius = f64::from_bits(as_u64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[1])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 17, 0))?,
+                    ));
+                    let m = rt.query_neighbor_mean(target.entity, slot, radius)?;
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(m));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::ScheduleEvent => {
+                    let gate = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[0])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))?,
+                    );
+                    if gate != 0.0 {
+                        let delay = as_f64(
+                            stacks[depth - 1]
+                                .get(&instruction.operands[1])
+                                .copied()
+                                .ok_or(error(Status::EirInvalid, 16, 0))?,
+                        );
+                        let kind = as_f64(
+                            stacks[depth - 1]
+                                .get(&instruction.operands[2])
+                                .copied()
+                                .ok_or(error(Status::EirInvalid, 17, 0))?,
+                        ) as u32;
+                        let payload = as_u64(
+                            stacks[depth - 1]
+                                .get(&instruction.operands[3])
+                                .copied()
+                                .ok_or(error(Status::EirInvalid, 18, 0))?,
+                        );
+                        let time = env.time + delay;
+                        // Keep the queue sorted by time (stable for equal times).
+                        let pos = env.queue.partition_point(|e| e.time <= time);
+                        env.queue.insert(pos, ScheduledEvent { time, kind, payload });
+                    }
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::FiredAt => {
+                    let t = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[0])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))?,
+                    );
+                    let fired = env.time <= t && t < env.time + env.step_dt;
+                    stacks[depth - 1]
+                        .insert(instruction.result_id, Immediate::F64(fired as u8 as f64));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::FiredEvery => {
+                    let period = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[0])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))?,
+                    );
+                    let phase = match instruction.operands.get(1) {
+                        Some(op) => as_f64(stacks[depth - 1].get(op).copied().ok_or(error(
+                            Status::EirInvalid,
+                            17,
+                            0,
+                        ))?),
+                        None => 0.0,
+                    };
+                    // The instant phase + k·period inside [time, time + step_dt),
+                    // matching `FiredAt`'s half-open window exactly.
+                    let fired = period > 0.0 && {
+                        let k = ((env.time - phase) / period).ceil();
+                        let instant = phase + k * period;
+                        instant >= env.time && instant < env.time + env.step_dt
+                    };
+                    stacks[depth - 1]
+                        .insert(instruction.result_id, Immediate::F64(fired as u8 as f64));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::NearestOffsetX | Opcode::NearestOffsetY | Opcode::NearestOffsetZ => {
+                    let target = instruction.target.ok_or(error(Status::EirInvalid, 23, 0))?;
+                    let (dx, dy, dz) = rt.query_nearest_offset(target.entity)?;
+                    let v = match instruction.opcode {
+                        Opcode::NearestOffsetX => dx,
+                        Opcode::NearestOffsetY => dy,
+                        _ => dz,
+                    };
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(v));
                     pcs[depth - 1] += 1;
                 }
                 Opcode::ReadEvent => {
@@ -1743,6 +1950,13 @@ fn opcode_from_u16(raw: u16) -> Result<Opcode> {
         x if x == Opcode::WriteFieldCell as u16 => Opcode::WriteFieldCell,
         x if x == Opcode::FieldLaplacian as u16 => Opcode::FieldLaplacian,
         x if x == Opcode::ReadEvent as u16 => Opcode::ReadEvent,
+        x if x == Opcode::NeighborMean as u16 => Opcode::NeighborMean,
+        x if x == Opcode::NearestOffsetX as u16 => Opcode::NearestOffsetX,
+        x if x == Opcode::NearestOffsetY as u16 => Opcode::NearestOffsetY,
+        x if x == Opcode::NearestOffsetZ as u16 => Opcode::NearestOffsetZ,
+        x if x == Opcode::FiredAt as u16 => Opcode::FiredAt,
+        x if x == Opcode::FiredEvery as u16 => Opcode::FiredEvery,
+        x if x == Opcode::ScheduleEvent as u16 => Opcode::ScheduleEvent,
         _ => return Err(error(Status::EirInvalid, 28, 0)),
     })
 }
@@ -1819,6 +2033,12 @@ impl EirRuntime for NoopRuntime {
     }
     fn query_nearest_dist(&self, _entity: u128) -> Result<u64> {
         Ok(f64::MAX.to_bits())
+    }
+    fn query_neighbor_mean(&self, _entity: u128, _slot: u32, _radius: f64) -> Result<f64> {
+        Ok(0.0)
+    }
+    fn query_nearest_offset(&self, _entity: u128) -> Result<(f64, f64, f64)> {
+        Ok((0.0, 0.0, 0.0))
     }
     fn field_laplacian(
         &self,
@@ -2609,6 +2829,13 @@ mod tests {
             Opcode::WriteFieldCell,
             Opcode::FieldLaplacian,
             Opcode::ReadEvent,
+            Opcode::NeighborMean,
+            Opcode::NearestOffsetX,
+            Opcode::NearestOffsetY,
+            Opcode::NearestOffsetZ,
+            Opcode::FiredAt,
+            Opcode::FiredEvery,
+            Opcode::ScheduleEvent,
         ];
         let mut instructions: Vec<Instruction> = opcodes
             .iter()
@@ -2675,6 +2902,12 @@ mod tests {
             }
             fn query_nearest_dist(&self, _entity: u128) -> Result<u64> {
                 Ok(f64::MAX.to_bits())
+            }
+            fn query_neighbor_mean(&self, _entity: u128, _slot: u32, _radius: f64) -> Result<f64> {
+                Ok(0.0)
+            }
+            fn query_nearest_offset(&self, _entity: u128) -> Result<(f64, f64, f64)> {
+                Ok((0.0, 0.0, 0.0))
             }
             fn field_laplacian(
                 &self,

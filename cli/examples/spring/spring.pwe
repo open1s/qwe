@@ -1,0 +1,26 @@
+# spring.pwe — one program assembled from fragments: `import` composes the
+# entity and system files, `params` make the constants runtime-settable, the
+# `[unit]` annotations are dimensionally checked, and `at`/`periodic` schedule
+# events on the step grid.
+#
+#   cargo build --release -p pwe-cli
+#   pwe compile cli/examples/spring/spring.pwe -o spring.pweb
+#   pwe run     spring.pweb --steps 400
+#   pwe run     spring.pweb --steps 400 --param k=16.0     # stiffer spring
+#   pwe present spring.pweb --port 8000
+
+world {
+  title = "damped oscillator (imports + params + units + scheduled events)"
+  gravity = (0, 0, 0)
+
+  params {
+    k = 4.0 [1/s^2]
+    damping = 0.3 [1/s]
+  }
+
+  import "parts.pwe"
+}
+
+systems {
+  import "law.pwe"
+}

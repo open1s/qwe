@@ -24,11 +24,21 @@ param_list = { ident ~ ("," ~ ident)* }
 
 // -- world model -------------------------------------------------------------
 world_section = { "world" ~ "{" ~ world_item* ~ "}" }
-world_item = _{ gravity_stmt | chan_stmt | entity_stmt | field_stmt | title_stmt }
+world_item = _{ gravity_stmt | chan_stmt | entity_stmt | field_stmt | params_stmt | title_stmt }
 gravity_stmt = { "gravity" ~ "=" ~ vec3 }
 // A human-readable title for the run (shown by `pwe present`).
 title_stmt = { "title" ~ "=" ~ string }
+// `params { G = 1.0; k = 3.0 }` declares runtime-settable model parameters.
+params_stmt = { "params" ~ "{" ~ (ident ~ "=" ~ value ~ unit_expr? ~ ";"?)* ~ "}" }
 string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+// A unit expression, e.g. `m`, `m/s^2`, `kg*m/s^2`, `1/s` (compile-time only).
+// Units are bracketed (`1.0 [m/s^2]`), so they are lexically unambiguous next
+// to identifiers and slot accesses like `s[0]`.
+unit_expr = @{ "[" ~ unit_atom ~ (unit_op ~ unit_atom)* ~ "]" }
+unit_atom = @{ unit_name ~ ("^" ~ unit_exp)? | ASCII_DIGIT+ }
+unit_name = @{ "mol" | "kg" | "cd" | "K" | "A" | "s" | "m" }
+unit_exp = @{ "-"? ~ ASCII_DIGIT+ }
+unit_op = @{ "*" | "/" }
 chan_stmt = { "chan" ~ ident ~ "{" ~ "value" ~ "=" ~ value ~ ";"? ~ "}" }
 entity_stmt = { "entity" ~ ident ~ "{" ~ entity_field* ~ "}" }
 // A deterministic scalar grid field (PDE substrate): `field name { width = w; height = h; dx = d }`.
@@ -40,7 +50,7 @@ state_field = { "state" ~ "=" ~ (vecN | named_state) ~ ";"? }
 named_state = { "(" ~ state_item ~ ("," ~ state_item)* ~ ")" }
 // `vec3 pos` declares N consecutive slots with a named vector element: `pos`
 // reads the first component, `@self.state.pos.1` reads component 1.
-state_item = { ("vec" ~ ASCII_DIGIT+ ~ ident) | (ident ~ "=" ~ value) | value }
+state_item = { ("vec" ~ ASCII_DIGIT+ ~ ident) | (ident ~ "=" ~ value ~ unit_expr?) | (value ~ unit_expr?) }
 mass_field = { "mass" ~ "=" ~ value ~ ";"? }
 dynamic_field = { "dynamic" ~ "=" ~ boolean ~ ";"? }
 nbody_field = { "nbody" ~ "=" ~ boolean ~ ";"? }
@@ -70,7 +80,7 @@ system = _{ send_system | recv_system | generic_system }
 send_system = { "send" ~ "{" ~ param* ~ "}" }
 recv_system = { "recv" ~ "{" ~ param* ~ "}" }
 generic_system = { ident ~ "{" ~ param* ~ "}" }
-param = { (let_stmt | repeat_stmt | for_stmt | slot_lhs ~ "=" ~ expr | call | ident ~ "=" ~ (vecN | expr | ident)) ~ ";"? }
+param = { (let_stmt | repeat_stmt | for_stmt | slot_lhs ~ "=" ~ expr | call | ident ~ "=" ~ (vecN | expr | ident) ~ unit_expr?) ~ ";"? }
 // Dynamic slot LHS: `s[i] = expr` writes the State slot at a runtime index.
 slot_lhs = { "s" ~ "[" ~ expr ~ "]" }
 // `let name = expr` binds a reusable local in an `update` rule.
