@@ -1,0 +1,80 @@
+# courtyard.pwe — three people wandering at random inside a small walled yard.
+#
+# The yard is four static box walls around a paved ground. Each person is a
+# state-only body `(x, y, z, vx, vz)` where slots 0..2 are the render position
+# and `(vx, vz)` is a unit heading. One `update` rule (no `on` — it targets
+# every dynamic body) walks each person forward one `step` per pass; when the
+# heading would carry them past the yard boundary the rule draws a fresh
+# `random()` angle, flips any component that still points outward, and snaps
+# the heading — so a wall hit picks a new random direction and nobody ever
+# leaves the yard. `random()` is seeded, so every replay is identical.
+#
+#   cargo build --release -p pwe-cli
+#   pwe compile cli/examples/courtyard.pwe -o courtyard.pweb
+#   pwe present courtyard.pweb --port 8000      # live 3D viewer
+
+world {
+  title = "Courtyard random walk (3 persons, walls turn you around)"
+  gravity = (0, 0, 0)
+
+  shape person {
+    part capsule = (0.16, 0.5, 0.13) at (0, 0.45, 0);
+    part sphere  = 0.14 at (0, 0.88, 0);
+  }
+
+  entity ground {
+    position = (0, -0.05, 0); dynamic = false
+    box = (10.0, 0.1, 8.0); color = 0xD7C48A
+  }
+  entity wallN {
+    position = (0, 0.5, 3.0); dynamic = false
+    box = (8.0, 1.0, 0.2); color = 0xA9663E
+  }
+  entity wallS {
+    position = (0, 0.5, -3.0); dynamic = false
+    box = (8.0, 1.0, 0.2); color = 0xA9663E
+  }
+  entity wallE {
+    position = (4.0, 0.5, 0); dynamic = false
+    box = (0.2, 1.0, 6.0); color = 0xA9663E
+  }
+  entity wallW {
+    position = (-4.0, 0.5, 0); dynamic = false
+    box = (0.2, 1.0, 6.0); color = 0xA9663E
+  }
+
+  entity p1 {
+    state = (x = -2.0, y = 0.0, z = -1.2, vx = 0.80, vz = 0.60)
+    shape = person; color = 0xE4572E
+  }
+  entity p2 {
+    state = (x = 0.5, y = 0.0, z = 1.5, vx = -0.60, vz = 0.80)
+    shape = person; color = 0x2E86DE
+  }
+  entity p3 {
+    state = (x = 2.2, y = 0.0, z = -0.5, vx = -0.71, vz = -0.71)
+    shape = person; color = 0x9B5DE5
+  }
+}
+
+systems {
+  # dt = 1.0 makes `slot = expr` an exact per-step write, so each pass moves
+  # the body `step` metres along its heading and snaps the heading slots.
+  update { dt = 1.0
+    let step = 0.025
+    let hitx = if(abs(x) >= 3.5, sign(x), 0.0)
+    let hitz = if(abs(z) >= 2.5, sign(z), 0.0)
+    let hit = (hitx != 0.0) or (hitz != 0.0)
+    let a = 2.0 * pi * random()
+    let ux = cos(a)
+    let uz = sin(a)
+    let fx = if(hitx * ux > 0.0, -ux, ux)
+    let fz = if(hitz * uz > 0.0, -uz, uz)
+    let nvx = if(hit, fx, vx)
+    let nvz = if(hit, fz, vz)
+    x = step * nvx
+    z = step * nvz
+    vx = nvx - vx
+    vz = nvz - vz
+  }
+}

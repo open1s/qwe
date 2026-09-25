@@ -693,8 +693,8 @@ input[type=range]{{flex:1}}label{{color:#89b4fa}}
 </div>
 <script type="importmap">{{
   "imports": {{
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    "three": "/vendor/three/three.module.js",
+    "three/addons/": "/vendor/three/addons/"
   }}
 }}</script>
 <script type="module">
@@ -993,6 +993,36 @@ pub struct LiveState {
 /// Serves a live viewer on `127.0.0.1:port` in a background thread. The browser
 /// polls `/state` for the current `LiveState` and `/` for the viewer page.
 /// `state` is updated by the simulation loop as it runs.
+/// RFC-0041: three.js (r160, MIT — see `reference/vendor/three/LICENSE`) and the
+/// viewer's addons, embedded and served locally. The viewer must not import
+/// three.js from a CDN: an unreachable import map leaves the tab pending (a
+/// hang) and makes the page depend on the network.
+fn vendor_file(path: &str) -> Option<&'static str> {
+    Some(match path {
+        "/vendor/three/three.module.js" => include_str!("../vendor/three/three.module.js"),
+        "/vendor/three/addons/controls/OrbitControls.js" => {
+            include_str!("../vendor/three/addons/controls/OrbitControls.js")
+        }
+        "/vendor/three/addons/geometries/ConvexGeometry.js" => {
+            include_str!("../vendor/three/addons/geometries/ConvexGeometry.js")
+        }
+        "/vendor/three/addons/loaders/SVGLoader.js" => {
+            include_str!("../vendor/three/addons/loaders/SVGLoader.js")
+        }
+        "/vendor/three/addons/objects/MarchingCubes.js" => {
+            include_str!("../vendor/three/addons/objects/MarchingCubes.js")
+        }
+        "/vendor/three/addons/renderers/CSS2DRenderer.js" => {
+            include_str!("../vendor/three/addons/renderers/CSS2DRenderer.js")
+        }
+        "/vendor/three/addons/math/ConvexHull.js" => {
+            include_str!("../vendor/three/addons/math/ConvexHull.js")
+        }
+        "/vendor/three/LICENSE" => include_str!("../vendor/three/LICENSE"),
+        _ => return None,
+    })
+}
+
 pub fn serve_live(
     state: Arc<RwLock<LiveState>>,
     reset: Arc<std::sync::atomic::AtomicBool>,
@@ -1031,6 +1061,12 @@ fn handle_connection(
 
     let (status, content_type, body) = if path == "/" {
         ("200 OK", "text/html", page.as_bytes().to_vec())
+    } else if let Some(asset) = vendor_file(&path) {
+        (
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            asset.as_bytes().to_vec(),
+        )
     } else if path == "/state" {
         let live = state.read().unwrap();
         let body = live_state_json(&live);
@@ -1108,8 +1144,8 @@ fn live_viewer_html() -> String {
 <button id="pse" style="position:fixed;right:110px;bottom:8px;z-index:11;background:#3a4a6b;border:none;color:#fff;padding:6px 12px;cursor:pointer;border-radius:4px;font-family:monospace">⏸ Pause</button>
 <button id="lbl" style="position:fixed;right:210px;bottom:8px;z-index:11;background:#3a4a6b;border:none;color:#fff;padding:6px 12px;cursor:pointer;border-radius:4px;font-family:monospace">🏷 Labels</button>
 <script type="importmap">{"imports":{
-  "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
-  "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
+  "three":"/vendor/three/three.module.js",
+  "three/addons/":"/vendor/three/addons/"
 }}</script>
 <script type="module">
 import * as THREE from 'three';
@@ -1365,10 +1401,14 @@ function addBonds(frame){
     scene.add(m);decals.push(m);
   }
 }
+let alive=true;
+addEventListener('pagehide',()=>{alive=false;});
+addEventListener('beforeunload',()=>{alive=false;});
 async function poll(){
-  try{const r=await fetch('/state');const f=await r.json();apply(f);conn.style.display='none';}
+  if(!alive) return;
+  try{const r=await fetch('/state',{cache:'no-store'});const f=await r.json();apply(f);conn.style.display='none';}
   catch(e){conn.style.display='block';conn.textContent='waiting for runtime…';}
-  setTimeout(poll,60);
+  if(alive) setTimeout(poll,60);
 }
 document.getElementById('rst').onclick=()=>{fetch('/reset').catch(()=>{});};
 let paused=false;
@@ -1400,6 +1440,28 @@ mod tests {
         scene.insert(EntityId(1), e);
         scene.sim_time = 4.0;
         scene
+    }
+
+    /// RFC-0041: the viewer must be self-contained (no CDN import map), or an
+    /// unreachable network leaves the tab pending (the "hang on close").
+    #[test]
+    fn live_viewer_is_self_contained() {
+        let html = live_viewer_html();
+        assert!(!html.contains("unpkg.com"), "viewer must not load a CDN");
+        assert!(!html.contains("https://") || !html.contains("three.module.js"));
+        assert!(html.contains("/vendor/three/three.module.js"));
+        assert!(html.contains("/vendor/three/addons/"));
+        for f in [
+            "/vendor/three/three.module.js",
+            "/vendor/three/addons/controls/OrbitControls.js",
+            "/vendor/three/addons/geometries/ConvexGeometry.js",
+            "/vendor/three/addons/loaders/SVGLoader.js",
+            "/vendor/three/addons/objects/MarchingCubes.js",
+            "/vendor/three/addons/renderers/CSS2DRenderer.js",
+            "/vendor/three/addons/math/ConvexHull.js",
+        ] {
+            assert!(vendor_file(f).is_some(), "missing vendored asset {f}");
+        }
     }
 
     #[test]
