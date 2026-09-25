@@ -2,9 +2,9 @@
 
 [English](lang-usage.md)
 
-PWE 语言是 `pwe-reference` 的文本前端（`src/lang.rs`，语法文件 `src/lang.pest`）。
-源程序声明世界模型和系统，编译为低层 EIR，然后跨后端执行——解释器和 CPU JIT
-在每一步都必须产生字节级一致的写入。
+PWE 语言是 `pwe-reference` 的文本前端（`src/lang.rs`，语法文件
+`src/lang.pest`）。源程序声明世界模型与系统，编译为低层 EIR，然后**跨后端**
+执行——解释器与 CPU JIT 在每一步都必须产生字节级一致的写入。
 
 ```
 PWE 源码 ──parse──▶ WorldModel + 系统声明 ──lower──▶ EIR ──interpret/JIT──▶ 写入
@@ -17,15 +17,143 @@ rt.step_cross()?;                                          // interpreter == JIT
 rt.step_cross_n(30)?;                                      // 一次执行 30 步
 ```
 
-在 shell 里，`pwe` 命令行工具（crate `pwe-cli`）可编译、运行、演示程序：
-
 ```sh
-pwe compile scene.pwe -o scene.pweb   # .pwe 源码 → 已校验的 .pweb 二进制
-pwe run     scene.pweb --steps 600    # 运行二进制，每步跨后端断言
+pwe compile scene.pwe -o scene.pweb   # .pwe 源码 → 已校验的 .pweb 工件
+pwe run     scene.pweb --steps 600    # 运行工件（每步跨后端断言）
 pwe present scene.pweb --port 8000    # 浏览器实时 3D 查看器
 ```
 
-## 程序结构
+---
+
+# 第一部分 — 语言详解
+
+## 1. 关键字、词法规则与语法
+
+### 1.1 词法规则
+
+| 词法单元 | 形式 | 说明 |
+| --- | --- | --- |
+| 注释 | `# …` 或 `// …` | 到行尾；在任意位置被跳过 |
+| `ident` | `[A-Za-z_][A-Za-z0-9_]*` | 实体、槽、参数、函数、形状的名字 |
+| `number` | `-? 数字 ("." 数字)? (("e"\|"E") "-"? 数字)?` | f64 字面量 |
+| `value` | `number` 或 `number "/" number` | 字面量**或比值**（`dt = 1/60`） |
+| `boolean` | `true` \| `false` | |
+| `string` | `"…"`（无转义） | 标题、SVG 路径数据 |
+| `color` | `0x` 十六进制 | `0xRRGGBB` |
+| `unit` | `[` 单位 `]` | 基本单位 `m kg s A K mol cd`，算符 `*` `/` `^`——如 `[m/s^2]`、`[1/s]` |
+| `slot` | `s` 数字 | 按位置引用自身状态槽（`s0`、`s1`…）；保留 |
+| 常量 | `t`、`pi`、`e` | 时钟（秒）、π、自然常数 |
+
+空白不影响解析，语句/参数之间的 `;` **可选**（语法为 `";"?`），因此
+`dt = 0.1; x = 1.0` 与 `dt = 0.1` 换行 `x = 1.0` 都能解析。单位必须带方括号，
+以免与 `s[0]` 混淆。`let` 不得遮蔽 `t`/`pi`/`e`/`sN`（detail 67）。
+
+### 1.2 关键字
+
+真正的语法 token（不能用作标识符）：
+
+* **段**：`world`、`funcs`、`systems`
+* **world**：`gravity`、`title`、`params`、`chan`、`value`、`entity`、`field`、
+  `width`、`height`、`depth`、`dx`、`shape`、`part`
+* **实体字段**：`position`、`velocity`、`state`、`vec`、`mass`、`dynamic`、
+  `nbody`、`parent`、`restitution`、`friction`、`box`、`sphere`、`hull`、
+  `camera`、`color`、`size`、`opacity`、`glow`、`label`
+* **自定义形状**：`point`、`sphere`、`box`、`capsule`、`svg`、`hull`、`poly`、
+  `at`、`depth`、`scale`、`faces`
+* **函数 / 控制**：`return`、`let`、`repeat`、`until`、`while`、`for`、`in`、
+  `break`、`continue`、`if`
+* **逻辑 / 布尔**：`and`、`or`、`not`（以及 `&&`、`||`、`!`）、`true`、`false`
+* **原子**：`pi`、`e`、`t`
+
+**上下文名（非保留）**：系统*种类*（`update`、`rk4`、`nbody`、`diffuse`、
+`wave`…）与系统*参数*（`on`、`when`、`every`、`substeps`、`dt`、`field`、
+`prev`、`velocity`、`rate`、`iters`、`source`、`scale`、`damping`、`absorb`、
+`mem`、`into`…）都是普通标识符、在构建期匹配——未知种类报 detail 49。
+`import` / `as` / `from` 由模块加载器处理；内建函数名（`sin`、`min`、`if`、
+`random`、`emit`…）是普通调用、在降级期特判。
+
+### 1.3 语法（EBNF）
+
+```ebnf
+program        = world_section funcs_section? systems_section?
+
+world_section  = "world" "{" world_item* "}"
+world_item     = gravity_stmt | title_stmt | params_stmt | chan_stmt
+               | entity_stmt | field_stmt | shape_stmt
+gravity_stmt   = "gravity" "=" vec3
+title_stmt     = "title" "=" string
+params_stmt    = "params" "{" (ident "=" value unit? ";")* "}"
+chan_stmt      = "chan" ident "{" "value" "=" value ";" "}"
+field_stmt     = "field" ident "{" param* "}"
+
+entity_stmt    = "entity" ident "{" entity_field* "}"
+entity_field   = position | velocity | state | mass | dynamic | nbody | parent
+               | restitution | friction | box | sphere | hull | camera | color
+               | shape | size | opacity | glow | label
+state_field    = "state" "=" ( "(" state_item ("," state_item)* ")" | vecN )
+state_item     = "vec" digits ident | ident "=" value unit? | value unit?
+shape_stmt     = "shape" ident "{" shape_part* "}"
+shape_part     = "part" shape_kind "=" part_value opt* ";"
+part_value     = string | hull_list | vec3 | value
+opt            = "at" vec3 | "depth" value | "scale" value | "faces" faces_list
+shape_kind     = "point"|"sphere"|"box"|"capsule"|"svg"|"hull"|"poly"
+
+funcs_section  = "funcs" "{" func_def* "}"
+func_def       = ident "(" (ident ("," ident)*)? ")" "{" func_body "}"
+func_body      = (func_item ";")+ "return" expr | expr
+func_item      = let_stmt | repeat_stmt | for_stmt
+
+systems_section= "systems" "{" system* "}"
+system         = ident "{" param* "}"
+param          = let_stmt | repeat_stmt | for_stmt | slot_lhs "=" expr | call
+               | ident "=" ( vecN | expr | ident ) unit? ";"
+slot_lhs       = "s" "[" expr "]"
+let_stmt       = "let" ident "=" expr
+repeat_stmt    = "repeat" number (("until"|"while") "(" expr ")")? "{" loop_item* "}"
+for_stmt       = "for" ident "in" number ".." number "{" loop_item* "}"
+loop_item      = let_stmt | repeat_stmt | for_stmt | break_stmt | continue_stmt
+break_stmt     = "break" ("if" "(" expr ")")?
+continue_stmt  = "continue" ("if" "(" expr ")")?
+
+expr           = logical_or
+logical_or     = logical_and (("or" |"||") logical_and)*
+logical_and    = comparison  (("and"|"&&") comparison)*
+comparison     = additive    (("<"|"<="|">"|">="|"=="|"!=") additive)*
+additive       = term        (("+"|"-") term)*
+term           = factor      (("*"|"/"|"%") factor)*
+factor         = unary | number | call | "(" expr ")" | slot | slot_dyn
+               | entity_ref | "t" | constant | namespaced | state_name
+unary          = "-" factor | ("not"|"!") factor
+call           = func_name "(" (expr ("," expr)*)? ")"
+func_name      = ident ("." ident)*
+slot           = "s" digits
+slot_dyn       = "s" "[" expr "]"
+entity_ref     = "@" ident "." (slot | prop_path)
+prop_path      = ident ("." (ident | digits))*
+namespaced     = ident "." ident ("." ident)*
+
+vec3           = "(" value "," value "," value ")"
+vecN           = "(" value ("," value)* ")"
+hull_list      = "[" vec3 ("," vec3)* "]"
+faces_list     = "[" face ("," face)* "]"
+face           = "[" digits ("," digits)* "]"
+unit           = "[" unit_atom (("*"|"/") unit_atom)* "]"
+unit_atom      = ("mol"|"kg"|"cd"|"K"|"A"|"s"|"m") ("^" "-"? digits)? | digits
+string         = '"' (any - '"')* '"'
+number         = "-"? digits ("." digits)? (("e"|"E") "-"? digits)?
+value          = number ("/" number)?
+boolean        = "true" | "false"
+color          = "0x" hex+
+ident          = [A-Za-z_][A-Za-z0-9_]*
+```
+
+### 1.4 运算符优先级
+
+由高到低：一元 `-` 与 `not`/`!` → `* / %` → `+ -` → 比较
+`< <= > >= == !=` → `and`/`&&` → `or`/`||`。比较与逻辑算符结果为 `1.0`/`0.0`；
+非零操作数即为真。`not` 绑定其后的因子——取反比较请写 `not (x > 0)`。
+
+## 2. 程序结构
 
 ```pwe
 world {
@@ -39,77 +167,131 @@ systems {
 }
 ```
 
-注释：`#` 或 `//` 到行尾。空白符不影响解析。
+注释从 `#` 或 `//` 到行尾，作为空白在任意位置被跳过（包括规则块内）。其余空白
+不影响解析。一个 `.pwe` 文件同时是一个**模块**（见 §4.8）。
 
-## world 段
+## 3. `world` — 世界模型
+
+世界模型描述*世界是什么*（实体、场、参数），不依赖任何 CPU/GPU/OS。
 
 | 语句 | 含义 |
 | --- | --- |
 | `gravity = (x, y, z)` | 全局均匀重力向量。 |
-| `chan <name> { value = v }` | 通道实体；最新值保存在 `state[0]`。 |
-| `field <name> { width = w; height = h; dx = d }` | 确定性标量网格场（PDE 基底）：规则经 `fget`/`fset`/`flap` 读写单元。 |
-| `params { G = 1.0; k = 3.0 }` | 运行时可设置的模型参数；规则按名读取，可用 `pwe run --param G=2` 覆盖（同一工件、不同配置）。 |
-| `import "pkg/mod"` | Python 式模块导入：加载 `pkg/mod.pwe`（目录则加载其 `__init__.pwe` 包），并对其**函数与参数**做命名空间限定（`mod.f(...)`、`mod.G`）。`import "mod" as m` 绑定 `m`；`from "mod" import f, G` 直接绑定裸名。实体 / 系统 / 场合并进同一个世界（重名报错）。 |
+| `params { G = 1.0; k = 3.0 }` | 运行时可设置的模型参数；规则按名读取，同一工件可用 `--param G=2` 覆盖。 |
 | `title = "..."` | 运行标题，`pwe present` 展示。 |
-| `entity <name> { fields }` | 一个物体。字段见下表。 |
+| `entity <name> { fields }` | 一个物体（§3.1）。 |
+| `shape <name> { part … }` | 用户自定义**形状**（§3.2）。 |
+| `chan <name> { value = v }` | 通道实体；最新值保存在 `state[0]`。 |
+| `field <name> { width = w; height = h; dx = d }` | 确定性标量网格场——PDE 基底（§3.3）。 |
+| `import "pkg/mod"` | Python 式模块导入（§4.8）。 |
 
-### 实体字段
+### 3.1 实体字段
+
+实体 id 按声明顺序从 1 开始；通道排在实体之后。
 
 | 字段 | 含义 |
 | --- | --- |
 | `position = (x, y, z)` | 初始位置。 |
 | `velocity = (x, y, z)` | 初始线速度。 |
-| `state = (v0, v1, …)` | 通用状态槽（位置式）。每实体最多 16 个槽（`s0…s15`）。 |
-| `state = (x = 0, y = 0, …)` | 命名状态槽；规则里按名赋值，用 `@self.x` 读取。同一列表里允许命名与位置式混用。 |
-| `state = (vec3 pos, …)` | 向量元素占用 N 个连续槽，命名为 `pos`、`pos.0` … `pos.{N-1}`（零初始化）；`pos` 读分量 0，`@self.state.pos.1` 读分量 1，`s[i]` 动态索引。 |
-| `mass = v` | 质量（驱动 `nbody`；查看器按它推导视觉尺寸）。 |
-| `dynamic = false` | 静态物体（默认是动态的）。 |
-| `nbody = false` | 把该物体排除出 `nbody` 系统。 |
-| `restitution = v` | 接触弹性。 |
-| `friction = v` | 接触摩擦。 |
-| `box = (dx, dy, dz)` | 盒形碰撞体。 |
-| `sphere = r` | 球形碰撞体。 |
-| `hull = [(x,y,z), …]` | 凸包碰撞体；至少 4 个点。 |
+| `state = (v0, v1, …)` | 通用状态槽（位置式）。每实体最多 16 槽（`s0…s15`）。 |
+| `state = (x = 0, y = 0, …)` | 命名状态槽；规则里按名赋值、`@self.x` 读取，可与位置式混用。 |
+| `state = (vec3 pos, …)` | 向量元素占 N 个连续槽，命名 `pos`、`pos.0`…`pos.{N-1}`；`pos` 读分量 0、`@self.state.pos.1` 读分量 1、`s[i]` 动态索引。 |
+| `mass = v` | 质量（驱动 `nbody`；查看器据此推导视觉尺寸）。 |
+| `dynamic = false` | 静态物体（默认动态）。 |
+| `nbody = false` | 排除出 `nbody` 系统。 |
+| `restitution = v` / `friction = v` | 接触弹性 / 切向摩擦。 |
+| `box = (dx,dy,dz)` / `sphere = r` / `hull = [(x,y,z), …]` | 碰撞体（凸包至少 4 点）。 |
 | `camera = true` | 标记为查看器相机（不参与仿真）。 |
-| `color = 0xRRGGBB` | 3D 查看器的呈现颜色。 |
-| `shape = point \| sphere \| box` | 显示形状（覆盖碰撞体推导的形状）。 |
-| `size = v \| (dx, dy, dz)` | 显示尺寸：标记直径 / 球半径 / 盒边长，或按轴的盒尺寸（细长连杆）。 |
-| `opacity = v` | 显示不透明度 `[0, 1]`。 |
-| `glow = v` | 自发光强度（0=哑光，>0=自发光）。 |
-| `label = false` | 隐藏浮动名称标签（默认 `true`）；查看器的 🏷 按钮可整体显示/隐藏。 |
 
-实体 id 按声明顺序从 1 开始；通道 id 排在实体之后。
+**仅呈现字段**（不影响仿真状态、确定性或状态哈希）：
 
-## 系统段
+| 字段 | 含义 |
+| --- | --- |
+| `color = 0xRRGGBB` | 呈现颜色。 |
+| `shape = point \| sphere \| box \| capsule \| <自定义>` | 显示形状（覆盖碰撞体推导；`<自定义>` 引用 §3.2 的形状）。 |
+| `size = v \| (dx,dy,dz)` | 标记直径 / 球半径 / 盒边长，或按轴盒尺寸；对自定义形状则整体缩放。 |
+| `opacity = v` | 不透明度 `[0, 1]`。 |
+| `glow = v` | 自发光强度（0=哑光）。 |
+| `label = false` | 隐藏浮动名称标签（默认 `true`）。 |
+
+### 3.2 自定义形状（基本体、多面体、SVG）
+
+world 可声明具名**自定义形状**，实体按名引用。形状是一组带偏移的部件。
+
+```pwe
+world {
+  shape drone {                       # 组合基本体
+    part capsule = (0.06, 0.30, 0.06);
+    part sphere  = 0.09 at (0, 0.20, 0);
+    part box     = (0.54, 0.02, 0.02) at (0, 0.20, 0);
+  }
+  shape octa {                        # 由顶点定义的凸多面体
+    part hull = [(0,0.9,0), (0.9,0,0), (0,-0.9,0), (-0.9,0,0), (0,0,0.9), (0,0,-0.9)];
+  }
+  shape gem {                         # 任意多面体：顶点 + 面
+    part poly = [(0,0.9,0), (0.7,0,0.7), (-0.7,0,0.7), (-0.7,0,-0.7), (0.7,0,-0.7), (0,-0.9,0)]
+      faces = [[0,1,2],[0,2,3],[0,3,4],[0,4,1],[5,1,4],[5,4,3],[5,3,2],[5,2,1]];
+  }
+  shape star {                        # 挤出的 SVG 路径
+    part svg = "M 0,-1 L 0.224,-0.309 L 0.951,-0.309 L 0.363,0.118 L 0.588,0.809 L 0,0.382 L -0.588,0.809 L -0.363,0.118 L -0.951,-0.309 Z" depth 0.22 scale 0.8;
+  }
+  entity craft { state = (x = 0.0, y = 0.0, z = 0.0) shape = drone; color = 0x4AC3FF }
+}
+```
+
+`part <kind> = <params> [at (x,y,z)] [scale s]`：
+
+* `sphere = r`、`box = (dx,dy,dz)`、`capsule = (底半径, 长度, 顶半径)`——
+  球 / 盒 / 平滑（可渐变）回转体；
+* `hull = [(x,y,z), …]`——由顶点定义的**凸多面体**；
+* `poly = [(x,y,z), …] faces = [[i,j,k,…], …]`——显式顶点 + 面索引的**任意
+  多面体**（可非凸；查看器对面做三角化）；
+* `svg = "<path d>" depth <d>`——SVG 路径沿 Z 挤出。
+
+`at` 在实体局部坐标系中偏移该部件；`scale` 设定该部件尺寸（幅度）。实体可用
+`size = s` 缩放整个形状。自定义形状**仅用于呈现**。
+
+### 3.3 网格场——4D 连续场基底
+
+`field <name> { width = w; height = h; dx = d }`（2D）或加 `depth = d`（3D）。
+单元是确定性世界状态（可快照/重放）。空间是 3D——加上仿真时钟，场即 4D 基底
+（3D 空间 + 时间）。
+
+* `fget(f, i, j)` / `fget(f, i, j, k)`——单元值；能看到同一步内的写入。
+* `fset(f, i, j, v)` / `fset(f, i, j, k, v)`——写单元（裸调用语句）。
+* `flap(f, i, j)` / `flap(f, i, j, k)`——零通量离散拉普拉斯，按 `1/dx²` 缩放
+  （2D 五点、3D 七点）。
+* 未知场名读到 `0`（未解析引用约定）。
+
+## 4. 系统——行为
+
+### 4.1 内建系统种类
 
 | 系统 | 参数 | 含义 |
 | --- | --- | --- |
-| `gravity` | `gravity_y`, `dt` | 对动态物体施加均匀重力。 |
-| `integrate` | `dt` | 把速度积分为位置。 |
+| `gravity` | `gravity_y`, `dt` | 对动态物体施加重力。 |
+| `integrate` | `dt` | 速度积分为位置。 |
 | `damping` | `factor` | 每步缩放速度。 |
-| `ground_contact` | `restitution` | 解算与地面平面的接触。 |
-| `wall` | `x`, `z`, `y_min?`, `restitution?` | 有界域：`|x|,|z| ≤ limit`，撞墙时速度按弹性反射。 |
-| `force` | `ax`, `ay`, `az`, `dt` | 对动态物体施加恒定加速度。 |
-| `linear` | `slots`, `dt`, `row0 = (a0, …, c)` | 线性动力系统：`s_N' = Σ_j a_j·s_j + c`。每行 `rowN` 有 `slots + 1` 项（系数 + 常数）。 |
-| `nbody` | `G`, `dt` | 动态物体间的平方反比力：`G > 0` 引力，`G < 0` 库仑斥力。 |
-| `send` | `chan = name`, `value = expr` | 每个动态物体求值 `value` 并写入通道实体。 |
-| `recv` | `chan = name`, `slot = n` | 把通道最新值读入每个动态物体的 `sN`。 |
-| `update` | `on = name?`, `when = expr?`, `every = n?`, `substeps = n?`, `dt`, `let …`, 槽规则 | 用户自定义非线性动力系统（显式欧拉，见下）。 |
-| `rk4` | `on = name?`, `when = expr?`, `every = n?`, `dt`, `let …`, 槽规则 | 与 `update` 相同的规则，但用经典 **4 阶龙格-库塔** 方法积分——在相同 `dt` 下对振荡器与非线性 ODE 精度高得多。 |
-| `invariant` | `on = name?`, `expr`, `let …` | 每步断言：系统跑完后 `expr` 对被检查实体必须非零；违反不变式时该步报错（detail 69），且在任何写入应用之前失败。 |
-| `watch` | `on = name?`, `expr`, `mem = slot`, `into = slot` | 零穿越检测：被监测表达式在相邻两步之间变号时置 1；上一值存于 `mem` 槽（世界状态），标志写入 `into`。 |
-| `diffuse` | `field = name`, `rate` | 网格场的显式扩散：每步 `T += rate·∇²T`，使用 Jacobi 扫描（零通量模板下总严格守恒）。 |
-| `poisson` | `field = name`, `source = name?`, `iters`, `scale = s?` | 对 `∇²φ = ρ·scale` 做 Gauss–Seidel 松弛——每步 `iters` 次扫描，边界单元固定。 |
-| `wave` | `field = name`, `prev = name`, `velocity = c`, `dt`, `damping = s?` | 二阶蛙跳 `u_tt = c²∇²u`，跨越两个场（`prev` 保存 `u(t−h)`）；Courant 数 2D `c·h/dx ≤ 1/√2`、3D `≤ 1/√3`。`damping`（默认 `1.0`，无损）缩放时间项；`absorb` + `absorb_width` 在边界加渐变海绵层，吸收外传波而非反射。 |
+| `ground_contact` | `restitution` | 解算与地面接触。 |
+| `wall` | `x`, `z`, `y_min?`, `restitution?` | 有界域；撞墙反射。 |
+| `force` | `ax`, `ay`, `az`, `dt` | 恒定加速度。 |
+| `linear` | `slots`, `dt`, `row0 = (a0, …, c)` | 线性系统 `s_N' = Σ a_j·s_j + c`；每行 `slots+1` 项。 |
+| `nbody` | `G`, `dt` | 动态物体间平方反比力（`G>0` 引力，`G<0` 斥力）。 |
+| `send` / `recv` | `chan`, `value` / `slot` | Go 式通道收发。 |
+| `update` / `rk4` | 见 §4.2 | 用户自定义 ODE 规则（欧拉 / RK4）。 |
+| `invariant` | `on?`, `expr`, `let …` | 每步断言（§4.3）。 |
+| `watch` | `on?`, `expr`, `mem`, `into` | 零穿越检测（§4.4）。 |
+| `diffuse` | `field`, `rate` | 显式扩散 `T += rate·∇²T`（Jacobi，严格守恒）。 |
+| `poisson` | `field`, `source?`, `iters`, `scale?` | 对 `∇²φ = ρ·scale` 做 Gauss–Seidel 松弛。 |
+| `wave` | `field`, `prev`, `velocity`, `dt`, `damping?`, `absorb?`, `absorb_width?` | 二阶蛙跳波动方程（§4.5）。 |
 
-未知系统种类报错（detail code 49）。
+未知系统种类报错（detail 49）。
 
-## update / rk4 系统
+### 4.2 `update` / `rk4`
 
-两种系统都接受形如 `slot = expr` 的规则。`update` 含义是 **`slot += dt · expr(state)`**
-（显式欧拉）；`rk4` 每步把同一导数求 4 次再合并（Runge-Kutta 4），得到 4 阶精度——
-相同 `dt` 下漂移小得多。所有读取先发生——自身状态槽、跨实体引用、属性引用每步读一次，
-因此同一步内各条规则之间是同时更新的（规则顺序不影响结果）。
+两者都接受 `slot = expr`。`update` 含义是 **`slot += dt · expr(state)`**（显式
+欧拉）；`rk4` 每步把同一导数求 4 次再合并（4 阶精度）。所有读取先发生——自身槽、
+跨实体引用、属性每步读一次，因此同一步内规则**同时更新**。
 
 ```pwe
 systems {
@@ -121,56 +303,53 @@ systems {
 }
 ```
 
-* `on = <name>` 把规则限定在一个实体上（默认作用于所有动态物体）。
-* `let name = expr` 在槽规则运行前先算好一个可复用的局部值。
-* `when = expr` 门控每条规则的写入：为 0 时状态不动——状态机语义
-  （`when = mode == 1`）。
-* `every = n` 仅当 `step % n == 0` 时运行该系统（调度；步数经 `STEP` opcode
-  读取，确定性）。
-* `substeps = n`（仅 update）把积分重复 n 次、每次 `dt/n`；每个子步重读状态并
-  重算 `let` 局部值，更细的欧拉更贴近解析解。跨实体引用与属性每步采样一次。
-* 规则左侧（LHS）是位置式槽 `sN`，或该实体 `state = (x = 0, …)` 布局里的命名槽；
-  规则按实体逐个解析。
-* 引用里出现未知实体名时不产生耦合；解析不到的槽读到 `0`。
+* `on = <name>`：限定单一实体（默认所有动态物体）。
+* `let name = expr`：规则前先算的可复用局部值。
+* `when = expr`：门控所有写入（为 0 时状态不动）——状态机语义。
+* `every = n`：仅当 `step % n == 0` 运行。
+* `substeps = n`：以 `dt/n` 重复积分 n 次。
+* 左侧为 `sN` 或实体 `state = (…)` 布局中的命名槽。
+* 注意 `slot = expr` 是**积分**；要"赋值"用 `slot = (target - slot)`（于是
+  `slot += dt·(target-slot) = target`）。
 
-## invariant 系统
+### 4.3 `invariant`——断言
+
+在**系统跑完后**逐实体求值，必须非零；为零（或 NaN）时该步失败（detail 69），
+且在任何写入应用之前失败——场景保持本步之前的状态。
+
+```pwe
+invariant { on = reactor; expr = abs((na + naoh) - @self.state.total) < 0.001 }
+```
+
+### 4.4 `watch`——零穿越检测
+
+每步把 `expr` 与上一步的值（存于 `mem` 状态槽——持久世界状态）比较，向 `into`
+写 0/1 标志：严格变号时为 1。实体自身规则读取该标志并反应（反弹、切换模式）。
+
+```pwe
+watch { on = ball; expr = x; mem = 5; into = 6 }
+```
+
+### 4.5 连续场求解器（`diffuse` / `poisson` / `wave`）
 
 ```pwe
 systems {
-    update { on = reactor; dt = 0.0005
-        let k = 3.0 * exp(-900.0 / temp)
-        na = -k * na * water
-        naoh = k * na * water
-    }
-    invariant { on = reactor; expr = abs((na + naoh) - @self.state.total) < 0.001 }
+  diffuse { field = heat; rate = 0.2 }                          # T += 0.2·∇²T
+  poisson { field = phi; source = rho; iters = 20 }             # ∇²φ = ρ
+  wave    { field = u; prev = um; velocity = 1.0; dt = 0.5 }    # u_tt = c²∇²u
 }
 ```
 
-表达式在**系统跑完后**逐实体求值，必须非零。为零（或 NaN）时该步失败——
-`step_*` 返回错误（为零时 detail 69；NaN 走 EIR 自身的比较拒绝）——**且在任何
-写入应用之前失败**，场景保持本步之前的状态，绝不静默越过坏状态。
+* `diffuse`——每步一次 **Jacobi** 扫描；零通量模板下总量严格守恒。稳定条件
+  `rate ≤ 1/4`（2D）/ `≤ 1/6`（3D）。
+* `poisson`——每步 `iters` 次就地 Gauss–Seidel 扫描；边界单元为固定电势。
+* `wave`——跨两个场的蛙跳（`prev` = `u(t−h)`）；Courant `c·h/dx ≤ 1/√2`（2D）/
+  `≤ 1/√3`（3D）。`damping`（默认 `1.0`，无损）缩放时间项；`absorb` +
+  `absorb_width` 在边界加渐变海绵层，吸收外传波而非反射。
+* `depth > 1` 时按 3D 迭代；每步只跑一次；确定性；降级为既有场指令
+  （解释器 = JIT）。
 
-* `on = <name>` 把检查限定在一个实体上（默认作用于所有动态物体）。
-* 与 `update` 一样支持 `let` 局部值。
-* 每个 `invariant` 系统拥有自己的判定字段，多个可共存。
-
-## watch 系统
-
-```pwe
-systems {
-    update { on = ball; dt = 0.01
-        x = vx
-    }
-    watch { on = ball; expr = x; mem = 5; into = 6 }
-}
-```
-
-每步 watch 在**系统跑完后**求值 `expr`，与上一步的值（存于 `mem` 状态槽——
-普通世界状态，持久且确定）比较，向 `into` 写入 0/1 标志：值变号（严格零穿越；
-零内存是初始状态、不算穿越）时为 1。实体自身的规则读取该标志并反应——反弹、
-重初始化、切换模式。NaN 经 EIR 自身的比较拒绝使该步失败。
-
-## 表达式
+### 4.6 表达式
 
 | 形式 | 含义 |
 | --- | --- |
@@ -179,57 +358,108 @@ systems {
 | `@name.sN`, `@name.state.x`, `@name.x` | 另一实体的状态槽。 |
 | `@name.mass`, `@name.is_dynamic` | 另一实体的属性。 |
 | `@name.position.x/y/z`, `@name.velocity.x/y/z` | 另一实体的变换/速度。 |
-| `+ - * /`、一元 `-` | 算术（f64）。 |
-| `< <= > >= == !=` | 比较，结果为 `1.0` / `0.0`。 |
-| `and`/`&&`、`or`/`\|\|`、`not`/`!` | 逻辑连接词（非零即真），结果为 `1.0`/`0.0`。优先级：`not` > `and` > `or` > 比较。 |
+| `+ - * / %`、一元 `-` | 算术（f64）。 |
+| `< <= > >= == !=` | 比较 → `1.0` / `0.0`。 |
+| `and`/`&&`、`or`/`\|\|`、`not`/`!` | 逻辑连接词（非零为真）。优先级：`not` > `and` > `or` > 比较。 |
 | `pi`, `e` | 常数。 |
 | `t` | 全局仿真时钟（秒）。 |
 
-裸名字若既非局部值、槽，也非参数，则读到 `0.0`（未解析引用约定），不会令该步
-失败。系统参数（如 `dt`）**不在表达式作用域内**——请显式写出步长（例如
-`dt = 0.5` 时用 `x = (target - x) / 0.5` 把 `x` 吸附到 `target`）。
+裸名字若既非局部值、槽，也非参数则读到 `0.0`（未解析引用约定）。系统参数（如
+`dt`）**不在表达式作用域内**。
 
-### 内建函数
+**内建函数**——1 元：`sin cos exp ln sqrt abs floor ceil round sign log10 log2
+sinh cosh tanh asin acos atan`；2 元：`pow atan2 hypot min max`；另有
+`if(c,a,b)`、`random()`（有种子）、`noise()`（有种子正态）、`print(x)`、
+`emit(kind,payload)`、`last_event(kind)`。向量助手：`vlen`、`vdot`、`vdist`。
+空间查询：`neighbor_count(r)`、`nearest_dist()`、`neighbor_mean(slot,r)`、
+`nearest_dx/dy/dz()`（仅规则内）。
 
-* 1 元：`sin cos exp ln sqrt abs floor ceil round sign log10 log2 sinh cosh tanh asin acos atan`
-* 2 元：`pow atan2 hypot min max`
-* `if(c, a, b)`——选择；`random()`——有种子、可复现的 `[0,1)` 随机数；
-  `noise()`——有种子标准正态（Box-Muller，两次抽取），始终有限；
-  `print(x)`——记录 `x` 并原样返回，不改变世界状态；
-  `emit(kind, payload)`——发出一个有序事件，返回 `0.0`；
-  `last_event(kind)`——本步已发出的该 kind 最近事件的 payload（无则 0）——
-  语言内事件消费。事件每步清空（宿主经 `emitted_events()` 读本步事件）；
-  kind 是数值而非位模式。
+**计划事件**：`at(T)`——时间窗 `[t,t+dt)` 覆盖 `T` 的那一步为 1.0；
+`periodic(P[,phase])`——每周期一次。
 
-### 向量助手
+**单位**为可选、编译期检查（未标注为通配符、永不报错）：
 
-* `vlen(x, y, z)`——√(x²+y²+z²)；`vdot(x1,y1,z1, x2,y2,z2)`——分量点积；
-  `vdist(x1,y1,z1, x2,y2,z2)`——两点距离。纯算术（无新 opcode）；与
-  `neighbor_count`/`nearest_dist` 组合可表达空间模型。
+```pwe
+params { k = 4.0 [1/s^2] }
+entity e { state = (x = 1.0 [m], vx = 0.0 [m/s]) }
+update { on = e; dt = 0.1 [s]
+    vx = 0.0 - k * x     # 1/s^2 · m · s = m/s  与 vx 一致
+}
+```
 
-### 动态槽索引
+**动态槽**：`s[i]` 读 / `s[i] = expr` 写运行时索引处的槽（仅 `update`；`rk4`
+中被拒，detail 73）。**循环**：`repeat n { … }`、`for i in lo..hi { … }`、
+`break`/`continue`——降级期展开（≤1000 次迭代、≤10000 条语句）；循环体只能有
+`let`、嵌套循环与 `break`/`continue`。
 
-* `s[i]` 读运行时索引处的 State 槽；`s[i] = expr` 写它（`s[i] += dt·expr`，
-  与所有规则一致）。索引可为任意表达式（槽、局部值、算术）。无需额外状态
-  即可使用至 16 槽上限的数组。仅在 `update` 规则及其 `let` 块内有效；
-  `rk4` 中的动态 LHS 暂被拒绝（仅 update 支持）。
+### 4.7 内建（内在）函数——完整参考
 
-### 空间查询
+元数在编译期校验（不符 → detail 59）。未列出的调用名是用户自定义函数，从
+`funcs` 解析（存在性与元数在降级期校验）。**没有 `tan`**——请写 `sin(x)/cos(x)`。
 
-* `neighbor_count(r)`——与当前实体位置距离在 `r` 以内的其他实体个数。
-  参与者：所有非相机场景物体；位置取 `Transform` 或 `state[0..2]`（与查看器
-  约定一致）。确定性（按 id 排序扫描）。
-* `nearest_dist()`——到最近其他实体的距离；当前实体独存时为 `f64::MAX`。
-  确定性。
-* `neighbor_mean(slot, r)`——半径 `r` 内邻居的 State 槽 `slot` 的均值（无则 0）。
-  对槽 0/1/2 取位置均值、3/4/5 取速度均值——聚合/对齐（flocking）原语。
-* `nearest_dx/dy/dz()`——各轴上 `(最近邻居 − 自身)` 的偏移（独存为 0），
-  规则可据此靠近或远离最近体。
-* 仅在系统规则及其 `let` 块内有效——函数体内无效（无实体上下文；detail 70）。
+**初等数学**
 
-### 模块与包
+| 调用 | 结果 |
+| --- | --- |
+| `sin(x)`、`cos(x)` | 三角（弧度） |
+| `tanh(x)`、`sinh(x)`、`cosh(x)` | 双曲 |
+| `asin(x)`、`acos(x)`、`atan(x)` | 反三角（弧度） |
+| `atan2(y, x)` | 点 `(x, y)` 的辐角，范围 `(-π, π]` |
+| `exp(x)` | eˣ |
+| `ln(x)`、`log10(x)`、`log2(x)` | 自然 / 以 10 / 以 2 为底的对数 |
+| `sqrt(x)` | √x（负数为 NaN；单位指数减半） |
+| `pow(a, b)` | aᵇ |
+| `hypot(a, b)` | √(a²+b²) |
+| `abs(x)` | 绝对值 |
+| `floor(x)`、`ceil(x)`、`round(x)` | 向下 / 向上 / 远离零取整 |
+| `sign(x)` | −1、0 或 1 |
 
-每个 `.pwe` 文件是一个**模块**。`import` 遵循 Python 语义：
+**选择**
+
+| `if(c, a, b)` | `c ≠ 0` 取 `a`，否则取 `b`（两支都会求值，未用的一支被丢弃） |
+| `min(a, b)`、`max(a, b)` | 两值中的较小 / 较大者 |
+
+**随机（有种子、可复放）**
+
+| `random()` | `[0, 1)` 均匀抽取 |
+| `noise()` | 标准正态（Box–Muller，两次抽取）；始终有限 |
+
+**I/O 与事件**
+
+| `print(x)` | 记录 `x` 并原样返回（不改变世界状态） |
+| `emit(kind, payload)` | 追加一个有序事件 `(kind, payload)`，返回 `0.0` |
+| `last_event(kind)` | 本步已发出的该 `kind` 最近事件的 payload（无则 `0`）。事件每步清空；宿主经 `emitted_events()` 读取。`kind` 是数值而非位模式。 |
+
+**调度（步网格上精确一次）**
+
+| `at(T)` | 时间窗 `[t, t+dt)` 覆盖 `T` 的那一步为 `1.0`，否则 `0.0` |
+| `periodic(P[, phase])` | 每 `P` 秒一次为 `1.0`（可选相位偏移）；要求 `P > dt` |
+| `schedule(gate, delay, kind, payload)` | `gate ≠ 0` 时把 `(kind, payload)` 入队，`delay` 秒后触发——动态事件队列，确定性排空（属跨后端契约） |
+
+**空间查询**（仅在系统规则及其 `let` 块内有效；函数体内报 detail 70）
+
+| `neighbor_count(r)` | 自身 `r` 距离内其他物体个数 |
+| `nearest_dist()` | 到最近其他物体的距离（独存为 `f64::MAX`） |
+| `neighbor_mean(slot, r)` | `r` 内邻居的状态槽 `slot` 均值（无则 0） |
+| `nearest_dx()`、`nearest_dy()`、`nearest_dz()` | 各轴 `(最近 − 自身)` 偏移（独存为 0） |
+
+均为确定性（按 id 排序扫描）。位置取 `Transform`，否则 `state[0..2]`。
+
+**向量助手**（对标量分量的纯算术）
+
+| `vlen(x, y, z)` | √(x²+y²+z²) |
+| `vdot(x1,y1,z1, x2,y2,z2)` | x1·x2 + y1·y2 + z1·z2 |
+| `vdist(x1,y1,z1, x2,y2,z2)` | 两点距离 |
+
+**网格场访问**——第一个参数必须是字面量场名（2D 或 3D）
+
+| `fget(f, i, j)` / `fget(f, i, j, k)` | 读单元（能看到同一步内写入） |
+| `fset(f, i, j, v)` / `fset(f, i, j, k, v)` | 写单元（也可作裸语句；返回 `0.0`） |
+| `flap(f, i, j)` / `flap(f, i, j, k)` | 离散拉普拉斯（零通量，按 `1/dx²` 缩放） |
+
+### 4.8 模块与包
+
+每个 `.pwe` 文件是一个模块。`import` 遵循 Python：
 
 ```pwe
 import "physics"                 # physics.G、physics.thrust(m)
@@ -237,204 +467,84 @@ import "physics" as ph           # ph.G
 from "physics" import thrust     # thrust(m)（裸名）
 ```
 
-* **包**即目录：`import "shapes"` 加载 `shapes/__init__.pwe`；嵌套路径
-  `import "lib/kepler"` 加载 `lib/kepler.pwe`。
-* **函数与参数**按模块加命名空间：模块自身的规则先在其命名空间内解析裸名、
-  再回退到全局。实体、系统、场、通道属世界内容、扁平合并（跨模块实体/场重名
-  即编译错误）。
-* **循环导入可解析**：模块只加载一次并合并，且其成员按**每个别名**注册，因此
-  互相引用（`a` ↔ `b`）与多别名引用（`import "x" as alpha` 与 `import "x"` 并存）
-  都能解析。`--param` 会同时更新同一参数的所有别名。缺文件、实体/场重名会报错
-  （detail 76）。
+**包**即目录（`import "shapes"` → `shapes/__init__.pwe`）。函数与参数按模块加
+命名空间；模块自身规则先在其命名空间内解析裸名、再回退全局。实体 / 系统 / 场 /
+通道扁平合并（重名报错，detail 76）。循环导入可解析；成员按每个别名注册。
 
-### 计划事件（离散事件调度）
+## 5. 标准库（`std/`）
 
-计划事件**精确触发一次**：当某步的时间窗 `[t, t + dt)` 覆盖预定时刻时触发——
-确定性、无状态、与积分方法无关。
-
-* `at(T)`——到达时间 `T` 的那一步为 1.0，否则 0.0。
-* `periodic(P)` / `periodic(P, phase)`——每 `P` 秒触发一次（要求 `P > dt`）。
-* 与规则组合成脉冲、与 `emit`/`last_event` 组合成事件驱动反应。
-
-### 单位（渐进式量纲分析）
-
-单位为**可选、编译期检查**。未标注的值是通配符、永不报错，因此无单位模型不受影响。
-标注写在值后的方括号内：
-
-```pwe
-world {
-    params { k = 4.0 [1/s^2] }
-    entity e { state = (x = 1.0 [m], vx = 0.0 [m/s]) }
-}
-systems {
-    update { on = e; dt = 0.1 [s]
-        vx = 0.0 - k * x     # 1/s^2 · m · s = m/s  与 vx 一致
-        x = vx               # m/s · s = m          与 x 一致
-    }
-}
-```
-
-基本单位：`m`、`kg`、`s`、`A`、`K`、`mol`、`cd`；用 `*`、`/`、`^` 组合。
-每条规则按 `slot += dt · expr` 检查（`dt` 单位已声明则用之，否则默认秒）；
-不一致即编译错误（detail 77）。超越函数要求无量纲参数；`sqrt` 指数减半。
-
-### 网格场（PDE 基底）
-
-在 world 段用 `field <name> { width = w; height = h; dx = d }`（2D）或
-`field <name> { width = w; height = h; depth = d; dx = h }`（3D）声明；单元是
-确定性世界状态（像其他世界状态一样可快照/重放）。空间是 3D——加上仿真时钟，
-场即 4D 基底（3D 空间 + 时间）。
-
-* `fget(f, i, j)` / `fget(f, i, j, k)`——单元值（2D / 3D）；能看到同一步内的写入。
-* `fset(f, i, j, v)` / `fset(f, i, j, k, v)`——写单元（裸调用语句；返回 `0.0`）。
-* `flap(f, i, j)` / `flap(f, i, j, k)`——Field 的零通量模板离散拉普拉斯，按
-  `1/dx²` 缩放（2D 五点、3D 七点）——热/扩散/Poisson 规则组合的 PDE 算子。
-* 坐标可为任意表达式（槽、局部值、算术）。未知场名读到 `0`（已文档化的
-  未解析引用约定）。
-
-#### 连续场求解器（`diffuse` / `poisson`）
-
-无需手写 `fget`/`fset`/`flap` 循环，直接声明求解器：
-
-```pwe
-field heat { width = 32; height = 32; dx = 1.0 }
-field phi  { width = 32; height = 32; dx = 1.0 }
-field rho  { width = 32; height = 32; dx = 1.0 }
-field u    { width = 64; height = 64; dx = 1.0 }
-field um   { width = 64; height = 64; dx = 1.0 }
-systems {
-  diffuse { field = heat; rate = 0.2 }                       # T += 0.2·∇²T
-  poisson { field = phi; source = rho; iters = 20 }          # ∇²φ = ρ
-  wave    { field = u; prev = um; velocity = 1.0; dt = 0.5 } # u_tt = c²∇²u
-}
-```
-
-`diffuse` 先对全部单元及其拉普拉斯取自同一快照、再统一写回——即 Jacobi
-扫描，故注入总量严格守恒（2D 稳定条件 `rate ≤ 1/4`，3D `≤ 1/6`）。`poisson` 每步做
-`iters` 次就地 Gauss–Seidel 扫描；边界单元相当于固定电势（用 `fset` 设置）。
-`wave` 每步平移两个场（`prev ← u`、`u ← 2u − prev + (c·h/dx)²∇²u`），因此初始
-脉冲会分裂为球面（3D）或圆环（2D）波前。`depth > 1` 时所有求解器按 3D 迭代。
-每步**只跑一次**（仅首个动态实体发射
-扫描），确定性，且降级为既有场指令，解释器与 JIT 保持逐字节一致。
-
-### 标准库（`std/`）
-
-`std/` 是一组用于通用仿真的纯函数模块：
+纯函数模块：`math`、`particles`、`forces`、`mechanics`、`chemistry`（元素周期表
+1–118）、`thermal`、`acoustics`、`optics`、`em`、`robotics`、`units`、`control`。
+物理常量以参数给出（`chemistry.R_gas`、`thermal.sigma_sb`、`em.k_coulomb` 等），
+可用 `--param` 覆盖。完整 API 见 `std/README.md`。
 
 ```pwe
 import "std/forces"
 import "std/thermal"
-systems {
-  update { on = body; dt = 0.1
+update { on = body; dt = 0.1
     vx   = forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0) + 0.0
     temp = thermal.newton_cooling(temp, 293.15, 0.05) + 0.0
-  }
 }
 ```
 
-模块：`math`、`particles`、`forces`、`mechanics`、`chemistry`（元素周期表
-1–118）、`thermal`、`acoustics`、`optics`、`em`、`robotics`、`units`、`control`。
-物理常量以参数形式给出
-（`chemistry.R_gas`、`thermal.sigma_sb`、`em.k_coulomb` 等），可用
-`--param` 覆盖。完整 API 见 `std/README.md`，组合示例见
-`cli/examples/domains.pwe`。
+---
 
-### 用户自定义函数
+# 第二部分 — 用法
 
-```pwe
-funcs {
-    clamp(a, lo, hi) { if(s0 < s1, s1, if(s0 > s2, s2, s0)) }
-}
+```sh
+pwe compile <src.pwe> -o <out.pweb> [--param K=V]   # 解析 → 校验 → .pweb
+pwe run     <out.pweb> [--steps N] [--param K=V]... # 运行工件
+pwe present <out.pweb> [--port P] [--param K=V]...  # 实时 3D 查看器
 ```
 
-函数体是一个标量表达式；参数按槽引用——`s0`、`s1`、…（第 *i* 个参数是槽
-`s_i`）。函数降级为 EIR `CALL`，可从任何 `update` 规则和 `send` 的 value 调用。
-元数在编译期校验。
+* 工件是自描述容器（magic + version），内含已校验的规范 EIR 与模型源码；
+  `run`/`present` 执行编译后的 EIR。编译错误会带脱字符渲染出错源码行。
+* `--param K=V` 覆盖已声明的模型参数（校验合法；别名一起更新）。
+* 实时查看器轮询运行时并提供 **⟳ Restart**（重载初始场景并暂停在 t=0）、
+  **⏸ Pause / ▶ Resume**、**🏷 Labels**（整体显示/隐藏名称）。场渲染为等值面
+  （2D/3D）或彩色曲线（1D）；实体按其 `shape`/`size`/`color`/`opacity`/`glow`/
+  `label` 渲染。
+* 演示建议用 release：`cargo build --release -p pwe-cli`。
 
-### 分支控制
+---
 
-条件用逻辑连接词组合，用 `if` 分支：
+# 第三部分 — 示例：内容、运行、效果
 
-```pwe
-systems {
-    update { on = heater; dt = 0.1
-        # 带滞回的 bang-bang 恒温器（18–20 °C）
-        let on = if(temp < 18.0, 1.0, if(temp > 20.0, 0.0, h))
-        temp = on * 1.2 - (temp - 16.0) * 0.06
-        h = on - h
-    }
-}
+均在 `cli/examples/` 下。先编译，再 `run`/`present` `.pweb`。
+
+| 示例 | 展示 | 运行 | 效果 |
+| --- | --- | --- | --- |
+| `bounce.pwe` | `gravity` + `ground_contact` | `pwe run bounce.pweb --steps 300` | 小球下落、按弹性反弹；探针状态振荡。 |
+| `heat.pwe` | 2D 网格场 + 展开的 Gauss–Seidel `flap` 扫描 | `pwe run heat.pweb --steps 400` | 中心恒热扩散成稳态径向分布；中心温度趋于稳定。 |
+| `solar.pwe` | `nbody` + `update`（太阳 + 8 行星 + 月球） | `pwe present solar.pweb` | 发光太阳 + 绕行行星、轨道环、逐体图例。 |
+| `flock.pwe` | `neighbor_count` / `neighbor_mean` | `pwe present flock.pweb` | 大量个体聚合并对齐成鸟群。 |
+| `spring/spring.pwe` | 模块 + 参数 + 单位 + `at`/`periodic` | `pwe run spring.pweb --steps 400 --param k=16` | 受周期脉冲驱动的阻尼弹簧；改 `k` 改变频率。 |
+| `domains.pwe` | 组合 `std/forces`+`std/thermal`+`std/em`+`std/chemistry` | `pwe run domains.pweb --steps 200` | 阻尼弹簧上的探针同时向环境辐射降温。 |
+| `wave.pwe` | 1D `wave` 求解器、正弦驻波 | `pwe run wave.pweb --steps 40` | 探针在 −1 与 +1 间摆动（总量守恒为 0）；`present` 画出能量着色的正弦曲线。 |
+| `wave3d.pwe` | 3D `wave` + 海绵吸收 | `pwe run wave3d.pweb --steps 60` | 每个脉冲使总量升到 1 再衰减；`present` 显示半透明蓝色球面壳向外扩散并衰减。 |
+| `acoustics.pwe` | 2D 声场 + `std/acoustics` dB | `pwe run acoustics.pweb --steps 80` | 驱动单极子辐射；不同距离探针记录到达延迟与 dB 电平。 |
+| `robot.pwe` | 2 连杆臂、`std/robotics` 正运动学、渲染属性 | `pwe present robot.pweb` | 摆动的 2 连杆臂：细长盒连杆、球关节、红色末端工具。 |
+| `humanoid.pwe` | 62 部件：胶囊四肢、面部细节、手指 | `pwe present humanoid.pweb` | 一个行走的类人形象；默认关闭标签（按 🏷 显示）。 |
+| `shapes.pwe` | 自定义形状：组合体、多面体、SVG | `pwe present shapes.pweb` | 无人机（基本体）、挤出 SVG 星形、凸八面体、显式面宝石。 |
+
+快速上手：
+
+```sh
+cargo build --release -p pwe-cli
+./target/release/pwe compile cli/examples/wave3d.pwe -o wave3d.pweb
+./target/release/pwe present wave3d.pweb --port 8000   # 先 ⟳ Restart，再 ▶ Resume
 ```
 
-`not` 绑定到其后的因子：取反比较请写 `not (x > 0)`。
-
-### 循环
-
-`repeat n { … }`、`for i in lo..hi { … }` 和 `break`/`continue` 语句在降级期
-展开（有上界），因此仍符合 EIR 的直线式（SSA、无回边）契约：
-
-```pwe
-systems {
-    update { on = solver; dt = 1.0
-        let g = s1
-        repeat 100 until (abs(g * g - s0) < 1e-12) {
-            let g = (g + s0 / g) * 0.5       # 对 sqrt(s0) 的牛顿迭代
-        }
-        s1 = g - s1                          # 把收敛值写回
-    }
-}
+```
+# 观察：field u total=1.000000（n=3），随后被海绵吸收而衰减
+$ ./target/release/pwe run wave3d.pweb --steps 60
 ```
 
-* 循环体内只能有 `let`、嵌套循环和 `break`/`continue`；槽规则留在循环外
-  （语法强制）。
-* `repeat n until (cond)` 在每次迭代**之后**检查条件（为真则退出）；
-  `repeat n while (cond)` 在**之前**检查（为假则退出）。`break`/`continue`
-  可带可选的 `if (cond)`。
-* `break` 只退出最内层循环。被守护的表达式仍会求值，其结果由门丢弃——
-  IEEE f64 求值无陷阱，因此在直线式 EIR 中安全。
-* 上限：单循环最多迭代 1000 次、展开最多 10000 条语句。
-* `let` 名不得遮蔽保留 token（`t`、`pi`、`e`、`s0`、`s1`、…）——语法先解析
-  这些名字，这样的绑定永远读不回来。
+---
 
-## 语义注意
+# 第四部分 — 诊断与错误码
 
-* 时间是显式的：`dt` 乘以每条规则的表达式；仿真时钟 `t` 每步前进 `dt`。
-* 确定性是一等公民：`random()` 有种子、可复放；解释器与 JIT 每步字节级一致
-  （`step_cross`）。
-* 每个实体的状态槽上限 16 个（`MAX_STATE_SLOTS`）。
-
-## 通用仿真基底
-
-因为规则是作用在命名/位置式状态槽上的普通标量 ODE，再加上 `let` 局部变量、
-用户函数、跨实体引用、`random()`/`emit()`，以及 RK4 或欧拉积分，语言并不局限于
-刚体物理。任何可表达为（耦合）微分或差分方程的规律——物理、化学或生物——都能
-建模、仿真与可视化。参见 `reference/examples/scientific_laws_demo.rs` 的实时画廊：
-一次运行五条定律（简谐运动、开普勒轨道、可逆动力学、logistic 增长、放射性衰变），
-每条都由 `reference/tests/laws.rs` 验证。
-* 先读后写：同一步内，每个被引用的值都是这一步**开始时**的值。
-
-## 错误 detail code
-
-| Code | 含义 |
-| --- | --- |
-| 48 | 缺少必需的系统参数。 |
-| 49 | 未知系统种类。 |
-| 51 | 凸包至少需要 4 个点。 |
-| 52 | 状态槽数量超出范围（1..=16）。 |
-| 53 | 缺少 `linear` 的行。 |
-| 54 | `linear` 行长度 ≠ `slots + 1`。 |
-| 55 | `funcs` 函数体非法 / `update` 规则为空 / 槽左侧非法。 |
-| 56 | 表达式解析失败。 |
-| 57 | 数字解析失败。 |
-| 58 | 槽 / 引用解析失败。 |
-| 59 | 调用元数不符。 |
-| 60 | 程序解析失败。 |
-| 62 | 未知的实体或通道名。 |
-| 64 | 颜色字面量非法。 |
-
-## 诊断
-
-编译失败会携带人类可读信息、detail code 与源码偏移。参考实现通过 `lang` 模块暴露：
+编译失败携带人类可读信息、detail code 与源码偏移：
 
 ```rust
 match pwe_reference::lang::LangRuntime::compile(source) {
@@ -442,8 +552,6 @@ match pwe_reference::lang::LangRuntime::compile(source) {
     Err(e) => eprintln!("{}", pwe_reference::lang::diagnose(source, &e)),
 }
 ```
-
-`lang::diagnose` 渲染多行报告，带出错源码行与脱字符，例如缺失参数：
 
 ```text
 error 48: system 'update' is missing required parameter 'dt'
@@ -453,55 +561,34 @@ error 48: system 'update' is missing required parameter 'dt'
     |         ^
 ```
 
-* `lang::clear_diagnostics` / `lang::take_diagnostics` 取回一次失败编译的原始
-  `Diagnostic` 列表（`detail`、`message`、`byte_offset`）。
-* `lang::detail_name(detail)` 把 code 映射为规范短语。
-* 注释（`#` / `//` 到行尾）作为空白在程序任意位置被跳过，包括 `update` /
-  `rk4` 规则块内。
+| Code | 含义 |
+| --- | --- |
+| 48 | 缺少必需的系统参数。 |
+| 49 | 未知系统种类。 |
+| 51 | 凸包至少需要 4 个点。 |
+| 52 | 状态槽数量超出范围（1..=16）。 |
+| 53 / 54 | `linear` 缺少行 / 行长度不对。 |
+| 55 | `funcs` 函数体非法 / `update` 规则为空 / 槽左侧非法。 |
+| 56 / 57 / 58 | 表达式 / 数字 / 槽引用解析失败。 |
+| 59 | 调用元数不符。 |
+| 60 | 程序解析失败。 |
+| 62 | 未知的实体或通道名。 |
+| 64 | 颜色字面量非法。 |
+| 69 | 不变式被违反。 |
+| 70 | 在规则外使用空间查询。 |
+| 73 | `rk4` 中的动态槽左侧。 |
+| 76 | 导入/模块错误（缺文件、实体/场重名）。 |
+| 77 | 量纲不一致。 |
 
-## 配方
+---
 
-最简单的下落体（`language_demo`）：
+# 第五部分 — 语义注意
 
-```pwe
-world {
-    gravity = (0, -9.81, 0)
-    entity vehicle { position = (0, 8, 0); velocity = (4, 0, 0); mass = 4; dynamic = true; box = (1, 0.5, 0.7) }
-    entity ground  { position = (0, -5, 0); dynamic = false; box = (50, 5, 50) }
-}
-systems {
-    gravity { gravity_y = -9.81; dt = 1 / 60 }
-    integrate { dt = 1 / 60 }
-    ground_contact { restitution = 0.6 }
-}
-```
-
-放射性衰变（linear）：
-
-```pwe
-world { gravity = (0,0,0) entity isotope { state = (100, 0) } }
-systems { linear { slots = 2; dt = 1; row0 = (-0.05, 0, 0); row1 = (0, 0, 0) } }
-```
-
-非线性摆（update + `sin`）：
-
-```pwe
-world { gravity = (0,0,0) entity pend { state = (1.2, 0) } }
-systems { update { dt = 0.0005
-    s0 = s1
-    s1 = -9.81 * sin(s0) } }
-```
-
-轨道系统（nbody，`solar_demo`）：
-
-```pwe
-world {
-    gravity = (0, 0, 0)
-    entity sun  { state = (0, 0, 0, 0, 0, 0, 1000000, 0); color = 0xFFD24A }
-    entity earth{ state = (4, 0, 0, 0, 500, 0, 1, 0);     color = 0x4aa8ff }
-}
-systems { nbody { G = 1.0; dt = 0.0001 } }
-```
-
-`state[0]` 是轨道半径向量的 x 分量，`state[3]` 是初始轨道速度；槽 6 是质量
-（查看器按它推导视觉尺寸）。
+* **时间是显式的**：`dt` 乘以每条规则的表达式；时钟 `t` 每步前进 `dt`。
+* **先读后写**：同一步内，每个被引用的值都是这一步**开始时**的值。
+* **确定性是一等公民**：`random()` 有种子、可复放；解释器与 JIT 每步字节级一致
+  （`step_cross`）。
+* **状态槽**每实体上限 16 个。
+* **通用基底**：因为规则是作用在命名状态槽上的普通标量 ODE，配合局部值、函数、
+  跨实体引用、`random()`/`emit()`，以及 RK4/欧拉积分，语言并不局限于刚体物理——
+  任何（耦合）微分或差分方程都能建模、仿真与可视化。

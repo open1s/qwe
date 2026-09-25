@@ -3,9 +3,9 @@
 [中文版](lang-usage.zh.md)
 
 The PWE language is the textual front end of `pwe-reference` (`src/lang.rs`,
-grammar `src/lang.pest`). A source program declares a world model and systems,
-compiles to low-level EIR, and runs cross-backend — the interpreter and the CPU
-JIT must produce byte-identical writes on every step.
+grammar `src/lang.pest`). A source program declares a world model and systems;
+it compiles to low-level EIR and runs **cross-backend** — the interpreter and
+the CPU JIT must produce byte-identical writes on every step.
 
 ```
 PWE source ──parse──▶ WorldModel + system decls ──lower──▶ EIR ──interpret/JIT──▶ writes
@@ -18,16 +18,146 @@ rt.step_cross()?;                                          // interpreter == JIT
 rt.step_cross_n(30)?;                                      // 30 steps at once
 ```
 
-From the shell, the `pwe` command-line toolchain (crate `pwe-cli`) compiles,
-runs, and presents programs:
-
 ```sh
-pwe compile scene.pwe -o scene.pweb   # .pwe source → verified .pweb binary
-pwe run     scene.pweb --steps 600    # run the binary, cross-backend each step
+pwe compile scene.pwe -o scene.pweb   # .pwe source → verified .pweb artifact
+pwe run     scene.pweb --steps 600    # run the artifact (cross-backend each step)
 pwe present scene.pweb --port 8000    # live browser 3D viewer
 ```
 
-## Program structure
+---
+
+# Part I — Detailed language reference
+
+## 1. Keywords, lexical rules & syntax
+
+### 1.1 Lexical rules
+
+| Token | Form | Notes |
+| --- | --- | --- |
+| comment | `# …` or `// …` | to end of line; skipped anywhere |
+| `ident` | `[A-Za-z_][A-Za-z0-9_]*` | names of entities, slots, params, functions, shapes |
+| `number` | `-? digits ("." digits)? (("e"\|"E") "-"? digits)?` | f64 literal |
+| `value` | `number` or `number "/" number` | a literal **or a ratio** (`dt = 1/60`) |
+| `boolean` | `true` \| `false` | |
+| `string` | `"…"` (no escapes) | titles, SVG path data |
+| `color` | `0x` hex | `0xRRGGBB` |
+| `unit` | `[` unit `]` | base `m kg s A K mol cd`, ops `*` `/` `^` — e.g. `[m/s^2]`, `[1/s]` |
+| `slot` | `s` digits | own state slot by position (`s0`, `s1`, …); reserved |
+| constants | `t`, `pi`, `e` | clock (s), π, Euler's number |
+
+Whitespace is insignificant and `;` between statements/params is **optional**
+(the grammar makes it `";"?`), so `dt = 0.1; x = 1.0` and `dt = 0.1` ⏎ `x = 1.0`
+both parse. Units must be bracketed so `s[0]` stays unambiguous. A `let` may not
+shadow `t`/`pi`/`e`/`sN` (detail 67).
+
+### 1.2 Keywords
+
+Genuine grammar tokens (cannot be used as identifiers):
+
+* **sections**: `world`, `funcs`, `systems`
+* **world**: `gravity`, `title`, `params`, `chan`, `value`, `entity`, `field`,
+  `width`, `height`, `depth`, `dx`, `shape`, `part`
+* **entity fields**: `position`, `velocity`, `state`, `vec`, `mass`, `dynamic`,
+  `nbody`, `parent`, `restitution`, `friction`, `box`, `sphere`, `hull`,
+  `camera`, `color`, `size`, `opacity`, `glow`, `label`
+* **custom shapes**: `point`, `sphere`, `box`, `capsule`, `svg`, `hull`, `poly`,
+  `at`, `depth`, `scale`, `faces`
+* **functions / control**: `return`, `let`, `repeat`, `until`, `while`, `for`,
+  `in`, `break`, `continue`, `if`
+* **logic / booleans**: `and`, `or`, `not` (also `&&`, `||`, `!`), `true`, `false`
+* **atoms**: `pi`, `e`, `t`
+
+**Contextual (not reserved):** system *kinds* (`update`, `rk4`, `nbody`,
+`diffuse`, `wave`, …) and system *parameters* (`on`, `when`, `every`, `substeps`,
+`dt`, `field`, `prev`, `velocity`, `rate`, `iters`, `source`, `scale`, `damping`,
+`absorb`, `mem`, `into`, …) are ordinary identifiers matched at build time — an
+unknown kind is detail 49. `import` / `as` / `from` are handled by the module
+loader; built-in function names (`sin`, `min`, `if`, `random`, `emit`, …) are
+ordinary calls special-cased in lowering.
+
+### 1.3 Syntax (EBNF)
+
+```ebnf
+program        = world_section funcs_section? systems_section?
+
+world_section  = "world" "{" world_item* "}"
+world_item     = gravity_stmt | title_stmt | params_stmt | chan_stmt
+               | entity_stmt | field_stmt | shape_stmt
+gravity_stmt   = "gravity" "=" vec3
+title_stmt     = "title" "=" string
+params_stmt    = "params" "{" (ident "=" value unit? ";")* "}"
+chan_stmt      = "chan" ident "{" "value" "=" value ";" "}"
+field_stmt     = "field" ident "{" param* "}"
+
+entity_stmt    = "entity" ident "{" entity_field* "}"
+entity_field   = position | velocity | state | mass | dynamic | nbody | parent
+               | restitution | friction | box | sphere | hull | camera | color
+               | shape | size | opacity | glow | label
+state_field    = "state" "=" ( "(" state_item ("," state_item)* ")" | vecN )
+state_item     = "vec" digits ident | ident "=" value unit? | value unit?
+shape_stmt     = "shape" ident "{" shape_part* "}"
+shape_part     = "part" shape_kind "=" part_value opt* ";"
+part_value     = string | hull_list | vec3 | value
+opt            = "at" vec3 | "depth" value | "scale" value | "faces" faces_list
+shape_kind     = "point"|"sphere"|"box"|"capsule"|"svg"|"hull"|"poly"
+
+funcs_section  = "funcs" "{" func_def* "}"
+func_def       = ident "(" (ident ("," ident)*)? ")" "{" func_body "}"
+func_body      = (func_item ";")+ "return" expr | expr
+func_item      = let_stmt | repeat_stmt | for_stmt
+
+systems_section= "systems" "{" system* "}"
+system         = ident "{" param* "}"
+param          = let_stmt | repeat_stmt | for_stmt | slot_lhs "=" expr | call
+               | ident "=" ( vecN | expr | ident ) unit? ";"
+slot_lhs       = "s" "[" expr "]"
+let_stmt       = "let" ident "=" expr
+repeat_stmt    = "repeat" number (("until"|"while") "(" expr ")")? "{" loop_item* "}"
+for_stmt       = "for" ident "in" number ".." number "{" loop_item* "}"
+loop_item      = let_stmt | repeat_stmt | for_stmt | break_stmt | continue_stmt
+break_stmt     = "break" ("if" "(" expr ")")?
+continue_stmt  = "continue" ("if" "(" expr ")")?
+
+expr           = logical_or
+logical_or     = logical_and (("or" |"||") logical_and)*
+logical_and    = comparison  (("and"|"&&") comparison)*
+comparison     = additive    (("<"|"<="|">"|">="|"=="|"!=") additive)*
+additive       = term        (("+"|"-") term)*
+term           = factor      (("*"|"/"|"%") factor)*
+factor         = unary | number | call | "(" expr ")" | slot | slot_dyn
+               | entity_ref | "t" | constant | namespaced | state_name
+unary          = "-" factor | ("not"|"!") factor
+call           = func_name "(" (expr ("," expr)*)? ")"
+func_name      = ident ("." ident)*
+slot           = "s" digits
+slot_dyn       = "s" "[" expr "]"
+entity_ref     = "@" ident "." (slot | prop_path)
+prop_path      = ident ("." (ident | digits))*
+namespaced     = ident "." ident ("." ident)*
+
+vec3           = "(" value "," value "," value ")"
+vecN           = "(" value ("," value)* ")"
+hull_list      = "[" vec3 ("," vec3)* "]"
+faces_list     = "[" face ("," face)* "]"
+face           = "[" digits ("," digits)* "]"
+unit           = "[" unit_atom (("*"|"/") unit_atom)* "]"
+unit_atom      = ("mol"|"kg"|"cd"|"K"|"A"|"s"|"m") ("^" "-"? digits)? | digits
+string         = '"' (any - '"')* '"'
+number         = "-"? digits ("." digits)? (("e"|"E") "-"? digits)?
+value          = number ("/" number)?
+boolean        = "true" | "false"
+color          = "0x" hex+
+ident          = [A-Za-z_][A-Za-z0-9_]*
+```
+
+### 1.4 Operator precedence
+
+Highest → lowest: unary `-` and `not`/`!` → `* / %` → `+ -` →
+comparisons `< <= > >= == !=` → `and`/`&&` → `or`/`||`. Comparisons and logical
+operators yield `1.0` / `0.0`; any nonzero operand is true. `not` binds to the
+following factor — write `not (x > 0)` for a negated comparison.
+
+## 2. Program structure
 
 ```pwe
 world {
@@ -41,115 +171,140 @@ systems {
 }
 ```
 
-Comments: `#` or `//` to end of line. Whitespace is insignificant.
+Comments run from `#` or `//` to end of line and are skipped as whitespace
+anywhere, including inside rule blocks. Whitespace is otherwise insignificant.
+A `.pwe` file is also a **module** (see §4.8).
 
-## World section
+## 3. `world` — the world model
+
+The world model describes *what the world is* (entities, fields, parameters).
+It never depends on a CPU/GPU/OS.
 
 | Statement | Meaning |
 | --- | --- |
 | `gravity = (x, y, z)` | Global uniform gravity vector. |
-| `chan <name> { value = v }` | A channel entity; holds its latest value in `state[0]`. |
-| `entity <name> { fields }` | A body. Fields below. |
-| `field <name> { width = w; height = h; dx = d }` | A deterministic scalar grid field (the PDE substrate): cells read/written by rules via `fget`/`fset`/`flap`. |
-| `params { G = 1.0; k = 3.0 }` | Runtime-settable model parameters; rules read them by name, overridable with `pwe run --param G=2` (same artifact, different configuration). |
-| `import "pkg/mod"` | Python-style module import: loads `pkg/mod.pwe` (a directory loads its `__init__.pwe` package) and namespaces its **functions and parameters** (`mod.f(...)`, `mod.G`). `import "mod" as m` binds `m`; `from "mod" import f, G` binds them bare. Entities / systems / fields merge into the one world (duplicate names are an error). |
+| `params { G = 1.0; k = 3.0 }` | Runtime-settable model parameters; rules read them by name, overridable with `--param G=2` on the same artifact. |
 | `title = "..."` | Human-readable run title, shown by `pwe present`. |
+| `entity <name> { fields }` | A body (§3.1). |
+| `shape <name> { part … }` | A user-defined **custom shape** (§3.2). |
+| `chan <name> { value = v }` | A channel entity; holds its latest value in `state[0]`. |
+| `field <name> { width = w; height = h; dx = d }` | A deterministic scalar grid field — the PDE substrate (§3.3). |
+| `import "pkg/mod"` | Python-style module import (§4.8). |
 
-### Entity fields
+### 3.1 Entity fields
+
+Entity ids are 1-based in declaration order; channels follow the bodies.
 
 | Field | Meaning |
 | --- | --- |
 | `position = (x, y, z)` | Initial position. |
 | `velocity = (x, y, z)` | Initial linear velocity. |
 | `state = (v0, v1, …)` | Generic state slots (positional). Max 16 slots (`s0…s15`). |
-| `state = (x = 0, y = 0, …)` | Named state slots; assign by name in rules, read via `@self.x`. Mixing named and positional in one list is allowed. |
-| `state = (vec3 pos, …)` | A vector element reserves N consecutive slots named `pos`, `pos.0` … `pos.{N-1}` (zero-initialized); `pos` reads component 0, `@self.state.pos.1` reads component 1, `s[i]` indexes dynamically. |
-| `mass = v` | Mass (slot 6 semantics for visual size; drives `nbody`). |
+| `state = (x = 0, y = 0, …)` | Named state slots; assign by name in rules, read via `@self.x`. Named and positional may be mixed. |
+| `state = (vec3 pos, …)` | A vector element reserves N consecutive slots named `pos`, `pos.0` … `pos.{N-1}`; `pos` reads component 0, `@self.state.pos.1` component 1, `s[i]` indexes dynamically. |
+| `mass = v` | Mass (drives `nbody`; the viewer derives visual size from it). |
 | `dynamic = false` | Static body (default is dynamic). |
 | `nbody = false` | Exclude from the mutual `nbody` system. |
-| `restitution = v` | Bounciness for contacts. |
-| `friction = v` | Tangential friction for contacts. |
-| `box = (dx, dy, dz)` | Box collider. |
-| `sphere = r` | Sphere collider. |
-| `hull = [(x,y,z), …]` | Convex-hull collider; needs ≥ 4 points. |
+| `restitution = v` / `friction = v` | Contact bounciness / tangential friction. |
+| `box = (dx,dy,dz)` / `sphere = r` / `hull = [(x,y,z), …]` | Collider (hull needs ≥ 4 points). |
 | `camera = true` | Marks the entity as the viewer camera (excluded from simulation). |
-| `color = 0xRRGGBB` | Presentation color for the 3D viewer. |
-| `shape = point \| sphere \| box` | Presentation shape (overrides the collider-derived one). |
-| `size = v \| (dx, dy, dz)` | Presentation size: marker diameter / sphere radius / box edge, or per-axis box dimensions (long thin links). |
-| `opacity = v` | Presentation opacity in `[0, 1]`. |
-| `glow = v` | Presentation emissive glow intensity (0 = matte, >0 = self-lit). |
-| `label = false` | Hide the floating name label (default `true`); the viewer's 🏷 button hides/shows all labels. |
 
-Entity ids are 1-based in declaration order; channels follow the bodies. The
-`color`/`shape`/`size`/`opacity`/`glow`/`label` attributes are **presentation
-only** — they never affect simulation state, determinism, or the state hash.
+**Presentation-only fields** (they never affect simulation state, determinism,
+or the state hash):
 
+| Field | Meaning |
+| --- | --- |
+| `color = 0xRRGGBB` | Render color. |
+| `shape = point \| sphere \| box \| capsule \| <custom>` | Render shape (overrides the collider-derived one; `<custom>` names a §3.2 shape). |
+| `size = v \| (dx,dy,dz)` | Marker diameter / sphere radius / box edge, or per-axis box dims; for a custom shape, scales the whole shape. |
+| `opacity = v` | Opacity in `[0, 1]`. |
+| `glow = v` | Emissive glow intensity (0 = matte). |
+| `label = false` | Hide the floating name label (default `true`). |
 
-### Custom shapes (including SVG)
+### 3.2 Custom shapes (primitives, polyhedra, SVG)
 
-Beyond the built-in `shape = point|sphere|box|capsule`, a world can declare named
-**custom shapes** and entities reference them by name:
+A world can declare named **custom shapes**; entities reference them by name.
+A shape is a list of parts, each an offset primitive.
 
 ```pwe
 world {
-  # a composite: primitives and/or an extruded SVG path, each with a local offset
-  shape drone {
+  shape drone {                       # composite primitives
     part capsule = (0.06, 0.30, 0.06);
     part sphere  = 0.09 at (0, 0.20, 0);
     part box     = (0.54, 0.02, 0.02) at (0, 0.20, 0);
   }
-  shape star {
-    part svg = "M 0,-1 L 0.224,-0.309 L 0.951,-0.309 L 0.363,0.118 L 0.588,0.809 \
-               L 0,0.382 L -0.588,0.809 L -0.363,0.118 L -0.951,-0.309 Z" depth 0.22 scale 0.8;
+  shape octa {                        # convex polyhedron from vertices
+    part hull = [(0,0.9,0), (0.9,0,0), (0,-0.9,0), (-0.9,0,0), (0,0,0.9), (0,0,-0.9)];
+  }
+  shape gem {                         # arbitrary polyhedron: vertices + faces
+    part poly = [(0,0.9,0), (0.7,0,0.7), (-0.7,0,0.7), (-0.7,0,-0.7), (0.7,0,-0.7), (0,-0.9,0)]
+      faces = [[0,1,2],[0,2,3],[0,3,4],[0,4,1],[5,1,4],[5,4,3],[5,3,2],[5,2,1]];
+  }
+  shape star {                        # extruded SVG path
+    part svg = "M 0,-1 L 0.224,-0.309 L 0.951,-0.309 L 0.363,0.118 L 0.588,0.809 L 0,0.382 L -0.588,0.809 L -0.363,0.118 L -0.951,-0.309 Z" depth 0.22 scale 0.8;
   }
   entity craft { state = (x = 0.0, y = 0.0, z = 0.0) shape = drone; color = 0x4AC3FF }
 }
 ```
 
-* `part <kind> = <params> [at (x,y,z)] [scale s]` — one part of the shape:
-  * `sphere = r`, `box = (dx, dy, dz)`, `capsule = (r_bottom, length, r_top)`;
-  * `hull = [(x,y,z), …]` — a **convex polyhedron** from its vertices;
-  * `poly = [(x,y,z), …] faces = [[i,j,k,…], …]` — an **arbitrary polyhedron**
-    from explicit vertices and index faces;
-  * `svg = "<path d>" depth <d>` — an SVG path extruded along Z.
-  `at` offsets the part in the entity's local frame; `scale` sets the part's
-  size (amplitude).
-* An entity can scale the whole custom shape with `size = s`.
-* The viewer draws the shape as a group of parts, rotated/positioned with the
-  entity. Custom shapes are **presentation only**.
+`part <kind> = <params> [at (x,y,z)] [scale s]`:
 
-## Systems
+* `sphere = r`, `box = (dx,dy,dz)`, `capsule = (r_bottom, length, r_top)` —
+  a sphere / box / smooth (optionally tapered) surface of revolution;
+* `hull = [(x,y,z), …]` — a **convex polyhedron** from its vertices;
+* `poly = [(x,y,z), …] faces = [[i,j,k,…], …]` — an **arbitrary polyhedron**
+  from explicit vertices and index faces (non-convex allowed; faces are
+  triangulated by the viewer);
+* `svg = "<path d>" depth <d>` — an SVG path extruded along Z.
+
+`at` offsets the part in the entity's local frame; `scale` sets the part's size
+(amplitude). An entity can scale the whole shape with `size = s`. Custom shapes
+are **presentation only**.
+
+### 3.3 Grid fields — the 4D continuum substrate
+
+Declared `field <name> { width = w; height = h; dx = d }` (2D) or with
+`depth = d` (3D). Cells are deterministic world state (snapshot/replayable).
+Space is 3D — with the simulation clock, fields are the 4D substrate
+(3D space + time).
+
+* `fget(f, i, j)` / `fget(f, i, j, k)` — the cell value; sees same-step writes.
+* `fset(f, i, j, v)` / `fset(f, i, j, k, v)` — writes a cell (bare call statement).
+* `flap(f, i, j)` / `flap(f, i, j, k)` — the zero-flux discrete Laplacian scaled
+  by `1/dx²` (5-point 2D, 7-point 3D).
+* Unknown field names read `0` (unresolved-reference convention).
+
+## 4. Systems — the behaviour
+
+### 4.1 Built-in system kinds
 
 | System | Params | Meaning |
 | --- | --- | --- |
-| `gravity` | `gravity_y`, `dt` | Apply uniform gravity to dynamic bodies. |
+| `gravity` | `gravity_y`, `dt` | Uniform gravity on dynamic bodies. |
 | `integrate` | `dt` | Integrate velocity into position. |
 | `damping` | `factor` | Scale velocities each step. |
 | `ground_contact` | `restitution` | Resolve contact with the ground plane. |
-| `wall` | `x`, `z`, `y_min?`, `restitution?` | Bounded domain: `|x|,|z| ≤ limit`, velocity reflects on impact. |
+| `wall` | `x`, `z`, `y_min?`, `restitution?` | Bounded domain; velocity reflects on impact. |
 | `force` | `ax`, `ay`, `az`, `dt` | Constant acceleration on dynamic bodies. |
-| `linear` | `slots`, `dt`, `row0 = (a0, …, c)` | Linear dynamical system: `s_N' = Σ_j a_j·s_j + c`. Each `rowN` has `slots + 1` entries (coefficients + constant). |
-| `nbody` | `G`, `dt` | Mutual inverse-square force among dynamic bodies: `G > 0` gravity, `G < 0` Coulomb repulsion. |
-| `send` | `chan = name`, `value = expr` | Each dynamic entity evaluates `value` and writes it to the channel entity. |
-| `recv` | `chan = name`, `slot = n` | Reads the channel's latest value into each dynamic body's `sN`. |
-| `update` | `on = name?`, `when = expr?`, `every = n?`, `substeps = n?`, `dt`, `let …`, slot rules | User-defined nonlinear dynamical system (explicit Euler, below). |
-| `rk4` | `on = name?`, `when = expr?`, `every = n?`, `substeps = n?`, `dt`, `let …`, slot rules | Same rules as `update`, but integrated with the classic **4th-order Runge–Kutta** method — far tighter accuracy for oscillators and nonlinear ODEs at the same `dt`. |
-| `invariant` | `on = name?`, `expr`, `let …` | Per-step assertion: `expr` must be non-zero for the checked entities as the systems leave the state; a violated invariant fails the step (detail 69) before any write is applied. |
-| `watch` | `on = name?`, `expr`, `mem = slot`, `into = slot` | Zero-crossing detection: flags 1 when the watched expression changes sign between consecutive steps; the previous value lives in the `mem` slot (world state), the flag lands in `into`. |
-| `diffuse` | `field = name`, `rate` | Explicit diffusion of a grid field: `T += rate·∇²T` per step, a Jacobi sweep (exactly conservative under the zero-flux stencil). |
-| `poisson` | `field = name`, `source = name?`, `iters`, `scale = s?` | Gauss–Seidel relaxation of `∇²φ = ρ·scale` — `iters` sweeps per step, boundary cells held fixed. |
-| `wave` | `field = name`, `prev = name`, `velocity = c`, `dt`, `damping = s?` | Second-order leapfrog `u_tt = c²∇²u` over two fields (`prev` stores `u(t−h)`); Courant `c·h/dx ≤ 1/√2` (2D) / `≤ 1/√3` (3D). `damping` (default `1.0`, lossless) scales the temporal term; `absorb` + `absorb_width` add a graded sponge layer that absorbs outgoing waves at the boundary instead of reflecting them. |
+| `linear` | `slots`, `dt`, `row0 = (a0, …, c)` | Linear system `s_N' = Σ_j a_j·s_j + c`; each `rowN` has `slots+1` entries. |
+| `nbody` | `G`, `dt` | Mutual inverse-square force among dynamic bodies (`G>0` gravity, `G<0` Coulomb). |
+| `send` / `recv` | `chan`, `value` / `slot` | Go-style channel send/receive. |
+| `update` / `rk4` | see §4.2 | User-defined ODE rules (Euler / Runge–Kutta 4). |
+| `invariant` | `on?`, `expr`, `let …` | Per-step assertion (§4.3). |
+| `watch` | `on?`, `expr`, `mem`, `into` | Zero-crossing detection (§4.4). |
+| `diffuse` | `field`, `rate` | Explicit diffusion `T += rate·∇²T` (Jacobi sweep, exactly conservative). |
+| `poisson` | `field`, `source?`, `iters`, `scale?` | Gauss–Seidel relaxation of `∇²φ = ρ·scale`. |
+| `wave` | `field`, `prev`, `velocity`, `dt`, `damping?`, `absorb?`, `absorb_width?` | Second-order leapfrog wave equation (§4.5). |
 
-Unknown system kind → error (detail code 49).
+Unknown system kind → detail code 49.
 
-## The `update` / `rk4` systems
+### 4.2 `update` / `rk4`
 
-Both systems take identical rules of the form `slot = expr`. `update` means
-**`slot += dt · expr(state)`** (explicit Euler); `rk4` evaluates the same
-derivative four times per step and combines them (Runge–Kutta 4), giving
-4th-order accuracy — the same `dt` drifts far less. All reads happen first —
-own slots, cross-entity references, and properties are read once per step, so
-updates within one step are simultaneous (no ordering bias between rules).
+Both take rules `slot = expr`. `update` means **`slot += dt · expr(state)`**
+(explicit Euler); `rk4` evaluates the same derivative four times per step and
+combines them (4th-order). All reads happen first — own slots, cross-entity
+refs, properties are read once per step, so rules within a step are
+simultaneous.
 
 ```pwe
 systems {
@@ -161,64 +316,58 @@ systems {
 }
 ```
 
-* `on = <name>` restricts the rule to one entity (default: all dynamic bodies).
-* `let name = expr` computes a reusable local before the slot rules run.
-* `when = expr` gates every rule's write: the state is untouched when it
-  evaluates to 0 — mode/state-machine semantics (`when = mode == 1`).
-* `every = n` runs the system only when `step % n == 0` (scheduling; the step
-  counter is read via the `STEP` opcode, deterministic).
-* `substeps = n` runs the integration n times with `dt/n` each; each substep
-  re-reads the state and recomputes the `let` locals, so finer integration
-  tracks the analytic solution better. Cross-entity references and properties
-  are sampled once per step.
-* The LHS is a positional slot `sN` or a named slot from that entity's
-  `state = (x = 0, …)` layout; rules resolve per-entity.
-* Unknown entity names in references produce no coupling; unresolved slots
-  read `0`.
+* `on = <name>` restricts to one entity (default: all dynamic bodies).
+* `let name = expr` computes a reusable local before the rules run.
+* `when = expr` gates every write (state untouched when 0) — mode/state-machine.
+* `every = n` runs only when `step % n == 0`.
+* `substeps = n` integrates n times with `dt/n` each.
+* The LHS is `sN` or a named slot from the entity's `state = (…)` layout.
+* Since `slot = expr` **integrates**, "assign" with `slot = (target - slot)` (so
+  `slot += dt·(target-slot) = target`).
 
-## The `invariant` system
+### 4.3 `invariant` — assertions
+
+Evaluated per entity **after the systems run**; must be non-zero. A zero (or
+NaN) fails the step (`detail 69`) **before any write is applied**, so the scene
+keeps its pre-step state.
+
+```pwe
+invariant { on = reactor; expr = abs((na + naoh) - @self.state.total) < 0.001 }
+```
+
+### 4.4 `watch` — zero-crossing detection
+
+Each step it compares `expr` with the previous value (kept in the `mem` state
+slot — persisted world state) and writes a 0/1 flag into `into`: 1 on a strict
+sign change. The entity's own rules read the flag and react (bounce, switch
+mode).
+
+```pwe
+watch { on = ball; expr = x; mem = 5; into = 6 }
+```
+
+### 4.5 Continuum solvers (`diffuse` / `poisson` / `wave`)
 
 ```pwe
 systems {
-    update { on = reactor; dt = 0.0005
-        let k = 3.0 * exp(-900.0 / temp)
-        na = -k * na * water
-        naoh = k * na * water
-    }
-    invariant { on = reactor; expr = abs((na + naoh) - @self.state.total) < 0.001 }
+  diffuse { field = heat; rate = 0.2 }                          # T += 0.2·∇²T
+  poisson { field = phi; source = rho; iters = 20 }             # ∇²φ = ρ
+  wave    { field = u; prev = um; velocity = 1.0; dt = 0.5 }    # u_tt = c²∇²u
 }
 ```
 
-The expression is evaluated per entity **after the systems run** and must be
-non-zero. A zero (or NaN) value fails the step — `step_*` returns an error
-(detail 69 for zero; the EIR's own NaN comparison rejection for NaN) **before
-any write is applied**, so the scene keeps its pre-step state and never
-silently proceeds past a broken one.
+* `diffuse` — one **Jacobi** sweep per step; under the zero-flux stencil the
+  total is conserved exactly. Stable for `rate ≤ 1/4` (2D) / `≤ 1/6` (3D).
+* `poisson` — `iters` in-place Gauss–Seidel sweeps; boundary cells are fixed
+  potentials.
+* `wave` — leapfrog over two fields (`prev` = `u(t−h)`); Courant
+  `c·h/dx ≤ 1/√2` (2D) / `≤ 1/√3` (3D). `damping` (default `1.0` = lossless)
+  scales the temporal term; `absorb` + `absorb_width` add a graded sponge layer
+  that absorbs outgoing waves at the boundary instead of reflecting them.
+* All solvers iterate in 3D when `depth > 1`, run **once per step**, are
+  deterministic, and lower to the existing field opcodes (interpreter = JIT).
 
-* `on = <name>` restricts the check to one entity (default: all dynamic bodies).
-* Supports `let` locals like `update`.
-* Each `invariant` system owns its own verdict field; several coexist.
-
-## The `watch` system
-
-```pwe
-systems {
-    update { on = ball; dt = 0.01
-        x = vx
-    }
-    watch { on = ball; expr = x; mem = 5; into = 6 }
-}
-```
-
-Each step the watch evaluates `expr` **after the systems run**, compares it
-with the previous step's value (kept in the `mem` state slot — ordinary world
-state, persisted and deterministic), and writes a 0/1 flag into `into`: 1 when
-the value changed sign (a strict zero crossing; a zero memory is the initial
-state and never counts). The entity's own rules read the flag and react —
-bounce, reinitialize, switch mode. NaN values fail the step via the EIR's own
-comparison rejection.
-
-## Expressions
+### 4.6 Expressions
 
 | Form | Meaning |
 | --- | --- |
@@ -227,40 +376,111 @@ comparison rejection.
 | `@name.sN`, `@name.state.x`, `@name.x` | Another entity's state slot. |
 | `@name.mass`, `@name.is_dynamic` | Another entity's properties. |
 | `@name.position.x/y/z`, `@name.velocity.x/y/z` | Another entity's transform/velocity. |
-| `+ - * /`, unary `-` | Arithmetic (f64). |
-| `< <= > >= == !=` | Comparisons, yielding `1.0` / `0.0`. |
-| `and`/`&&`, `or`/`\|\|`, `not`/`!` | Logical connectives over nonzero = true, yielding `1.0`/`0.0`. Precedence: `not` > `and` > `or` > comparison. |
+| `+ - * / %`, unary `-` | Arithmetic (f64). |
+| `< <= > >= == !=` | Comparisons → `1.0` / `0.0`. |
+| `and`/`&&`, `or`/`\|\|`, `not`/`!` | Logical connectives (nonzero = true). Precedence: `not` > `and` > `or` > comparison. |
 | `pi`, `e` | Constants. |
 | `t` | Global simulation clock (seconds). |
 
-A bare name that resolves to no local, slot, or parameter reads `0.0` (the
-unresolved-reference convention) rather than failing the step. System parameters
-such as `dt` are *not* in expression scope — write the step explicitly (e.g.
-`x = (target - x) / 0.5` to snap `x` to `target` when `dt = 0.5`).
+A bare name that resolves to no local, slot, or parameter reads `0.0`
+(unresolved-reference convention). System parameters such as `dt` are *not* in
+expression scope.
 
-### Builtin functions
+**Builtins** — 1-arg: `sin cos exp ln sqrt abs floor ceil round sign log10 log2
+sinh cosh tanh asin acos atan`; 2-arg: `pow atan2 hypot min max`; plus
+`if(c,a,b)`, `random()` (seeded), `noise()` (seeded normal), `print(x)`,
+`emit(kind,payload)`, `last_event(kind)`. Vector helpers: `vlen`, `vdot`,
+`vdist`. Spatial: `neighbor_count(r)`, `nearest_dist()`,
+`neighbor_mean(slot,r)`, `nearest_dx/dy/dz()` (rules only).
 
-* 1-arg: `sin cos exp ln sqrt abs floor ceil round sign log10 log2 sinh cosh tanh asin acos atan`
-* 2-arg: `pow atan2 hypot min max`
-* `if(c, a, b)` — select; `random()` — seeded, reproducible draw in `[0,1)`;
-  `noise()` — seeded standard normal (Box–Muller over two draws), finite always;
-  `print(x)` — logs `x`, yields it back, never changes world state;
-  `emit(kind, payload)` — emits an ordered event, yields `0.0`;
-  `last_event(kind)` — the payload of the most recent event of `kind` emitted
-  so far in this step (0 when none) — in-language event consumption. Events
-  are cleared each step (the host reads the step's events via
-  `emitted_events()`); the kind is the numeric value, not a bit pattern.
+**Scheduling**: `at(T)` — 1.0 in the one step whose window `[t,t+dt)` contains
+`T`; `periodic(P[,phase])` — 1.0 once per period.
 
-### Vector helpers
+**Units** are opt-in and compile-time checked (wildcards never error):
 
-* `vlen(x, y, z)` — √(x²+y²+z²); `vdot(x1,y1,z1, x2,y2,z2)` — component dot
-  product; `vdist(x1,y1,z1, x2,y2,z2)` — distance between two points. Pure
-  arithmetic (no new opcodes); combine with `neighbor_count`/`nearest_dist`
-  for spatial models.
+```pwe
+params { k = 4.0 [1/s^2] }
+entity e { state = (x = 1.0 [m], vx = 0.0 [m/s]) }
+update { on = e; dt = 0.1 [s]
+    vx = 0.0 - k * x     # 1/s^2 · m · s = m/s  matches vx
+}
+```
 
-### Modules and packages
+**Dynamic slots**: `s[i]` reads / `s[i] = expr` writes the slot at a runtime
+index (update rules only; rejected in `rk4`, detail 73). **Loops**:
+`repeat n { … }`, `for i in lo..hi { … }`, `break`/`continue` — unrolled at
+lowering (≤ 1000 iterations, ≤ 10000 statements); loop bodies hold only `let`,
+nested loops and `break`/`continue`.
 
-A `.pwe` file is a **module**. `import` follows Python:
+### 4.7 Built-in (intrinsic) functions — complete reference
+
+Arity is checked at compile time (mismatch → detail 59). A call whose name is
+not listed below is a user-defined function resolved from `funcs` (existence and
+arity validated at lowering). There is **no `tan`** — write `sin(x)/cos(x)`.
+
+**Elementary math**
+
+| Call | Result |
+| --- | --- |
+| `sin(x)`, `cos(x)` | trigonometric, radians |
+| `tanh(x)`, `sinh(x)`, `cosh(x)` | hyperbolic |
+| `asin(x)`, `acos(x)`, `atan(x)` | inverse trigonometric, radians |
+| `atan2(y, x)` | angle of the point `(x, y)` in `(-π, π]` |
+| `exp(x)` | eˣ |
+| `ln(x)`, `log10(x)`, `log2(x)` | natural / base-10 / base-2 logarithm |
+| `sqrt(x)` | √x (negative → NaN; halves unit exponents) |
+| `pow(a, b)` | aᵇ |
+| `hypot(a, b)` | √(a²+b²) |
+| `abs(x)` | absolute value |
+| `floor(x)`, `ceil(x)`, `round(x)` | integer, downward / upward / half-away-from-zero |
+| `sign(x)` | −1, 0 or 1 |
+
+**Selection**
+
+| `if(c, a, b)` | `a` when `c ≠ 0`, else `b` (both arms are evaluated; the unused one is discarded) |
+| `min(a, b)`, `max(a, b)` | smaller / larger of two values |
+
+**Randomness (seeded, replay-stable)**
+
+| `random()` | uniform draw in `[0, 1)` |
+| `noise()` | standard normal (Box–Muller over two draws); always finite |
+
+**I/O & events**
+
+| `print(x)` | logs `x`, returns it unchanged (never mutates world state) |
+| `emit(kind, payload)` | appends an ordered event `(kind, payload)`, returns `0.0` |
+| `last_event(kind)` | payload of the most recent event of that `kind` emitted so far this step (`0` when none). Events are cleared each step; the host reads them via `emitted_events()`. `kind` is a numeric value, not a bit pattern. |
+
+**Scheduling (exactly-once, on the step grid)**
+
+| `at(T)` | `1.0` in the one step whose window `[t, t+dt)` contains `T`, else `0.0` |
+| `periodic(P[, phase])` | `1.0` once per `P` seconds (optional phase offset); requires `P > dt` |
+| `schedule(gate, delay, kind, payload)` | when `gate ≠ 0`, enqueue `(kind, payload)` to fire `delay` seconds later — a dynamic event queue, drained deterministically (part of the cross-backend contract) |
+
+**Spatial queries** (valid only inside system rules and their `let` blocks; detail 70 in a function body)
+
+| `neighbor_count(r)` | number of other bodies within `r` of self |
+| `nearest_dist()` | distance to the nearest other body (`f64::MAX` when alone) |
+| `neighbor_mean(slot, r)` | mean of state slot `slot` over neighbours within `r` (`0` when none) |
+| `nearest_dx()`, `nearest_dy()`, `nearest_dz()` | per-axis offset `(nearest − self)` (`0` when alone) |
+
+All are deterministic (sorted-id scans). Position is `Transform`, else `state[0..2]`.
+
+**Vector helpers** (pure arithmetic over scalar components)
+
+| `vlen(x, y, z)` | √(x²+y²+z²) |
+| `vdot(x1,y1,z1, x2,y2,z2)` | x1·x2 + y1·y2 + z1·z2 |
+| `vdist(x1,y1,z1, x2,y2,z2)` | distance between the two points |
+
+**Grid-field access** — the first argument must be a literal field name (2-D or 3-D)
+
+| `fget(f, i, j)` / `fget(f, i, j, k)` | read a cell (sees same-step writes) |
+| `fset(f, i, j, v)` / `fset(f, i, j, k, v)` | write a cell (also usable as a bare statement; yields `0.0`) |
+| `flap(f, i, j)` / `flap(f, i, j, k)` | discrete Laplacian (zero-flux, scaled by `1/dx²`) |
+
+### 4.8 Modules and packages
+
+A `.pwe` file is a module. `import` follows Python:
 
 ```pwe
 import "physics"                 # physics.G, physics.thrust(m)
@@ -268,268 +488,90 @@ import "physics" as ph           # ph.G
 from "physics" import thrust     # thrust(m)  (bare)
 ```
 
-* A **package** is a directory: `import "shapes"` loads `shapes/__init__.pwe`.
-  Nested paths work: `import "lib/kepler"` loads `lib/kepler.pwe`.
-* **Functions and parameters** are namespaced by the module: a module's own
-  rules resolve their bare names within their own namespace first, then
-  globally. Entities, systems, fields and channels are world content and merge
-  flatly (a duplicate entity/field name across modules is a compile error).
-* **Circular imports resolve**: a module is loaded once and merged, and its
-  members are registered under **every alias** it is imported with, so mutual
-  references (`a` ↔ `b`) and multi-alias references (`import "x" as alpha`
-  alongside `import "x"`) both resolve. `--param` updates every alias of a
-  parameter together. Missing files and duplicate entity/field names are
-  reported (detail 76).
+A **package** is a directory (`import "shapes"` → `shapes/__init__.pwe`).
+Functions and parameters are namespaced by module; a module's own rules resolve
+their bare names in their namespace first, then globally. Entities / systems /
+fields / channels merge flatly (duplicate names are an error, detail 76).
+Circular imports resolve; members register under every alias.
 
-```pwe
-# physics.pwe
-world { params { G = 2.0 } }
-funcs { accel(m, r) { G * m / (r * r) } }
-```
-```pwe
-# main.pwe
-import "physics"
-world { gravity = (0, 0, 0) }
-systems { update { dt = 0.01 a = physics.accel(physics.G, r) } }
-```
+## 5. Standard library (`std/`)
 
-### Scheduled events (discrete-event scheduling)
-
-Scheduled events fire **exactly once**, on the step whose time window
-`[t, t + dt)` contains the scheduled instant — deterministic, stateless, and
-independent of the integration method.
-
-* `at(T)` — 1.0 in the one step that reaches time `T`, else 0.0.
-* `periodic(P)` / `periodic(P, phase)` — 1.0 once per period `P` seconds.
-* Compose with rules for impulses, and with `emit`/`last_event` for event-driven
-  reactions. Requires `P > dt`.
-
-### Units (gradual dimensional analysis)
-
-Units are **opt-in and checked at compile time**. Anything unannotated is a
-wildcard that never errors, so unit-free models are unaffected. Annotations go
-after a value, in square brackets:
-
-```pwe
-world {
-    params { k = 4.0 [1/s^2] }
-    entity e { state = (x = 1.0 [m], vx = 0.0 [m/s]) }
-}
-systems {
-    update { on = e; dt = 0.1 [s]
-        vx = 0.0 - k * x     # 1/s^2 · m · s = m/s  matches vx
-        x = vx               # m/s · s = m          matches x
-    }
-}
-```
-
-Base units: `m`, `kg`, `s`, `A`, `K`, `mol`, `cd`, combined with `*`, `/`, `^`
-(`[m/s^2]`, `[kg*m/s^2]`, `[1/s]`, `[m^3*kg^-1*s^-2]`). Each rule is checked as
-`slot += dt · expr` (using `dt`'s declared unit, else seconds); a mismatch is a
-compile error (detail 77). Transcendental functions require dimensionless
-arguments; `sqrt` halves exponents.
-
-### Grid fields (PDE substrate)
-
-Declared with `field <name> { width = w; height = h; dx = d }` (2D) or
-`field <name> { width = w; height = h; depth = d; dx = h }` (3D) in the world
-section; the cells are deterministic world state (snapshot/replayable like any
-other world state). Space is 3D — with the simulation clock, fields are the 4D
-substrate (3D space + time).
-
-* `fget(f, i, j)` / `fget(f, i, j, k)` — the cell value (2D / 3D); sees
-  same-step writes.
-* `fset(f, i, j, v)` / `fset(f, i, j, k, v)` — writes the cell (a bare call
-  statement; yields `0.0`).
-* `flap(f, i, j)` / `flap(f, i, j, k)` — the discrete Laplacian with the
-  Field's zero-flux stencil, scaled by `1/dx²` (5-point in 2D, 7-point in 3D) —
-  the PDE operator heat/diffusion/Poisson rules compose.
-* Coordinates may be any expression (slots, locals, arithmetic). Unknown field
-  names read `0` (the documented unresolved-reference convention).
-
-#### Continuum solvers (`diffuse` / `poisson`)
-
-Rather than hand-write an `fget`/`fset`/`flap` loop, declare a solver:
-
-```pwe
-field heat { width = 32; height = 32; dx = 1.0 }
-field phi  { width = 32; height = 32; dx = 1.0 }
-field rho  { width = 32; height = 32; dx = 1.0 }
-field u    { width = 64; height = 64; dx = 1.0 }
-field um   { width = 64; height = 64; dx = 1.0 }
-systems {
-  diffuse { field = heat; rate = 0.2 }                 # T += 0.2·∇²T
-  poisson { field = phi; source = rho; iters = 20 }    # ∇²φ = ρ
-  wave    { field = u; prev = um; velocity = 1.0; dt = 0.5 }  # u_tt = c²∇²u
-}
-```
-
-`diffuse` reads every cell and its Laplacian from one snapshot, then applies
-all updates — a Jacobi sweep, so the injected total is conserved exactly
-(`rate ≤ 1/4` in 2D, `≤ 1/6` in 3D). `poisson` runs `iters` in-place Gauss–Seidel
-sweeps; the boundary cells act as fixed potentials (set them with `fset`).
-`wave` shifts the two fields each step (`prev ← u`, `u ← 2u − prev + (c·h/dx)²∇²u`),
-so an initial pulse splits into a spherical (3D) or circular (2D) wavefront.
-All solvers iterate the field in 3D when `depth > 1`. All solvers run
-**once per step** (only the first dynamic entity emits the sweep), are
-deterministic, and lower to the existing field opcodes, so the interpreter and
-JIT remain byte-identical.
-
-### Standard library (`std/`)
-
-`std/` is a package of pure-function modules for general simulation:
+Pure-function modules: `math`, `particles`, `forces`, `mechanics`, `chemistry`
+(periodic table 1–118), `thermal`, `acoustics`, `optics`, `em`, `robotics`,
+`units`, `control`. Physical constants are params (`chemistry.R_gas`,
+`thermal.sigma_sb`, `em.k_coulomb`, …), overridable with `--param`. See
+`std/README.md`.
 
 ```pwe
 import "std/forces"
 import "std/thermal"
-systems {
-  update { on = body; dt = 0.1
+update { on = body; dt = 0.1
     vx   = forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0) + 0.0
     temp = thermal.newton_cooling(temp, 293.15, 0.05) + 0.0
-  }
 }
 ```
 
-Modules: `math`, `particles`, `forces`, `mechanics`, `chemistry` (periodic
-table 1–118), `thermal`, `acoustics`, `optics`, `em`, `robotics`, `units`,
-`control`. Their physical constants are params
-(`chemistry.R_gas`, `thermal.sigma_sb`, `em.k_coulomb`, …), overridable with
-`--param`. See `std/README.md` for the full API and `cli/examples/domains.pwe`
-for a composing example.
+---
 
-### Dynamic slot indexing
+# Part II — Usage
 
-* `s[i]` reads the State slot at a runtime index; `s[i] = expr` writes it
-  (`s[i] += dt·expr`, like every rule). The index may be any expression
-  (slots, locals, arithmetic). Arrays up to the 16-slot cap without extra
-  state. Valid in `update` rules and their `let` blocks; a dynamic LHS in
-  `rk4` is rejected (detail 73: RK4's working states are compile-time register
-  chains, so a runtime-index LHS cannot feed them — dynamic *reads* work
-  everywhere).
-
-### Spatial queries
-
-* `neighbor_count(r)` — number of other entities within distance `r` of the
-  current entity's position. Participants: all non-camera scene bodies;
-  position is `Transform` or `state[0..2]` (the viewer's convention).
-  Deterministic (sorted id scan).
-* `nearest_dist()` — distance to the nearest other entity; `f64::MAX` when the
-  current entity is alone. Deterministic.
-* `neighbor_mean(slot, r)` — mean of the State slot `slot` over the neighbours
-  within `r` (0 when there are none). Average positions (`slot` 0/1/2) or
-  velocities (`slot` 3/4/5) for cohesion/alignment — the flocking primitive.
-* `nearest_dx/dy/dz()` — the offset `(nearest neighbour − self)` per axis
-  (0 when alone), so a rule can steer toward or away from the closest body.
-* Valid only inside system rules and their `let` blocks — not function bodies
-  (no entity context there; detail 70).
-
-### User-defined functions
-
-```pwe
-funcs {
-    clamp(a, lo, hi) { if(s0 < s1, s1, if(s0 > s2, s2, s0)) }
-}
+```sh
+pwe compile <src.pwe> -o <out.pweb> [--param K=V]   # parse → verify → .pweb
+pwe run     <out.pweb> [--steps N] [--param K=V]... # run the artifact
+pwe present <out.pweb> [--port P] [--param K=V]...  # live 3D viewer
 ```
 
-### Branch control
+* An artifact is a self-describing container (magic + version) holding the
+  verified canonical EIR plus the model source; `run`/`present` execute the
+  compiled EIR. Compile errors render the offending source line with a caret.
+* `--param K=V` overrides a declared model parameter (validated; aliases update
+  together).
+* The live viewer polls the runtime and offers **⟳ Restart** (reload the initial
+  scene, paused at t=0), **⏸ Pause / ▶ Resume**, and **🏷 Labels** (show/hide all
+  names). Fields render as an isosurface (2D/3D) or a colored curve (1D);
+  entities render from their `shape`/`size`/`color`/`opacity`/`glow`/`label`.
+* Build demos in release for smooth playback: `cargo build --release -p pwe-cli`.
 
-Conditions combine via the logical connectives and branch via `if`:
+---
 
-```pwe
-systems {
-    update { on = heater; dt = 0.1
-        # bang-bang thermostat with hysteresis (18–20 °C)
-        let on = if(temp < 18.0, 1.0, if(temp > 20.0, 0.0, h))
-        temp = on * 1.2 - (temp - 16.0) * 0.06
-        h = on - h
-    }
-}
+# Part III — Examples: what they show, how to run, what you see
+
+All under `cli/examples/`. Compile once, then run/present the `.pweb`.
+
+| Example | Shows | Run | What you see |
+| --- | --- | --- | --- |
+| `bounce.pwe` | `gravity` + `ground_contact` | `pwe run bounce.pweb --steps 300` | A ball falls and bounces with restitution; the probe's state oscillates. |
+| `heat.pwe` | 2-D grid field, unrolled Gauss–Seidel `flap` sweep | `pwe run heat.pweb --steps 400` | A held-hot centre spreads into a steady radial profile; the centre temperature stabilizes. |
+| `solar.pwe` | `nbody` + `update` (sun + 8 planets + moon) | `pwe present solar.pweb` | A glowing sun with orbiting planets, orbit rings, a per-body legend. |
+| `flock.pwe` | `neighbor_count` / `neighbor_mean` | `pwe present flock.pweb` | Many agents coalesce and align into a flock. |
+| `spring/spring.pwe` | modules + params + units + `at`/`periodic` | `pwe run spring.pweb --steps 400 --param k=16` | A damped spring driven by a periodic kick; changing `k` changes the frequency. |
+| `domains.pwe` | composing `std/forces` + `std/thermal` + `std/em` + `std/chemistry` | `pwe run domains.pweb --steps 200` | A probe on a damped spring cools radiatively toward ambient. |
+| `wave.pwe` | 1-D `wave` solver, sine standing wave | `pwe run wave.pweb --steps 40` | The probe swings between −1 and +1 (total conserved at 0); `present` draws an energy-colored sine curve. |
+| `wave3d.pwe` | 3-D `wave` + sponge absorption | `pwe run wave3d.pweb --steps 60` | Total rises to 1 on each pulse, then decays; `present` shows a translucent blue spherical shell expanding and fading. |
+| `acoustics.pwe` | 2-D sound + `std/acoustics` dB | `pwe run acoustics.pweb --steps 80` | A driven monopole radiates; probes at increasing distance register arrival delay and level in dB. |
+| `robot.pwe` | 2-link arm, `std/robotics` FK, render attributes | `pwe present robot.pweb` | A waving 2-link arm: thin-box links, sphere joints, a red end-effector. |
+| `humanoid.pwe` | 62-part figure: capsule limbs, facial detail, fingers | `pwe present humanoid.pweb` | A person-like figure walking; labels off by default (press 🏷 to show). |
+| `shapes.pwe` | custom shapes: composite, polyhedra, SVG | `pwe present shapes.pweb` | A drone (primitives), an extruded SVG star, a convex octahedron, and an explicit-face gem. |
+
+Quick recipes:
+
+```sh
+# A pulse radiating through a 3-D cube, from t = 0
+cargo build --release -p pwe-cli
+./target/release/pwe compile cli/examples/wave3d.pwe -o wave3d.pweb
+./target/release/pwe present wave3d.pweb --port 8000   # ⟳ Restart, then ▶ Resume
 ```
 
-`not` binds to the following factor: write `not (x > 0)` for a negated
-comparison.
-
-### Loops
-
-`repeat n { … }`, `for i in lo..hi { … }`, and the `break`/`continue`
-statements unroll at lowering time (bounded), so they stay within the EIR's
-straight-line (SSA, no back-edges) contract:
-
-```pwe
-systems {
-    update { on = solver; dt = 1.0
-        let g = s1
-        repeat 100 until (abs(g * g - s0) < 1e-12) {
-            let g = (g + s0 / g) * 0.5       # Newton's method for sqrt(s0)
-        }
-        s1 = g - s1                          # write the converged value back
-    }
-}
+```
+# observed: field u total=1.000000 at n=3, then decays (sponge absorbs it)
+$ ./target/release/pwe run wave3d.pweb --steps 60   # ... field u: 17x17x17 dx=1 total=...
 ```
 
-* Loop bodies contain only `let`, nested loops, and `break`/`continue`;
-  slot rules stay outside the loop (the grammar enforces this).
-* `repeat n until (cond)` checks the condition **after** each iteration
-  (exits when true); `repeat n while (cond)` checks **before** (exits when
-  false). `break`/`continue` accept an optional `if (cond)`.
-* `break` exits only the innermost loop. Guarded expressions are evaluated
-  unconditionally and their results discarded by the gate — IEEE f64 has no
-  traps, so this is safe in straight-line EIR.
-* Caps: one loop iterates at most 1000 times and unrolls at most 10000
-  statements.
-* `let` names may not shadow reserved tokens (`t`, `pi`, `e`, `s0`, `s1`, …)
-  — the grammar resolves those before bare idents, so such a binding could
-  never be read back.
+---
 
-The body is a scalar expression; parameters are referenced by slot `s0`,
-`s1`, … (param *i* is slot `s_i`). Functions lower to EIR `CALL`s and are
-callable from any `update` rule and from a `send` value. Arity is validated at
-compile time.
+# Part IV — Diagnostics & error codes
 
-## Semantics notes
-
-* Time is explicit: `dt` multiplies every rule's expression; the simulation
-  clock `t` advances by `dt` each step.
-* Determinism is first-class: `random()` is seeded and replay-stable; the
-  interpreter and JIT agree byte-for-byte every step (`step_cross`).
-* State slots are capped at 16 per entity (`MAX_STATE_SLOTS`).
-
-## A general simulation substrate
-
-Because rules are plain scalar ODEs over named/positional state slots, with
-`let` locals, user functions, cross-entity references, `random()`/`emit()`, and
-RK4 or Euler integration, the language is not tied to rigid-body physics. Any
-law expressible as (coupled) differential or difference equations — physical,
-chemical, or biological — can be modeled, simulated, and visualized. See
-`reference/examples/scientific_laws_demo.rs` for a live gallery running five
-laws at once (harmonic motion, Kepler orbit, reversible kinetics, logistic
-growth, radioactive decay), each proven by `reference/tests/laws.rs`.
-* Reads-before-writes: within one step, every referenced value is the value
-  from the *start* of the step.
-
-## Error detail codes
-
-| Code | Meaning |
-| --- | --- |
-| 48 | Missing required system param. |
-| 49 | Unknown system kind. |
-| 51 | Convex hull needs ≥ 4 points. |
-| 52 | State slot count out of range (1..=16). |
-| 53 | Missing `linear` row. |
-| 54 | `linear` row length ≠ `slots + 1`. |
-| 55 | Invalid `funcs` body / empty `update` rule / bad slot LHS. |
-| 56 | Expression parse failure. |
-| 57 | Number parse failure. |
-| 58 | Slot / reference parse failure. |
-| 59 | Call arity violation. |
-| 60 | Program parse failure. |
-| 62 | Unknown entity or channel name. |
-| 64 | Invalid color literal. |
-
-## Diagnostics
-
-Compile failures carry a human message, a detail code, and a source offset.
-The reference surfaces them through the `lang` module:
+Compile failures carry a human message, a detail code, and a source offset:
 
 ```rust
 match pwe_reference::lang::LangRuntime::compile(source) {
@@ -537,9 +579,6 @@ match pwe_reference::lang::LangRuntime::compile(source) {
     Err(e) => eprintln!("{}", pwe_reference::lang::diagnose(source, &e)),
 }
 ```
-
-`lang::diagnose` renders a multi-line report with the offending source line
-and a caret, e.g. a missing parameter:
 
 ```text
 error 48: system 'update' is missing required parameter 'dt'
@@ -549,55 +588,38 @@ error 48: system 'update' is missing required parameter 'dt'
     |         ^
 ```
 
-* `lang::clear_diagnostics` / `lang::take_diagnostics` expose the raw
-  `Diagnostic` list (`detail`, `message`, `byte_offset`) for a failed compile.
-* `lang::detail_name(detail)` maps a code to its canonical phrase.
-* Comments (`#` / `//` to end of line) are skipped as whitespace anywhere in a
-  program, including inside `update` / `rk4` rule blocks.
+| Code | Meaning |
+| --- | --- |
+| 48 | Missing required system param. |
+| 49 | Unknown system kind. |
+| 51 | Convex hull needs ≥ 4 points. |
+| 52 | State slot count out of range (1..=16). |
+| 53 / 54 | `linear` row missing / wrong length. |
+| 55 | Invalid `funcs` body / empty `update` rule / bad slot LHS. |
+| 56 / 57 / 58 | Expression / number / slot-reference parse failure. |
+| 59 | Call arity violation. |
+| 60 | Program parse failure. |
+| 62 | Unknown entity or channel name. |
+| 64 | Invalid color literal. |
+| 69 | Invariant violated. |
+| 70 | Spatial query outside a rule. |
+| 73 | Dynamic slot LHS in `rk4`. |
+| 76 | Import/module error (missing file, duplicate entity/field). |
+| 77 | Dimensional mismatch. |
 
-## Recipes
+---
 
-Minimal falling body (`language_demo`):
+# Part V — Semantics notes
 
-```pwe
-world {
-    gravity = (0, -9.81, 0)
-    entity vehicle { position = (0, 8, 0); velocity = (4, 0, 0); mass = 4; dynamic = true; box = (1, 0.5, 0.7) }
-    entity ground  { position = (0, -5, 0); dynamic = false; box = (50, 5, 50) }
-}
-systems {
-    gravity { gravity_y = -9.81; dt = 1 / 60 }
-    integrate { dt = 1 / 60 }
-    ground_contact { restitution = 0.6 }
-}
-```
-
-Radioactive decay (linear):
-
-```pwe
-world { gravity = (0,0,0) entity isotope { state = (100, 0) } }
-systems { linear { slots = 2; dt = 1; row0 = (-0.05, 0, 0); row1 = (0, 0, 0) } }
-```
-
-Nonlinear pendulum (update + `sin`):
-
-```pwe
-world { gravity = (0,0,0) entity pend { state = (1.2, 0) } }
-systems { update { dt = 0.0005
-    s0 = s1
-    s1 = -9.81 * sin(s0) } }
-```
-
-Orbital system (nbody, `solar_demo`):
-
-```pwe
-world {
-    gravity = (0, 0, 0)
-    entity sun  { state = (0, 0, 0, 0, 0, 0, 1000000, 0); color = 0xFFD24A }
-    entity earth{ state = (4, 0, 0, 0, 500, 0, 1, 0);     color = 0x4aa8ff }
-}
-systems { nbody { G = 1.0; dt = 0.0001 } }
-```
-
-`state[0]` is the orbital radius vector's x, `state[3]` the initial orbital
-velocity; slot 6 is the mass (visual size in the viewer).
+* **Time is explicit**: `dt` multiplies every rule's expression; the clock `t`
+  advances by `dt` each step.
+* **Reads-before-writes**: within a step, every referenced value is the value
+  from the *start* of the step.
+* **Determinism is first-class**: `random()` is seeded and replay-stable; the
+  interpreter and JIT agree byte-for-byte every step (`step_cross`).
+* **State slots** are capped at 16 per entity.
+* **A general substrate**: because rules are plain scalar ODEs over named state
+  slots, with locals, functions, cross-entity references, `random()`/`emit()`,
+  and RK4/Euler integration, the language is not tied to rigid-body physics —
+  any (coupled) differential or difference law can be modeled, simulated, and
+  visualized.
