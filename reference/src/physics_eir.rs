@@ -120,6 +120,11 @@ pub mod field {
 pub struct SceneRuntime<'a> {
     pub scene: &'a Scene,
     pending: std::collections::BTreeMap<(u128, ComponentTypeId, u32), u64>,
+    /// A **dense** per-field overlay of cell values written so far this step,
+    /// materialized lazily from the `Field` on the first grid write. Grid
+    /// read-after-write therefore costs O(1), not a tree lookup per cell
+    /// (RFC-0037). Materialized only when a grid cell is written.
+    field_overlay: std::collections::BTreeMap<ComponentTypeId, Vec<f64>>,
     /// Canonical field component id -> the scene's grid field, for
     /// `ReadFieldCell`/`FieldLaplacian` cell access.
     field_ids: std::collections::BTreeMap<ComponentTypeId, &'a crate::field::Field>,
@@ -140,6 +145,7 @@ impl<'a> SceneRuntime<'a> {
         Self {
             scene,
             pending: std::collections::BTreeMap::new(),
+            field_overlay: std::collections::BTreeMap::new(),
             field_ids,
             param_ids,
         }
@@ -174,7 +180,12 @@ impl EirRuntime for SceneRuntime<'_> {
                     byte_offset: 0,
                 });
             }
-            Ok(f.value_linear(idx).to_bits())
+            Ok(self
+                .field_overlay
+                .get(&target.component)
+                .map(|c| c[idx])
+                .unwrap_or_else(|| f.value_linear(idx))
+                .to_bits())
         } else if target.entity == 0 {
             // A world-level component that is not a registered parameter, clock,
             // or field: an unresolved reference (a bare name bound to a
@@ -239,6 +250,20 @@ impl EirRuntime for SceneRuntime<'_> {
         }
     }
     fn write_field(&mut self, target: ComponentRef, value: u64) {
+        // Grid cells go to the dense per-field overlay (RFC-0037); the
+        // interpreter still records the `WorldWrite`, so `apply_writes` and the
+        // cross-backend write comparison are unchanged.
+        if let Some(f) = self.field_ids.get(&target.component) {
+            let idx = (target.offset / field::STATE_SLOT_BYTES) as usize;
+            let cells = self
+                .field_overlay
+                .entry(target.component)
+                .or_insert_with(|| f.cells().to_vec());
+            if let Some(c) = cells.get_mut(idx) {
+                *c = f64::from_bits(value);
+            }
+            return;
+        }
         let key = (target.entity, target.component, target.offset);
         self.pending.insert(key, value);
     }
@@ -339,15 +364,12 @@ impl EirRuntime for SceneRuntime<'_> {
         // The Field's zero-flux stencil (off-edge neighbors = center), scaled
         // by 1/dx²; each cell prefers any in-interpretation write (the same
         // overlay `read_field` sees).
+        let overlay = self.field_overlay.get(&component);
         let cell = |ci: usize, cj: usize, ck: usize| -> f64 {
-            let idx = ((ck * h + cj) * w + ci) as u32;
-            if let Some(&v) = self
-                .pending
-                .get(&(0, component, idx * field::STATE_SLOT_BYTES))
-            {
-                f64::from_bits(v)
-            } else {
-                f.value_linear(idx as usize)
+            let idx = (ck * h + cj) * w + ci;
+            match overlay {
+                Some(c) => c[idx],
+                None => f.value_linear(idx),
             }
         };
         let center = cell(ii, jj, kk);
