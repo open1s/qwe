@@ -242,6 +242,44 @@ pub enum Immediate {
     Bool(bool),
 }
 
+/// A call frame's register file: a dense array indexed by SSA result id. The
+/// interpreter used a `BTreeMap` here, which made every instruction a tree
+/// operation; registers are small contiguous ids, so a dense array with a
+/// presence bitmap is O(1) and allocation-light.
+struct Regs {
+    vals: Vec<Immediate>,
+    def: Vec<bool>,
+}
+
+impl Regs {
+    #[inline]
+    fn new(cap: usize) -> Self {
+        Self {
+            vals: vec![Immediate::U64(0); cap],
+            def: vec![false; cap],
+        }
+    }
+    #[inline]
+    fn get(&self, r: &u32) -> Option<&Immediate> {
+        let i = *r as usize;
+        if i < self.def.len() && self.def[i] {
+            Some(&self.vals[i])
+        } else {
+            None
+        }
+    }
+    #[inline]
+    fn insert(&mut self, r: u32, v: Immediate) {
+        let i = r as usize;
+        if i >= self.vals.len() {
+            self.vals.resize(i + 1, Immediate::U64(0));
+            self.def.resize(i + 1, false);
+        }
+        self.vals[i] = v;
+        self.def[i] = true;
+    }
+}
+
 impl Immediate {
     fn ty(self) -> ValueType {
         match self {
@@ -431,6 +469,96 @@ pub struct EirModule {
     pub functions: Vec<Function>,
 }
 
+/// The SSA type of an instruction's result: an explicit annotation, else a
+/// constant's type, else an opcode-inferred default (`Const` yields the
+/// constant's type; comparisons and unknown ops default as before).
+fn infer_instruction_type(i: &Instruction) -> Option<ValueType> {
+    if let Some(t) = i.result_type {
+        return Some(t);
+    }
+    i.constant.map(Immediate::ty).or(match i.opcode {
+        Opcode::Eq | Opcode::Ne | Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => {
+            Some(ValueType::Bool)
+        }
+        Opcode::ReadView
+        | Opcode::NeighborCount
+        | Opcode::NearestDist
+        | Opcode::NeighborMean
+        | Opcode::NearestOffsetX
+        | Opcode::NearestOffsetY
+        | Opcode::NearestOffsetZ
+        | Opcode::FiredAt
+        | Opcode::FiredEvery => Some(ValueType::F64),
+        Opcode::Step => Some(ValueType::F64),
+        Opcode::ReadSlotDyn => Some(ValueType::F64),
+        Opcode::ReadFieldCell | Opcode::FieldLaplacian | Opcode::ReadEvent => Some(ValueType::F64),
+        Opcode::Const => i.constant.map(Immediate::ty),
+        Opcode::Sin
+        | Opcode::Cos
+        | Opcode::Exp
+        | Opcode::Ln
+        | Opcode::Sqrt
+        | Opcode::Abs
+        | Opcode::Floor
+        | Opcode::Ceil
+        | Opcode::Round
+        | Opcode::Sign
+        | Opcode::Log10
+        | Opcode::Log2
+        | Opcode::Sinh
+        | Opcode::Cosh
+        | Opcode::Tanh
+        | Opcode::Asin
+        | Opcode::Acos
+        | Opcode::Atan
+        | Opcode::Atan2
+        | Opcode::Hypot
+        | Opcode::Print
+        | Opcode::Pow
+        | Opcode::Add
+        | Opcode::Sub
+        | Opcode::Mul
+        | Opcode::Div
+        | Opcode::Rem
+        | Opcode::Time
+        | Opcode::Random
+        | Opcode::Io => Some(ValueType::F64),
+        _ => Some(ValueType::U64),
+    })
+}
+
+/// All operands of an arithmetic instruction must share one numeric type.
+fn numeric_type(
+    reg_types: &std::collections::HashMap<u32, ValueType>,
+    operands: &[u32],
+    index: usize,
+) -> Result<ValueType> {
+    if operands.is_empty() {
+        return Err(error(Status::EirInvalid, 11, index));
+    }
+    let first = reg_types
+        .get(&operands[0])
+        .copied()
+        .ok_or(error(Status::EirInvalid, 12, index))?;
+    for &id in operands.iter().skip(1) {
+        if reg_types.get(&id).copied() != Some(first) {
+            return Err(error(Status::EirInvalid, 13, index));
+        }
+    }
+    if !matches!(
+        first,
+        ValueType::I32
+            | ValueType::U32
+            | ValueType::I64
+            | ValueType::U64
+            | ValueType::F32
+            | ValueType::F64
+    ) {
+        return Err(error(Status::EirInvalid, 14, index));
+    }
+    Ok(first)
+}
+
 impl EirModule {
     /// Validates SSA order, single definition, types, and declared effects.
     /// `pure` marks the module as deterministic (no time/random/io/device/
@@ -497,6 +625,20 @@ impl EirModule {
         for slot in 1..=function.argument_count {
             defs.insert(slot, (ValueType::F64, true));
         }
+        // Register id -> inferable type, computed once. A linear rescan per
+        // operand was quadratic on large unrolled systems (3D field sweeps).
+        let mut reg_types: std::collections::HashMap<u32, ValueType> =
+            std::collections::HashMap::with_capacity(function.instructions.len());
+        for slot in 1..=function.argument_count {
+            reg_types.insert(slot, ValueType::F64);
+        }
+        for ins in &function.instructions {
+            if ins.result_id != 0 {
+                if let Some(t) = infer_instruction_type(ins) {
+                    reg_types.insert(ins.result_id, t);
+                }
+            }
+        }
 
         for (index, instruction) in function.instructions.iter().enumerate() {
             let op: Opcode = instruction.opcode;
@@ -549,7 +691,7 @@ impl EirModule {
                     if instruction.operands.len() != 1 {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
-                    let t = self.lookup_type(function, instruction.operands[0]);
+                    let t = reg_types.get(&instruction.operands[0]).copied();
                     if t != Some(ValueType::F64) {
                         return Err(error(Status::EirInvalid, 13, index));
                     }
@@ -562,7 +704,7 @@ impl EirModule {
                 | Opcode::Rem
                 | Opcode::Pow => {
                     // arithmetic: operands must be a consistent numeric type.
-                    let ty = self.numeric_type(function, &instruction.operands, index)?;
+                    let ty = numeric_type(&reg_types, &instruction.operands, index)?;
                     Some(ty)
                 }
                 Opcode::Atan2 | Opcode::Hypot => {
@@ -570,8 +712,8 @@ impl EirModule {
                     if instruction.operands.len() != 2 {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
-                    let a = self.lookup_type(function, instruction.operands[0]);
-                    let b = self.lookup_type(function, instruction.operands[1]);
+                    let a = reg_types.get(&instruction.operands[0]).copied();
+                    let b = reg_types.get(&instruction.operands[1]).copied();
                     if a != Some(ValueType::F64) || b != Some(ValueType::F64) {
                         return Err(error(Status::EirInvalid, 13, index));
                     }
@@ -599,13 +741,13 @@ impl EirModule {
                     if instruction.operands.len() != 1 {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
-                    if self.lookup_type(function, instruction.operands[0]) != Some(ValueType::F64) {
+                    if reg_types.get(&instruction.operands[0]).copied() != Some(ValueType::F64) {
                         return Err(error(Status::EirInvalid, 13, index));
                     }
                     Some(ValueType::F64)
                 }
                 Opcode::Eq | Opcode::Ne | Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => {
-                    self.numeric_type(function, &instruction.operands, index)?;
+                    numeric_type(&reg_types, &instruction.operands, index)?;
                     Some(ValueType::Bool)
                 }
                 Opcode::Load => {
@@ -705,8 +847,8 @@ impl EirModule {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
                     // Result type follows the selected operands.
-                    let a = self.lookup_type(function, instruction.operands[1]);
-                    let b = self.lookup_type(function, instruction.operands[2]);
+                    let a = reg_types.get(&instruction.operands[1]).copied();
+                    let b = reg_types.get(&instruction.operands[2]).copied();
                     if a != b || a.is_none() {
                         return Err(error(Status::EirInvalid, 13, index));
                     }
@@ -786,110 +928,6 @@ impl EirModule {
         Ok(())
     }
 
-    fn numeric_type(
-        &self,
-        function: &Function,
-        operands: &[u32],
-        index: usize,
-    ) -> Result<ValueType> {
-        if operands.is_empty() {
-            return Err(error(Status::EirInvalid, 11, index));
-        }
-        // All arithmetic operands must resolve to the same numeric type.
-        // We look types up from the collected defs (built during validation);
-        // here we re-scan earlier instructions for each operand type.
-        let types: Vec<Option<ValueType>> = operands
-            .iter()
-            .map(|id| self.lookup_type(function, *id))
-            .collect();
-        let first = types[0].ok_or(error(Status::EirInvalid, 12, index))?;
-        for ty in types.iter().skip(1) {
-            if *ty != Some(first) {
-                return Err(error(Status::EirInvalid, 13, index));
-            }
-        }
-        if !matches!(
-            first,
-            ValueType::I32
-                | ValueType::U32
-                | ValueType::I64
-                | ValueType::U64
-                | ValueType::F32
-                | ValueType::F64
-        ) {
-            return Err(error(Status::EirInvalid, 14, index));
-        }
-        Ok(first)
-    }
-
-    fn lookup_type(&self, function: &Function, id: u32) -> Option<ValueType> {
-        if id != 0 && id <= function.argument_count {
-            return Some(ValueType::F64); // function argument slot
-        }
-        function.instructions.iter().find_map(|i| {
-            if i.result_id == id {
-                // Prefer an explicit annotation (present on all lowered ops),
-                // then a constant, then opcode-inferred defaults.
-                if let Some(t) = i.result_type {
-                    return Some(t);
-                }
-                i.constant.map(Immediate::ty).or(match i.opcode {
-                    Opcode::Eq | Opcode::Ne | Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => {
-                        Some(ValueType::Bool)
-                    }
-                    Opcode::ReadView
-                    | Opcode::NeighborCount
-                    | Opcode::NearestDist
-                    | Opcode::NeighborMean
-                    | Opcode::NearestOffsetX
-                    | Opcode::NearestOffsetY
-                    | Opcode::NearestOffsetZ
-                    | Opcode::FiredAt
-                    | Opcode::FiredEvery => Some(ValueType::F64),
-                    Opcode::Step => Some(ValueType::F64),
-                    Opcode::ReadSlotDyn => Some(ValueType::F64),
-                    Opcode::ReadFieldCell | Opcode::FieldLaplacian | Opcode::ReadEvent => {
-                        Some(ValueType::F64)
-                    }
-                    Opcode::Const => i.constant.map(Immediate::ty),
-                    Opcode::Sin
-                    | Opcode::Cos
-                    | Opcode::Exp
-                    | Opcode::Ln
-                    | Opcode::Sqrt
-                    | Opcode::Abs
-                    | Opcode::Floor
-                    | Opcode::Ceil
-                    | Opcode::Round
-                    | Opcode::Sign
-                    | Opcode::Log10
-                    | Opcode::Log2
-                    | Opcode::Sinh
-                    | Opcode::Cosh
-                    | Opcode::Tanh
-                    | Opcode::Asin
-                    | Opcode::Acos
-                    | Opcode::Atan
-                    | Opcode::Atan2
-                    | Opcode::Hypot
-                    | Opcode::Print
-                    | Opcode::Pow
-                    | Opcode::Add
-                    | Opcode::Sub
-                    | Opcode::Mul
-                    | Opcode::Div
-                    | Opcode::Rem
-                    | Opcode::Time
-                    | Opcode::Random
-                    | Opcode::Io => Some(ValueType::F64),
-                    _ => Some(ValueType::U64),
-                })
-            } else {
-                None
-            }
-        })
-    }
-
     /// Deterministic interpretation: executes each function in id order and
     /// returns ordered world writes. Uses a no-op runtime and a default
     /// deterministic execution context. Validates the module as pure
@@ -942,18 +980,17 @@ impl EirModule {
     ) -> Result<Vec<WorldWrite>> {
         let _ = (world, version);
         let mut writes: Vec<WorldWrite> = Vec::new();
-        let mut functions = self.functions.clone();
-        functions.sort_by_key(|f| f.id);
-        let index_of: BTreeMap<u64, usize> = functions
-            .iter()
-            .enumerate()
-            .map(|(i, f)| (f.id, i))
-            .collect();
-        for entry in 0..functions.len() {
+        // Deterministic id order without cloning the (potentially huge) function
+        // bodies; the index maps a function id to its position in `self.functions`.
+        let mut order: Vec<usize> = (0..self.functions.len()).collect();
+        order.sort_by_key(|&i| self.functions[i].id);
+        let index_of: std::collections::HashMap<u64, usize> =
+            order.iter().map(|&i| (self.functions[i].id, i)).collect();
+        for &entry in &order {
             // Only argument-less functions are entry points; functions that take
             // arguments are reached exclusively via `CALL`.
-            if functions[entry].argument_count == 0 {
-                self.run_call_tree(rt, env, &functions, &index_of, entry, &mut writes)?;
+            if self.functions[entry].argument_count == 0 {
+                self.run_call_tree(rt, env, &self.functions, &index_of, entry, &mut writes)?;
             }
         }
         Ok(writes)
@@ -968,13 +1005,16 @@ impl EirModule {
         rt: &mut dyn EirRuntime,
         env: &mut ExecEnv,
         functions: &[Function],
-        index_of: &BTreeMap<u64, usize>,
+        index_of: &std::collections::HashMap<u64, usize>,
         entry: usize,
         writes: &mut Vec<WorldWrite>,
     ) -> Result<()> {
         let mut frames: Vec<usize> = vec![entry];
         let mut pcs: Vec<usize> = vec![0usize];
-        let mut stacks: Vec<BTreeMap<u32, Immediate>> = vec![BTreeMap::new()];
+        // Register ids are dense; size the root frame to an upper bound.
+        let root_cap =
+            functions[entry].instructions.len() + functions[entry].argument_count as usize + 1;
+        let mut stacks: Vec<Regs> = vec![Regs::new(root_cap)];
         loop {
             let depth = frames.len();
             let fi = frames[depth - 1];
@@ -1003,7 +1043,10 @@ impl EirModule {
                     if depth + 1 > MAX_CALL_DEPTH {
                         return Err(error(Status::EirInvalid, 33, pc));
                     }
-                    let mut callee: BTreeMap<u32, Immediate> = BTreeMap::new();
+                    let callee_cap = functions[target].instructions.len()
+                        + functions[target].argument_count as usize
+                        + 1;
+                    let mut callee = Regs::new(callee_cap);
                     {
                         let cur = &stacks[depth - 1];
                         for (slot, arg_id) in instruction.operands.iter().skip(1).enumerate() {
@@ -1535,7 +1578,7 @@ impl EirModule {
         &self,
         frames: &mut Vec<usize>,
         pcs: &mut Vec<usize>,
-        stacks: &mut Vec<BTreeMap<u32, Immediate>>,
+        stacks: &mut Vec<Regs>,
         functions: &[Function],
     ) -> Result<()> {
         if frames.len() == 1 {

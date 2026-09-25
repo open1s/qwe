@@ -28,27 +28,49 @@ fn canonical_component_id(namespace: &str, stable_name: &str, major: u32) -> Com
     identity.type_id().expect("fixed valid component identity")
 }
 
+// The fixed component ids are pure functions of constant strings, but deriving
+// one runs SHA-256. They are read on every field/view access, so memoize them:
+// a single `OnceLock` per id turns a per-read hash into one atomic load.
+fn fixed_id(
+    slot: &'static std::sync::OnceLock<ComponentTypeId>,
+    namespace: &str,
+    name: &str,
+) -> ComponentTypeId {
+    *slot.get_or_init(|| canonical_component_id(namespace, name, 1))
+}
+
+/// Canonical id of the `Transform` component (`pwe.physics.transform` v1).
 pub fn transform_id() -> ComponentTypeId {
-    canonical_component_id("pwe.physics", "transform", 1)
+    static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
+    fixed_id(&ID, "pwe.physics", "transform")
 }
+/// Canonical id of the `Velocity` component (`pwe.physics.velocity` v1).
 pub fn velocity_id() -> ComponentTypeId {
-    canonical_component_id("pwe.physics", "velocity", 1)
+    static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
+    fixed_id(&ID, "pwe.physics", "velocity")
 }
+/// Canonical id of the `RigidBody` component (`pwe.physics.rigid_body` v1).
 pub fn rigid_body_id() -> ComponentTypeId {
-    canonical_component_id("pwe.physics", "rigid_body", 1)
+    static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
+    fixed_id(&ID, "pwe.physics", "rigid_body")
 }
+/// Canonical id of the `State` component (`pwe.physics.state` v1).
 pub fn state_id() -> ComponentTypeId {
-    canonical_component_id("pwe.physics", "state", 1)
+    static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
+    fixed_id(&ID, "pwe.physics", "state")
 }
+/// Canonical id of the global simulation clock (`pwe.time.clock` v1).
 pub fn sim_time_id() -> ComponentTypeId {
-    canonical_component_id("pwe.time", "clock", 1)
+    static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
+    fixed_id(&ID, "pwe.time", "clock")
 }
 
 /// Canonical `ComponentTypeId` for the hidden per-entity invariant verdict
 /// component: each `invariant` system writes its 0/1 check result here so the
 /// host can fail the step when an invariant is violated.
 pub fn check_id() -> ComponentTypeId {
-    canonical_component_id("pwe.lang", "check", 1)
+    static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
+    fixed_id(&ID, "pwe.lang", "check")
 }
 
 /// Canonical `ComponentTypeId` for a named model parameter

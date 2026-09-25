@@ -3609,6 +3609,7 @@ impl EirSystem for DiffuseSystem {
         let cells = w as usize * h as usize * d as usize;
         let mut cur_regs: Vec<u32> = Vec::with_capacity(cells);
         let mut lap_regs: Vec<u32> = Vec::with_capacity(cells);
+        let mut ij_regs: Vec<(u32, u32)> = Vec::with_capacity(cells);
         for k in 0..cells {
             let i = (k % w as usize) as f64;
             // Pack `(j, k)` as `j + k·height` — the linear index the
@@ -3639,16 +3640,11 @@ impl EirSystem for DiffuseSystem {
             ));
             cur_regs.push(cur);
             lap_regs.push(lap);
+            ij_regs.push((i_reg, j_reg));
         }
         // Pass 2: apply `T += rate·∇²T` to every cell.
         for k in 0..cells {
-            let i = (k % w as usize) as f64;
-            // Pack `(j, k)` as `j + k·height` — the linear index the
-            // field opcodes fold back into a 3D `[k][j][i]` cell.
-            let j = (((k / w as usize) % h as usize) + (k / (w as usize * h as usize)) * h as usize)
-                as f64;
-            let i_reg = const_reg(i, &mut next, out);
-            let j_reg = const_reg(j, &mut next, out);
+            let (i_reg, j_reg) = ij_regs[k];
             let delta = binary(crate::eir::Opcode::Mul, rate, lap_regs[k], &mut next, out);
             let new = binary(crate::eir::Opcode::Add, cur_regs[k], delta, &mut next, out);
             out.push(crate::physics_eir::instr(
@@ -3844,6 +3840,7 @@ impl EirSystem for WaveSystem {
         let mut cur_regs: Vec<u32> = Vec::with_capacity(cells);
         let mut prev_regs: Vec<u32> = Vec::with_capacity(cells);
         let mut lap_regs: Vec<u32> = Vec::with_capacity(cells);
+        let mut ij_regs: Vec<(u32, u32)> = Vec::with_capacity(cells);
         for k in 0..cells {
             let i = (k % w as usize) as f64;
             // Pack `(j, k)` as `j + k·height` — the linear index the
@@ -3885,6 +3882,7 @@ impl EirSystem for WaveSystem {
             cur_regs.push(cur);
             prev_regs.push(pv);
             lap_regs.push(lap);
+            ij_regs.push((i_reg, j_reg));
         }
         // Pass 2: u(t+h) = (2u − u_prev)·keep + cfl·∇²u − γ·(u − u_prev), then
         // shift u_prev ← u. `keep` is the global retention; `γ` is a graded
@@ -3911,12 +3909,7 @@ impl EirSystem for WaveSystem {
             } else {
                 0.0
             };
-            let i = iu as f64;
-            // Pack `(j, k)` as `j + k·height` — the linear index the
-            // field opcodes fold back into a 3D `[k][j][i]` cell.
-            let j = (ju + ku * hd) as f64;
-            let i_reg = const_reg(i, &mut next, out);
-            let j_reg = const_reg(j, &mut next, out);
+            let (i_reg, j_reg) = ij_regs[k];
             let twice = binary(crate::eir::Opcode::Mul, two, cur_regs[k], &mut next, out);
             let diff = binary(crate::eir::Opcode::Sub, twice, prev_regs[k], &mut next, out);
             let diff = binary(crate::eir::Opcode::Mul, diff, keep, &mut next, out);

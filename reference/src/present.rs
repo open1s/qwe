@@ -788,13 +788,13 @@ function addVel(x,y,z,vx,vy,vz,color) {{
 }}
 const fieldObjects = new Map();
 let fieldExtent = 0;
-const FIELD_RES = 40;
 function clearFields() {{ for (const o of fieldObjects.values()) {{ if (o.mc) {{ scene.remove(o.mc); scene.remove(o.trough.mc); }} if (o.line) scene.remove(o.line); }} fieldObjects.clear(); }}
 // One translucent shell per field, coloured by radius (energy ~ 1/r^2): hot near
 // the source -> cool far away, across the shell's own hue family.
+function fieldRes(W, H, D) {{ return Math.max(16, Math.min(40, Math.round(1.5*Math.max(W,H,D)))); }}
 function makeShell(hot, cool, W, H, D, dx) {{
   const mat = new THREE.MeshStandardMaterial({{vertexColors:true,color:0xffffff,metalness:0.05,roughness:0.5,transparent:true,opacity:0.72,side:THREE.DoubleSide,emissive:0x06101f,emissiveIntensity:0.12}});
-  const mc = new MarchingCubes(FIELD_RES, mat, false, false, 60000);
+  const mc = new MarchingCubes(fieldRes(W,H,D), mat, false, false, 60000);
   mc.scale.set(W*dx/2, H*dx/2, D*dx/2);
   mc.matrixAutoUpdate = false; mc.updateMatrix();
   scene.add(mc);
@@ -827,7 +827,7 @@ function renderFields(fields) {{
     if (!(hi>lo)) return;
     const full=new Float32Array(W*H*D);
     if (st===1) {{ for (let i=0;i<fl.cells.length && i<full.length;i++) full[i]=fl.cells[i]; }}
-    else {{ for (let s=0;s<fl.cells.length;s++) {{ const lin=s*st; if (lin<full.length) full[lin]=fl.cells[s]; }} }}
+    else {{ full.fill(0); for (let s=0;s<fl.cells.length;s++) {{ const lin=s*st; if (lin<full.length) full[lin]=fl.cells[s]; }} }}
 
     if (H<=1 && D<=1) {{
       let ent = fieldObjects.get(fl.name);
@@ -868,7 +868,7 @@ function renderFields(fields) {{
         trough: makeShell([0.30,0.85,1.0], [0.10,0.30,0.95], W, H, D, dx) }};
       fieldObjects.set(fl.name, ent);
     }}
-    const R=FIELD_RES;
+    const R=fieldRes(W,H,D);
     const at=(i,j,k)=>full[k*W*H + j*W + i];
     const fld=new Float32Array(R*R*R);
     for (let z=0; z<R; z++) {{
@@ -886,7 +886,7 @@ function renderFields(fields) {{
         }}
       }}
     }}
-    for (let p2=0; p2<3; p2++) {{
+    for (let p2=0; p2<2; p2++) {{
       const src = fld.slice();
       for (let z=1; z<R-1; z++) for (let y=1; y<R-1; y++) for (let x=1; x<R-1; x++) {{
         const q = z*R*R + y*R + x;
@@ -1172,13 +1172,13 @@ function make(e){
 }
 const fieldObjects = new Map();
 let fieldExtent = 0;
-const FIELD_RES = 40;
 function clearFields() { for (const o of fieldObjects.values()) { if (o.mc) { scene.remove(o.mc); scene.remove(o.trough.mc); } if (o.line) scene.remove(o.line); if (o.pts) scene.remove(o.pts); } fieldObjects.clear(); }
 // One translucent shell per field, coloured by radius (energy ~ 1/r^2): hot near
 // the source -> cool far away, across the shell's own hue family.
+function fieldRes(W, H, D) { return Math.max(16, Math.min(40, Math.round(1.5*Math.max(W,H,D)))); }
 function makeShell(hot, cool, W, H, D, dx) {
   const mat = new THREE.MeshStandardMaterial({vertexColors:true,color:0xffffff,metalness:0.05,roughness:0.5,transparent:true,opacity:0.72,side:THREE.DoubleSide,emissive:0x06101f,emissiveIntensity:0.12});
-  const mc = new MarchingCubes(FIELD_RES, mat, false, false, 60000);
+  const mc = new MarchingCubes(fieldRes(W,H,D), mat, false, false, 60000);
   mc.scale.set(W*dx/2, H*dx/2, D*dx/2);
   mc.matrixAutoUpdate = false; mc.updateMatrix();
   scene.add(mc);
@@ -1211,7 +1211,7 @@ function renderFields(fields) {
     if (!(hi>lo)) return;
     const full=new Float32Array(W*H*D);
     if (st===1) { for (let i=0;i<fl.cells.length && i<full.length;i++) full[i]=fl.cells[i]; }
-    else { for (let s=0;s<fl.cells.length;s++) { const lin=s*st; if (lin<full.length) full[lin]=fl.cells[s]; } }
+    else { full.fill(0); for (let s=0;s<fl.cells.length;s++) { const lin=s*st; if (lin<full.length) full[lin]=fl.cells[s]; } }
 
     if (H<=1 && D<=1) {
       let ent = fieldObjects.get(fl.name);
@@ -1252,7 +1252,7 @@ function renderFields(fields) {
         trough: makeShell([0.30,0.85,1.0], [0.10,0.30,0.95], W, H, D, dx) };
       fieldObjects.set(fl.name, ent);
     }
-    const R=FIELD_RES;
+    const R=fieldRes(W,H,D);
     const at=(i,j,k)=>full[k*W*H + j*W + i];
     const fld=new Float32Array(R*R*R);
     for (let z=0; z<R; z++) {
@@ -1270,7 +1270,7 @@ function renderFields(fields) {
         }
       }
     }
-    for (let p2=0; p2<3; p2++) {
+    for (let p2=0; p2<2; p2++) {
       const src = fld.slice();
       for (let z=1; z<R-1; z++) for (let y=1; y<R-1; y++) for (let x=1; x<R-1; x++) {
         const q = z*R*R + y*R + x;
