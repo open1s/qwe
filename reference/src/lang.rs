@@ -5356,7 +5356,7 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     count += 1;
                 }
                 let per_step = match s.params.get("count").copied() {
-                    Some(v) if v >= 1.0 && v <= 1024.0 && v.fract() == 0.0 => v as u32,
+                    Some(v) if (1.0..=1024.0).contains(&v) && v.fract() == 0.0 => v as u32,
                     Some(_) => {
                         return Err(error_at(
                             Status::Invalid,
