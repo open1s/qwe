@@ -84,6 +84,40 @@ Entity ids are 1-based in declaration order; channels follow the bodies. The
 `color`/`shape`/`size`/`opacity`/`glow`/`label` attributes are **presentation
 only** — they never affect simulation state, determinism, or the state hash.
 
+
+### Custom shapes (including SVG)
+
+Beyond the built-in `shape = point|sphere|box|capsule`, a world can declare named
+**custom shapes** and entities reference them by name:
+
+```pwe
+world {
+  # a composite: primitives and/or an extruded SVG path, each with a local offset
+  shape drone {
+    part capsule = (0.06, 0.30, 0.06);
+    part sphere  = 0.09 at (0, 0.20, 0);
+    part box     = (0.54, 0.02, 0.02) at (0, 0.20, 0);
+  }
+  shape star {
+    part svg = "M 0,-1 L 0.224,-0.309 L 0.951,-0.309 L 0.363,0.118 L 0.588,0.809 \
+               L 0,0.382 L -0.588,0.809 L -0.363,0.118 L -0.951,-0.309 Z" depth 0.22 scale 0.8;
+  }
+  entity craft { state = (x = 0.0, y = 0.0, z = 0.0) shape = drone; color = 0x4AC3FF }
+}
+```
+
+* `part <kind> = <params> [at (x,y,z)] [scale s]` — one part of the shape:
+  * `sphere = r`, `box = (dx, dy, dz)`, `capsule = (r_bottom, length, r_top)`;
+  * `hull = [(x,y,z), …]` — a **convex polyhedron** from its vertices;
+  * `poly = [(x,y,z), …] faces = [[i,j,k,…], …]` — an **arbitrary polyhedron**
+    from explicit vertices and index faces;
+  * `svg = "<path d>" depth <d>` — an SVG path extruded along Z.
+  `at` offsets the part in the entity's local frame; `scale` sets the part's
+  size (amplitude).
+* An entity can scale the whole custom shape with `size = s`.
+* The viewer draws the shape as a group of parts, rotated/positioned with the
+  entity. Custom shapes are **presentation only**.
+
 ## Systems
 
 | System | Params | Meaning |

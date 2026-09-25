@@ -1,0 +1,41 @@
+# shapes.pwe — user-defined custom shapes declared in the language and drawn by
+# the viewer. A `shape <name> { part … }` block composes primitives (sphere, box,
+# capsule), **polyhedra** (`hull` = a convex hull of vertices, `poly` = explicit
+# vertices + faces), and extruded **SVG paths**, each with an optional `at`
+# offset and `scale` (its amplitude). An entity uses a shape via `shape = <name>`
+# and can scale it with `size`. Nothing here affects simulation state.
+world {
+  gravity = (0, 0, 0)
+
+  # a drone: smooth capsule body + dome + two rotor bars
+  shape drone {
+    part capsule = (0.06, 0.30, 0.06);
+    part sphere  = 0.09 at (0, 0.20, 0);
+    part box     = (0.54, 0.02, 0.02) at (0, 0.20, 0);
+    part box     = (0.02, 0.02, 0.54) at (0, 0.20, 0);
+  }
+
+  # an extruded SVG star (scaled by `scale`, extruded by `depth`)
+  shape star {
+    part svg = "M 0,-1 L 0.224,-0.309 L 0.951,-0.309 L 0.363,0.118 L 0.588,0.809 L 0,0.382 L -0.588,0.809 L -0.363,0.118 L -0.951,-0.309 L -0.224,-0.309 Z" depth 0.22 scale 0.8;
+  }
+
+  # a convex polyhedron from vertices (auto-triangulated)
+  shape octa {
+    part hull = [(0,0.9,0), (0.9,0,0), (0,-0.9,0), (-0.9,0,0), (0,0,0.9), (0,0,-0.9)];
+  }
+
+  # an arbitrary polyhedron: explicit vertices + index faces (a bipyramid)
+  shape gem {
+    part poly = [(0,0.9,0), (0.7,0,0.7), (-0.7,0,0.7), (-0.7,0,-0.7), (0.7,0,-0.7), (0,-0.9,0)]
+      faces = [[0,1,2],[0,2,3],[0,3,4],[0,4,1],[5,1,4],[5,4,3],[5,3,2],[5,2,1]] scale 0.9;
+  }
+
+  entity drone { state = (x = -3.0, y = 1.0, z = 0.0) shape = drone; color = 0x4AC3FF }
+  entity star  { state = (x = -1.0, y = 1.0, z = 0.0) shape = star;  color = 0xFFD24A; glow = 0.9 }
+  entity octa  { state = (x =  1.0, y = 1.0, z = 0.0) shape = octa;  color = 0x66E0A3 }
+  entity gem   { state = (x =  3.0, y = 1.0, z = 0.0) shape = gem;   color = 0xFF6B4A; glow = 0.6; size = 0.9 }
+}
+systems {
+  update { on = drone; dt = 1.0 x = (0.0 - x) + 0.0 y = (1.0 - y) + 0.0 z = (0.0 - z) + 0.0 }
+}

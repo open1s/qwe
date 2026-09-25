@@ -1123,6 +1123,91 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let value = inner.next().map(parse_value).unwrap_or(0.0);
                             model.channels.push(crate::dsl::ChanDecl { name, value });
                         }
+                        Rule::shape_stmt => {
+                            // `shape <name> { part <kind> = <params> [at (x,y,z)]; }`
+                            let mut it = item.into_inner();
+                            let name = it.next().unwrap().as_str().to_string();
+                            let mut parts: Vec<crate::components::ShapePart> = Vec::new();
+                            for part in it {
+                                let mut pi = part.into_inner();
+                                let kind = match pi.next().unwrap().as_str() {
+                                    "sphere" => 1u8,
+                                    "box" => 2,
+                                    "capsule" => 3,
+                                    "svg" => 4,
+                                    "hull" => 5,
+                                    "poly" => 6,
+                                    _ => 0,
+                                };
+                                let val = pi.next().unwrap();
+                                let mut path: Option<String> = None;
+                                let mut points: Vec<(f64, f64, f64)> = Vec::new();
+                                let (mut a, b, c) = if val.as_rule() == Rule::string {
+                                    path = Some(
+                                        val.as_str()
+                                            .trim_start_matches('"')
+                                            .trim_end_matches('"')
+                                            .to_string(),
+                                    );
+                                    (0.0, 0.0, 0.0)
+                                } else if val.as_rule() == Rule::hull_list {
+                                    for p3 in val.into_inner() {
+                                        let v = parse_vec3(p3);
+                                        points.push((v.x, v.y, v.z));
+                                    }
+                                    (0.0, 0.0, 0.0)
+                                } else if val.as_rule() == Rule::vec3 {
+                                    let v = parse_vec3(val);
+                                    (v.x, v.y, v.z)
+                                } else {
+                                    let x = parse_value(val);
+                                    (x, x, x)
+                                };
+                                let mut faces: Vec<Vec<u32>> = Vec::new();
+                                let mut scale = 1.0f64;
+                                let mut offset = (0.0, 0.0, 0.0);
+                                for opt in pi {
+                                    let rule = opt.as_rule();
+                                    let inner = opt.into_inner().next().unwrap();
+                                    match rule {
+                                        Rule::at_opt => {
+                                            let o = parse_vec3(inner);
+                                            offset = (o.x, o.y, o.z);
+                                        }
+                                        Rule::depth_opt => a = parse_value(inner),
+                                        Rule::scale_opt => scale = parse_value(inner),
+                                        Rule::faces_opt => {
+                                            for f in inner.into_inner() {
+                                                let idx: Vec<u32> = f
+                                                    .as_str()
+                                                    .trim_matches(|ch| ch == '[' || ch == ']')
+                                                    .split(',')
+                                                    .filter_map(|t| t.trim().parse().ok())
+                                                    .collect();
+                                                if idx.len() >= 3 {
+                                                    faces.push(idx);
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                if kind != 0 {
+                                    parts.push(crate::components::ShapePart {
+                                        kind,
+                                        a,
+                                        b,
+                                        c,
+                                        offset,
+                                        path,
+                                        points,
+                                        faces,
+                                        scale,
+                                    });
+                                }
+                            }
+                            model.shapes.insert(name, parts);
+                        }
                         Rule::field_stmt => {
                             let mut inner = item.into_inner();
                             let name = inner.next().unwrap().as_str().to_string();
@@ -1343,14 +1428,22 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     }
                                     // Presentation-only render hints.
                                     Rule::shape_field => {
-                                        let kind = field.into_inner().next().unwrap().as_str();
-                                        let code = match kind {
-                                            "sphere" => 1,
-                                            "box" => 2,
-                                            _ => 0,
-                                        };
-                                        decl.render.get_or_insert_with(Default::default).shape =
-                                            Some(code);
+                                        let name = field.into_inner().next().unwrap().as_str();
+                                        let r = decl.render.get_or_insert_with(Default::default);
+                                        match name {
+                                            "point" | "sphere" | "box" | "capsule" => {
+                                                let code = match name {
+                                                    "sphere" => 1,
+                                                    "box" => 2,
+                                                    "capsule" => 3,
+                                                    _ => 0,
+                                                };
+                                                r.shape = Some(code);
+                                            }
+                                            // Any other name refers to a user-defined shape
+                                            // declared in the world's `shape <name> { … }`.
+                                            other => r.shape_name = Some(other.to_string()),
+                                        }
                                     }
                                     Rule::size_field => {
                                         let inner = field.into_inner().next().unwrap();
@@ -5656,6 +5749,10 @@ fn merge_modules(
             entity_seen.insert(e.name.clone(), who.clone());
             model.entities.push(e.clone());
         }
+        // User-defined custom shapes merge by name (later definitions win).
+        for (name, parts) in &m.parsed.model.shapes {
+            model.shapes.insert(name.clone(), parts.clone());
+        }
         for c in &m.parsed.model.channels {
             if channel_seen.contains_key(&c.name) {
                 return Err(error_at(
@@ -8069,6 +8166,42 @@ mod tests {
         assert_eq!(r.opacity, Some(0.6));
         assert_eq!(r.label, Some(false));
         assert_eq!(e.color, Some(0xFF6B4A));
+    }
+
+    /// User-defined custom shapes (`shape <name> { part … }`) parse into the
+    /// model and resolve to the entity's render parts at build time.
+    #[test]
+    fn custom_shapes_resolve_from_parts() {
+        let src = "world { gravity=(0,0,0) \
+            shape gizmo { part capsule = (0.05, 0.3, 0.05); part sphere = 0.1 at (0, 0.2, 0.0); \
+              part svg = \"M 0,0 L 1,0 L 1,1 Z\" depth 0.2 scale 0.5 at (0, 1.0, 0.0); \
+              part hull = [(0,0,0), (1,0,0), (0,1,0), (0,0,1)]; \
+              part poly = [(0,1,0), (1,0,1), (-1,0,1)] faces = [[0,1,2]] scale 2.0; } \
+            entity e { state=(x=0.0) shape = gizmo } }";
+        let model = parse(src).unwrap().model;
+        let g = model.shapes.get("gizmo").unwrap();
+        assert_eq!(g.len(), 5);
+        assert_eq!(g[2].kind, 4, "svg part");
+        assert_eq!(g[2].path.as_deref(), Some("M 0,0 L 1,0 L 1,1 Z"));
+        assert!((g[2].a - 0.2).abs() < 1e-9, "svg depth");
+        assert!((g[2].scale - 0.5).abs() < 1e-9, "svg scale");
+        assert_eq!(g[3].kind, 5, "hull part");
+        assert_eq!(g[3].points.len(), 4);
+        assert_eq!(g[4].kind, 6, "poly part");
+        assert_eq!(g[4].faces, vec![vec![0u32, 1, 2]]);
+        assert!((g[4].scale - 2.0).abs() < 1e-9, "poly amplitude");
+        let scene = model.build_scene();
+        let ent = scene.entities.values().next().unwrap();
+        let parts = ent
+            .render
+            .as_ref()
+            .unwrap()
+            .parts
+            .as_ref()
+            .expect("resolved parts");
+        assert_eq!(parts.len(), 5);
+        assert_eq!(parts[1].kind, 1);
+        assert_eq!(parts[1].offset, (0.0, 0.2, 0.0));
     }
 
     /// A named state slot that merely starts with `s` (e.g. `speed`) is not a

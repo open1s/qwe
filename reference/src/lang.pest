@@ -24,7 +24,7 @@ param_list = { ident ~ ("," ~ ident)* }
 
 // -- world model -------------------------------------------------------------
 world_section = { "world" ~ "{" ~ world_item* ~ "}" }
-world_item = _{ gravity_stmt | chan_stmt | entity_stmt | field_stmt | params_stmt | title_stmt }
+world_item = _{ gravity_stmt | chan_stmt | entity_stmt | field_stmt | params_stmt | title_stmt | shape_stmt }
 gravity_stmt = { "gravity" ~ "=" ~ vec3 }
 // A human-readable title for the run (shown by `pwe present`).
 title_stmt = { "title" ~ "=" ~ string }
@@ -65,8 +65,19 @@ camera_field = { "camera" ~ "=" ~ boolean ~ ";"? }
 color_field = { "color" ~ "=" ~ color ~ ";"? }
 color = @{ "0x" ~ ASCII_HEX_DIGIT+ }
 // Presentation-only render hints (they do not affect simulation state).
-shape_field = { "shape" ~ "=" ~ shape_kind ~ ";"? }
-shape_kind = @{ "point" | "sphere" | "box" }
+shape_field = { "shape" ~ "=" ~ ident ~ ";"? }
+// A user-defined custom shape: `shape <name> { part <kind> = <params> [at (x,y,z)]; }
+shape_stmt = { "shape" ~ ident ~ "{" ~ shape_part* ~ "}" }
+shape_part = { "part" ~ shape_kind ~ "=" ~ shape_part_value ~ shape_part_opt* ~ ";"? }
+shape_part_value = _{ string | hull_list | vec3 | value }
+shape_part_opt = _{ at_opt | depth_opt | scale_opt | faces_opt }
+faces_opt = { "faces" ~ "=" ~ faces_list }
+faces_list = { "[" ~ face ~ ("," ~ face)* ~ "]" }
+face = { "[" ~ ASCII_DIGIT+ ~ ("," ~ ASCII_DIGIT+)* ~ "]" }
+at_opt = { "at" ~ vec3 }
+depth_opt = { "depth" ~ value }
+scale_opt = { "scale" ~ value }
+shape_kind = @{ "point" | "sphere" | "box" | "capsule" | "svg" | "hull" | "poly" }
 size_field = { "size" ~ "=" ~ (vec3 | value) ~ ";"? }
 opacity_field = { "opacity" ~ "=" ~ value ~ ";"? }
 glow_field = { "glow" ~ "=" ~ value ~ ";"? }

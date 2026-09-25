@@ -25,6 +25,26 @@ pub enum Shape {
     Hull {
         points: Vec<Vec3>,
     },
+    /// A smooth (optionally tapered) capsule along the local Y axis: rounded
+    /// ends, radii `radius_bottom` -> `radius_top`. Ideal for limbs/fingers.
+    Capsule {
+        radius_bottom: f64,
+        length: f64,
+        radius_top: f64,
+    },
+    /// A user-defined custom shape: primitive parts with local offsets.
+    Group(Vec<(Shape, Vec3)>),
+    /// An SVG path (`d`) extruded along Z into a 3D solid, then scaled.
+    Svg {
+        path: String,
+        depth: f64,
+        scale: f64,
+    },
+    /// An arbitrary polyhedron: vertices + vertex-index faces.
+    Poly {
+        points: Vec<Vec3>,
+        faces: Vec<Vec<u32>>,
+    },
     /// No collider: a point marker (e.g. a channel or a state-only body).
     Point,
 }
@@ -214,6 +234,66 @@ pub fn snapshot_with(
         };
         // Presentation-only overrides declared in the language.
         if let Some(r) = &e.render {
+            if let Some(parts) = &r.parts {
+                if !parts.is_empty() {
+                    // The entity's `size` scales the whole custom shape (its
+                    // amplitude); each part also has its own `scale`.
+                    let whole = if r.size.unwrap_or(0.0) > 0.0 {
+                        r.size.unwrap_or(1.0)
+                    } else {
+                        1.0
+                    };
+                    let group: Vec<(Shape, Vec3)> = parts
+                        .iter()
+                        .map(|p| {
+                            let base = if p.scale == 0.0 { 1.0 } else { p.scale };
+                            let sc = base * whole;
+                            let sp = |x: f64, y: f64, z: f64| Vec3::new(x * sc, y * sc, z * sc);
+                            let shape = match p.kind {
+                                1 => Shape::Sphere { radius: p.a * sc },
+                                2 => Shape::Box {
+                                    dims: sp(p.a, p.b, p.c),
+                                },
+                                3 => Shape::Capsule {
+                                    radius_bottom: p.a * sc,
+                                    length: p.b * sc,
+                                    radius_top: p.c * sc,
+                                },
+                                4 => Shape::Svg {
+                                    path: p.path.clone().unwrap_or_default(),
+                                    depth: p.a,
+                                    scale: sc,
+                                },
+                                5 => Shape::Hull {
+                                    points: p
+                                        .points
+                                        .iter()
+                                        .map(|(x, y, z)| sp(*x, *y, *z))
+                                        .collect(),
+                                },
+                                6 => Shape::Poly {
+                                    points: p
+                                        .points
+                                        .iter()
+                                        .map(|(x, y, z)| sp(*x, *y, *z))
+                                        .collect(),
+                                    faces: p.faces.clone(),
+                                },
+                                _ => Shape::Point,
+                            };
+                            (
+                                shape,
+                                Vec3::new(
+                                    p.offset.0 * whole,
+                                    p.offset.1 * whole,
+                                    p.offset.2 * whole,
+                                ),
+                            )
+                        })
+                        .collect();
+                    vis.shape = Shape::Group(group);
+                }
+            }
             if let Some(code) = r.shape {
                 vis.shape = match code {
                     1 => Shape::Sphere {
@@ -228,6 +308,18 @@ pub fn snapshot_with(
                             }
                         };
                         Shape::Box { dims }
+                    }
+                    3 => {
+                        let (r0, len, r1) = r.size3.unwrap_or((
+                            r.size.unwrap_or(0.06),
+                            0.3,
+                            r.size.unwrap_or(0.06),
+                        ));
+                        Shape::Capsule {
+                            radius_bottom: r0,
+                            length: len,
+                            radius_top: r1,
+                        }
                     }
                     _ => Shape::Point,
                 };
@@ -339,6 +431,136 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
             }
             Shape::Sphere { radius } => {
                 out.push_str(&format!("\"sphere\",\"radius\":{}}}", fmt_f64(*radius)));
+            }
+            Shape::Capsule {
+                radius_bottom,
+                length,
+                radius_top,
+            } => {
+                out.push_str(&format!(
+                    "\"capsule\",\"r0\":{},\"len\":{},\"r1\":{}}}",
+                    fmt_f64(*radius_bottom),
+                    fmt_f64(*length),
+                    fmt_f64(*radius_top)
+                ));
+            }
+            Shape::Svg { path, depth, scale } => {
+                out.push_str(&format!(
+                    "\"svg\",\"d\":\"{}\",\"depth\":{},\"scale\":{}}}",
+                    path.replace('\\', "\\\\").replace('"', "\\\""),
+                    fmt_f64(*depth),
+                    fmt_f64(*scale)
+                ));
+            }
+            Shape::Group(parts) => {
+                out.push_str("\"group\",\"parts\":[");
+                for (j, (shape, off)) in parts.iter().enumerate() {
+                    if j > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&format!("{{\"off\":{},", vec3_json(*off)));
+                    match shape {
+                        Shape::Sphere { radius } => {
+                            out.push_str(&format!("\"k\":1,\"a\":{}}}", fmt_f64(*radius)));
+                        }
+                        Shape::Box { dims } => {
+                            out.push_str(&format!(
+                                "\"k\":2,\"a\":{},\"b\":{},\"c\":{}}}",
+                                fmt_f64(dims.x),
+                                fmt_f64(dims.y),
+                                fmt_f64(dims.z)
+                            ));
+                        }
+                        Shape::Capsule {
+                            radius_bottom,
+                            length,
+                            radius_top,
+                        } => {
+                            out.push_str(&format!(
+                                "\"k\":3,\"a\":{},\"b\":{},\"c\":{}}}",
+                                fmt_f64(*radius_bottom),
+                                fmt_f64(*length),
+                                fmt_f64(*radius_top)
+                            ));
+                        }
+                        Shape::Svg { path, depth, scale } => {
+                            out.push_str(&format!(
+                                "\"k\":4,\"d\":\"{}\",\"depth\":{},\"scale\":{}}}",
+                                path.replace('\\', "\\\\").replace('"', "\\\""),
+                                fmt_f64(*depth),
+                                fmt_f64(*scale)
+                            ));
+                        }
+                        Shape::Hull { points } => {
+                            out.push_str("\"k\":5,\"pts\":[");
+                            for (k, p) in points.iter().enumerate() {
+                                if k > 0 {
+                                    out.push(',');
+                                }
+                                out.push_str(&vec3_json(*p));
+                            }
+                            out.push_str("]}");
+                        }
+                        Shape::Poly { points, faces } => {
+                            out.push_str("\"k\":6,\"pts\":[");
+                            for (k, p) in points.iter().enumerate() {
+                                if k > 0 {
+                                    out.push(',');
+                                }
+                                out.push_str(&vec3_json(*p));
+                            }
+                            out.push_str("],\"faces\":[");
+                            for (k, f) in faces.iter().enumerate() {
+                                if k > 0 {
+                                    out.push(',');
+                                }
+                                out.push('[');
+                                for (m, idx) in f.iter().enumerate() {
+                                    if m > 0 {
+                                        out.push(',');
+                                    }
+                                    let _ = write!(out, "{idx}");
+                                }
+                                out.push(']');
+                            }
+                            out.push_str("]}");
+                        }
+                        _ => out.push_str("\"k\":0}"),
+                    }
+                }
+                out.push(']');
+                out.push_str(",\"state\":[");
+                for (j, s) in e.state.iter().enumerate() {
+                    if j > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&fmt_f64(*s));
+                }
+                out.push_str("]}");
+            }
+            Shape::Poly { points, faces } => {
+                out.push_str("\"poly\",\"pts\":[");
+                for (j, p) in points.iter().enumerate() {
+                    if j > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&vec3_json(*p));
+                }
+                out.push_str("],\"faces\":[");
+                for (j, f) in faces.iter().enumerate() {
+                    if j > 0 {
+                        out.push(',');
+                    }
+                    out.push('[');
+                    for (m, idx) in f.iter().enumerate() {
+                        if m > 0 {
+                            out.push(',');
+                        }
+                        let _ = write!(out, "{idx}");
+                    }
+                    out.push(']');
+                }
+                out.push_str("]}");
             }
             Shape::Hull { points } => {
                 out.push_str("\"hull\",\"points\":[");
@@ -475,6 +697,7 @@ input[type=range]{{flex:1}}label{{color:#89b4fa}}
 import * as THREE from 'three';
 import {{ OrbitControls }} from 'three/addons/controls/OrbitControls.js';
 import {{ ConvexGeometry }} from 'three/addons/geometries/ConvexGeometry.js';
+import {{ SVGLoader }} from 'three/addons/loaders/SVGLoader.js';
 import {{ MarchingCubes }} from 'three/addons/objects/MarchingCubes.js';
 import {{ CSS2DRenderer, CSS2DObject }} from 'three/addons/renderers/CSS2DRenderer.js';
 const FRAMES = {frames_json};
@@ -519,16 +742,35 @@ renderer.domElement.addEventListener('pointerdown',(ev)=>{{
 }});
 const panel = document.getElementById('panel');
 const meshes = new Map();
-function makeMesh(kind, dims, radius, points, color, size, opacity, glow) {{
-  const mat = new THREE.MeshStandardMaterial({{color: color,emissive:new THREE.Color(color),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity}});
-  if (kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(dims[0],dims[1],dims[2]), mat);
-  if (kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(radius,20,16), mat);
-  if (kind==='hull' && points) {{
-    const verts = points.map(p=>new THREE.Vector3(p[0],p[1],p[2]));
-    let g; try {{ g = new ConvexGeometry(verts); }} catch(e) {{ g = new THREE.SphereGeometry(0.1,8,6); }}
+function svgGeo(d, depth, scale){{ const data=new SVGLoader().parse(d); let sh=[]; for(const p of data.paths) sh=sh.concat(SVGLoader.createShapes(p));
+  const geo=new THREE.ExtrudeGeometry(sh,{{depth:Math.max(depth,0.001),bevelEnabled:false,curveSegments:16}}); geo.scale(scale,-scale,scale); geo.center(); return geo; }}
+function polyGeo(pts, faces){{ const pos=[]; const F=faces&&faces.length?faces:null;
+  if(F){{ for(const f of F){{ for(let i=1;i+1<f.length;i++){{ for(const q of [f[0],f[i],f[i+1]]){{ const p=pts[q]; pos.push(p[0],p[1],p[2]); }} }} }} }}
+  const g=new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3)); g.computeVertexNormals(); return g; }}
+function capsuleGeo(r0,len,r1){{ const cs=8, pts=[];
+  for(let i=0;i<=cs;i++){{const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r0*Math.sin(a), -len/2 - r0*Math.cos(a)));}}
+  for(let i=0;i<=cs;i++){{const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r1*Math.cos(a), len/2 + r1*Math.sin(a)));}}
+  return new THREE.LatheGeometry(pts,28); }}
+function makeMesh(e) {{
+  const opacity = e.opacity==null?1:e.opacity, glow = e.glow==null?0.8:e.glow;
+  const mat = new THREE.MeshStandardMaterial({{color: e.color,emissive:new THREE.Color(e.color),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity}});
+  if (e.kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(e.dims[0],e.dims[1],e.dims[2]), mat);
+  if (e.kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(e.radius,20,16), mat);
+  if (e.kind==='hull' && e.points) {{
+    const verts = e.points.map(p=>new THREE.Vector3(p[0],p[1],p[2]));
+    let g; try {{ g = new ConvexGeometry(verts); }} catch(err) {{ g = new THREE.SphereGeometry(0.1,8,6); }}
     return new THREE.Mesh(g, mat);
   }}
-  return new THREE.Mesh(new THREE.SphereGeometry(size/2,20,16), mat);
+  if (e.kind==='capsule') return new THREE.Mesh(capsuleGeo(e.r0||0.06, e.len||0.3, e.r1||0.06), mat);
+  if (e.kind==='group' && e.parts) {{ const g=new THREE.Group(); for (const p of e.parts) {{ let ch;
+    if (p.k===2) {{ ch=new THREE.Mesh(new THREE.BoxGeometry(p.a,p.b,p.c), mat); }}
+    else if (p.k===3) {{ ch=new THREE.Mesh(capsuleGeo(p.a,p.b,p.c), mat); }}
+    else if (p.k===4) {{ ch=new THREE.Mesh(svgGeo(p.d, p.depth, p.scale), mat); }}
+    else if (p.k===5) {{ ch=new THREE.Mesh(new ConvexGeometry((p.pts||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2]))), mat); }}
+    else if (p.k===6) {{ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), mat); }}
+    else {{ ch=new THREE.Mesh(new THREE.SphereGeometry(p.a,20,16), mat); }}
+    ch.position.set(p.off[0],p.off[1],p.off[2]); g.add(ch); }} return g; }}
+  return new THREE.Mesh(new THREE.SphereGeometry((e.size||0.25)/2,20,16), mat);
 }}
 const decals = [];
 function addOrbit(center, r, color) {{
@@ -679,10 +921,10 @@ function applyFrame(f) {{
   for (const e of f.entities) {{ const r=Math.hypot(e.pos[0],e.pos[1]); if(!sun||r<sun.r) sun={{r:r,x:e.pos[0],y:e.pos[1],z:e.pos[2]}}; }}
   if (sun) sunLight.position.set(sun.x,sun.y,sun.z);
   for (const e of f.entities) {{
-    const m = makeMesh(e.kind, e.dims, e.radius, e.points, e.color, e.size || 0.25, e.opacity==null?1:e.opacity, e.glow==null?0.8:e.glow);
+    const m = makeMesh(e);
     m.position.set(e.pos[0],e.pos[1],e.pos[2]);
     m.quaternion.set(e.rot[0],e.rot[1],e.rot[2],e.rot[3]);
-    if (e.name==='sun'||(sun&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6)) {{ m.material.emissive=new THREE.Color(e.color); if (e.glow==null) m.material.emissiveIntensity=1.2; }}
+    if ((e.name==='sun'||(sun&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6)) && m.material) {{ m.material.emissive=new THREE.Color(e.color); if (e.glow==null) m.material.emissiveIntensity=1.2; }}
     m.userData=e; scene.add(m); meshes.set(e.id, m);
     if (e.name && e.label!==false && labelsOn) {{ const el=document.createElement('div'); el.className='lbl'; el.textContent=e.name; const l=new CSS2DObject(el); l.position.set(e.pos[0],e.pos[1]+(e.size||0.3),e.pos[2]); scene.add(l); decals.push(l); }}
     if (!isMol && sun && e.state && e.state.length>=5 && Math.hypot(e.state[3],e.state[4],e.state[5])>1e-6) addOrbit(sun, Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y), e.color);
@@ -869,6 +1111,7 @@ fn live_viewer_html() -> String {
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {ConvexGeometry} from 'three/addons/geometries/ConvexGeometry.js';
+import {SVGLoader} from 'three/addons/loaders/SVGLoader.js';
 import {MarchingCubes} from 'three/addons/objects/MarchingCubes.js';
 import {CSS2DRenderer,CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
 const scene=new THREE.Scene(); scene.background=new THREE.Color(0x0b0e14);
@@ -901,12 +1144,31 @@ renderer.domElement.addEventListener('pointerdown',(ev)=>{
 });
 const panel=document.getElementById('panel'), procEl=document.getElementById('proc'), conn=document.getElementById('conn');
 const meshes=new Map();
-function make(kind,dims,radius,points,color,size,opacity,glow){
-  const mat=new THREE.MeshStandardMaterial({color:color,emissive:new THREE.Color(color),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity});
-  if(kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(dims[0],dims[1],dims[2]),mat);
-  if(kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(radius,20,16),mat);
-  if(kind==='hull'&&points){const v=points.map(p=>new THREE.Vector3(p[0],p[1],p[2]));let g;try{g=new ConvexGeometry(v);}catch(e){g=new THREE.SphereGeometry(0.1,8,6);}return new THREE.Mesh(g,mat);}
-  return new THREE.Mesh(new THREE.SphereGeometry(size/2,20,16),mat);
+function svgGeo(d, depth, scale){ const data=new SVGLoader().parse(d); let sh=[]; for(const p of data.paths) sh=sh.concat(SVGLoader.createShapes(p));
+  const geo=new THREE.ExtrudeGeometry(sh,{depth:Math.max(depth,0.001),bevelEnabled:false,curveSegments:16}); geo.scale(scale,-scale,scale); geo.center(); return geo; }
+function polyGeo(pts, faces){ const pos=[]; const F=faces&&faces.length?faces:null;
+  if(F){ for(const f of F){ for(let i=1;i+1<f.length;i++){ for(const q of [f[0],f[i],f[i+1]]){ const p=pts[q]; pos.push(p[0],p[1],p[2]); } } } }
+  const g=new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3)); g.computeVertexNormals(); return g; }
+function capsuleGeo(r0,len,r1){ const cs=8, pts=[];
+  for(let i=0;i<=cs;i++){const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r0*Math.sin(a), -len/2 - r0*Math.cos(a)));}
+  for(let i=0;i<=cs;i++){const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r1*Math.cos(a), len/2 + r1*Math.sin(a)));}
+  return new THREE.LatheGeometry(pts,28); }
+function make(e){
+  const opacity=e.opacity==null?1:e.opacity, glow=e.glow==null?0.8:e.glow;
+  const mat=new THREE.MeshStandardMaterial({color:e.color,emissive:new THREE.Color(e.color),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity});
+  if(e.kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(e.dims[0],e.dims[1],e.dims[2]),mat);
+  if(e.kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(e.radius,20,16),mat);
+  if(e.kind==='hull'&&e.points){const v=e.points.map(p=>new THREE.Vector3(p[0],p[1],p[2]));let g;try{g=new ConvexGeometry(v);}catch(err){g=new THREE.SphereGeometry(0.1,8,6);}return new THREE.Mesh(g,mat);}
+  if(e.kind==='capsule') return new THREE.Mesh(capsuleGeo(e.r0||0.06, e.len||0.3, e.r1||0.06), mat);
+  if(e.kind==='group' && e.parts){ const g=new THREE.Group(); for(const p of e.parts){ let ch;
+    if(p.k===2){ ch=new THREE.Mesh(new THREE.BoxGeometry(p.a,p.b,p.c), mat); }
+    else if(p.k===3){ ch=new THREE.Mesh(capsuleGeo(p.a,p.b,p.c), mat); }
+    else if(p.k===4){ ch=new THREE.Mesh(svgGeo(p.d, p.depth, p.scale), mat); }
+    else if(p.k===5){ ch=new THREE.Mesh(new ConvexGeometry((p.pts||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2]))), mat); }
+    else if(p.k===6){ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), mat); }
+    else { ch=new THREE.Mesh(new THREE.SphereGeometry(p.a,20,16), mat); }
+    ch.position.set(p.off[0],p.off[1],p.off[2]); g.add(ch); } return g; }
+  return new THREE.Mesh(new THREE.SphereGeometry((e.size||0.25)/2,20,16),mat);
 }
 const fieldObjects = new Map();
 let fieldExtent = 0;
@@ -1043,9 +1305,9 @@ function apply(f){
   for(const e of f.frame.entities){const r=Math.hypot(e.pos[0],e.pos[1]);if(!sun.r||r<sun.r){sun.r=r;sun.x=e.pos[0];sun.y=e.pos[1];sun.z=e.pos[2];}}
   sunLight.position.set(sun.x,sun.y,sun.z);
   for(const e of f.frame.entities){
-    const m=make(e.kind,e.dims,e.radius,e.points,e.color,e.size||0.25,e.opacity==null?1:e.opacity,e.glow==null?0.8:e.glow);
+    const m=make(e);
     m.position.set(e.pos[0],e.pos[1],e.pos[2]);m.quaternion.set(e.rot[0],e.rot[1],e.rot[2],e.rot[3]);
-    if(e.name==='sun'||(sun.r&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6)){m.material.emissive=new THREE.Color(e.color);if(e.glow==null)m.material.emissiveIntensity=0.6;}
+    if((e.name==='sun'||(sun.r&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6))&&m.material){m.material.emissive=new THREE.Color(e.color);if(e.glow==null)m.material.emissiveIntensity=0.6;}
     m.userData=e; scene.add(m);meshes.set(e.id,m);
     // Name label.
     if(e.label!==false && labelsOn){ const el=document.createElement('div'); el.className='lbl'; el.textContent=e.name||('#'+e.id);
@@ -1182,6 +1444,8 @@ mod tests {
             shape: Some(1),
             size: Some(2.0),
             size3: None,
+            shape_name: None,
+            parts: None,
             opacity: Some(0.4),
             glow: Some(1.5),
             label: Some(false),
@@ -1197,6 +1461,50 @@ mod tests {
         assert!(json.contains("\"opacity\":0.4"), "{json}");
         assert!(json.contains("\"glow\":1.5"));
         assert!(json.contains("\"label\":false"));
+    }
+
+    #[test]
+    fn custom_shape_renders_as_group() {
+        let mut scene = Scene::new(Vec3::ZERO);
+        let mut e = Entity::dynamic();
+        e.state = Some(crate::components::State::new(vec![0.0]));
+        e.render = Some(crate::components::RenderStyle {
+            shape_name: Some("gizmo".into()),
+            parts: Some(vec![
+                crate::components::ShapePart {
+                    kind: 3,
+                    a: 0.05,
+                    b: 0.3,
+                    c: 0.05,
+                    offset: (0.0, 0.0, 0.0),
+                    path: None,
+                    points: Vec::new(),
+                    faces: Vec::new(),
+                    scale: 1.0,
+                },
+                crate::components::ShapePart {
+                    kind: 1,
+                    a: 0.1,
+                    b: 0.1,
+                    c: 0.1,
+                    offset: (0.0, 0.2, 0.0),
+                    path: None,
+                    points: Vec::new(),
+                    faces: Vec::new(),
+                    scale: 1.0,
+                },
+            ]),
+            ..Default::default()
+        });
+        scene.insert(EntityId(1), e);
+        let frame = snapshot(&scene, None);
+        assert!(
+            matches!(&frame.entities[0].shape, Shape::Group(g) if g.len() == 2),
+            "custom shape must be a group"
+        );
+        let json = frame_to_json(&frame);
+        assert!(json.contains("\"kind\":\"group\""), "{json}");
+        assert!(json.contains("\"parts\":["));
     }
 
     #[test]

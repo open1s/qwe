@@ -1,19 +1,21 @@
 # humanoid.pwe — a detailed simulated humanoid (a person-like figure) walking,
-# expressed in PWE and rendered by the viewer. The skeleton is boxes (limbs,
-# phalanges) and spheres (head, eyes, joints) with human colours; facial detail
-# (eyes, brows, nose, mouth), two-phalanx fingers with knuckle joints, and arms
-# with shoulder/elbow/wrist joints are all placed by gait kinematics in each
-# `update` rule and drawn via the entity `shape`/`size`/`color`/`label`
-# attributes. Parts set `label = false`; the viewer's 🏷 button toggles labels.
+# expressed in PWE and rendered by the viewer. Limbs, fingers, torso and legs
+# are **tapered capsules** (`shape = capsule; size = (radius_bottom, length,
+# radius_top)` — a smooth, optionally tapered surface of revolution), the head
+# and joints are spheres, facial detail (eyes, brows, nose, mouth) and shoes are
+# boxes. Every part's world position and Z-angle is placed by the gait
+# kinematics in its `update` rule; the viewer draws them via the entity
+# `shape`/`size`/`color`/`label` attributes. Parts set `label = false`; the
+# viewer's 🏷 button toggles labels.
 world {
   gravity = (0, 0, 0)
   entity pelvis {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.4, 0.28, 0.32); color = 0x2c3a55; label = false
+    shape = capsule; size = (0.19, 0.16, 0.19); color = 0x2c3a55; label = false
   }
   entity torso {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.44, 0.6, 0.32); color = 0x3f6fb5; label = false
+    shape = capsule; size = (0.2, 0.58, 0.17); color = 0x3f6fb5; label = false
   }
   entity head {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
@@ -21,7 +23,7 @@ world {
   }
   entity neck {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.09; color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.055, 0.1, 0.05); color = 0xf1c7a3; label = false
   }
   entity eyeL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
@@ -29,7 +31,7 @@ world {
   }
   entity browL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.02, 0.028, 0.085); color = 0x3a2a1e; label = false
+    shape = capsule; size = (0.012, 0.075, 0.012); color = 0x3a2a1e; label = false
   }
   entity eyeR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
@@ -37,7 +39,7 @@ world {
   }
   entity browR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.02, 0.028, 0.085); color = 0x3a2a1e; label = false
+    shape = capsule; size = (0.012, 0.075, 0.012); color = 0x3a2a1e; label = false
   }
   entity nose {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
@@ -45,215 +47,215 @@ world {
   }
   entity mouth {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.02, 0.03, 0.095); color = 0x8a3b3b; label = false
+    shape = capsule; size = (0.014, 0.085, 0.014); color = 0x8a3b3b; label = false
   }
   entity shoulderL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.1; color = 0x3f6fb5; label = false
+    shape = sphere; size = 0.075; color = 0x3f6fb5; label = false
   }
   entity upperarmL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.13, 0.4, 0.13); color = 0x3f6fb5; label = false
+    shape = capsule; size = (0.062, 0.4, 0.052); color = 0x3f6fb5; label = false
   }
   entity elbowL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.075; color = 0x3f6fb5; label = false
+    shape = sphere; size = 0.058; color = 0x3f6fb5; label = false
   }
   entity forearmL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.11, 0.34, 0.11); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.05, 0.34, 0.04); color = 0xf1c7a3; label = false
   }
   entity wristL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.055; color = 0xf1c7a3; label = false
+    shape = sphere; size = 0.045; color = 0xf1c7a3; label = false
   }
   entity palmL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.1, 0.09, 0.12); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.045, 0.09, 0.05); color = 0xf1c7a3; label = false
   }
   entity fL0a {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.024, 0.06, 0.026); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.014, 0.06, 0.013); color = 0xf1c7a3; label = false
   }
   entity fL0j {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.018; color = 0xf1c7a3; label = false
+    shape = sphere; size = 0.014; color = 0xf1c7a3; label = false
   }
   entity fL0b {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.022, 0.05, 0.024); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.013, 0.05, 0.011); color = 0xf1c7a3; label = false
   }
   entity fL1a {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.024, 0.06, 0.026); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.014, 0.06, 0.013); color = 0xf1c7a3; label = false
   }
   entity fL1j {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.018; color = 0xf1c7a3; label = false
+    shape = sphere; size = 0.014; color = 0xf1c7a3; label = false
   }
   entity fL1b {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.022, 0.05, 0.024); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.013, 0.05, 0.011); color = 0xf1c7a3; label = false
   }
   entity fL2a {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.024, 0.06, 0.026); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.014, 0.06, 0.013); color = 0xf1c7a3; label = false
   }
   entity fL2j {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.018; color = 0xf1c7a3; label = false
+    shape = sphere; size = 0.014; color = 0xf1c7a3; label = false
   }
   entity fL2b {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.022, 0.05, 0.024); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.013, 0.05, 0.011); color = 0xf1c7a3; label = false
   }
   entity fL3a {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.024, 0.06, 0.026); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.014, 0.06, 0.013); color = 0xf1c7a3; label = false
   }
   entity fL3j {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.018; color = 0xf1c7a3; label = false
+    shape = sphere; size = 0.014; color = 0xf1c7a3; label = false
   }
   entity fL3b {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.022, 0.05, 0.024); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.013, 0.05, 0.011); color = 0xf1c7a3; label = false
   }
   entity thumbLa {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.026, 0.06, 0.028); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.016, 0.06, 0.014); color = 0xf1c7a3; label = false
   }
   entity thumbLb {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.024, 0.05, 0.026); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.014, 0.05, 0.012); color = 0xf1c7a3; label = false
   }
   entity hipL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.11; color = 0x2c3a55; label = false
+    shape = sphere; size = 0.085; color = 0x2c3a55; label = false
   }
   entity thighL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.18, 0.5, 0.18); color = 0x2c3a55; label = false
+    shape = capsule; size = (0.095, 0.5, 0.07); color = 0x2c3a55; label = false
   }
   entity kneeL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.1; color = 0x2c3a55; label = false
+    shape = sphere; size = 0.072; color = 0x2c3a55; label = false
   }
   entity shinL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.15, 0.5, 0.15); color = 0x2c3a55; label = false
+    shape = capsule; size = (0.07, 0.5, 0.048); color = 0x2c3a55; label = false
   }
   entity footL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.3, 0.08, 0.16); color = 0x1a1d24; label = false
+    shape = box; size = (0.3, 0.09, 0.16); color = 0x1a1d24; label = false
   }
   entity toeL {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.09, 0.06, 0.15); color = 0x1a1d24; label = false
+    shape = capsule; size = (0.08, 0.09, 0.06); color = 0x1a1d24; label = false
   }
   entity shoulderR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.1; color = 0x3f6fb5; label = false
+    shape = sphere; size = 0.075; color = 0x3f6fb5; label = false
   }
   entity upperarmR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.13, 0.4, 0.13); color = 0x3f6fb5; label = false
+    shape = capsule; size = (0.062, 0.4, 0.052); color = 0x3f6fb5; label = false
   }
   entity elbowR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.075; color = 0x3f6fb5; label = false
+    shape = sphere; size = 0.058; color = 0x3f6fb5; label = false
   }
   entity forearmR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.11, 0.34, 0.11); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.05, 0.34, 0.04); color = 0xf1c7a3; label = false
   }
   entity wristR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.055; color = 0xf1c7a3; label = false
+    shape = sphere; size = 0.045; color = 0xf1c7a3; label = false
   }
   entity palmR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.1, 0.09, 0.12); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.045, 0.09, 0.05); color = 0xf1c7a3; label = false
   }
   entity fR0a {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.024, 0.06, 0.026); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.014, 0.06, 0.013); color = 0xf1c7a3; label = false
   }
   entity fR0j {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.018; color = 0xf1c7a3; label = false
+    shape = sphere; size = 0.014; color = 0xf1c7a3; label = false
   }
   entity fR0b {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.022, 0.05, 0.024); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.013, 0.05, 0.011); color = 0xf1c7a3; label = false
   }
   entity fR1a {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.024, 0.06, 0.026); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.014, 0.06, 0.013); color = 0xf1c7a3; label = false
   }
   entity fR1j {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.018; color = 0xf1c7a3; label = false
+    shape = sphere; size = 0.014; color = 0xf1c7a3; label = false
   }
   entity fR1b {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.022, 0.05, 0.024); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.013, 0.05, 0.011); color = 0xf1c7a3; label = false
   }
   entity fR2a {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.024, 0.06, 0.026); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.014, 0.06, 0.013); color = 0xf1c7a3; label = false
   }
   entity fR2j {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.018; color = 0xf1c7a3; label = false
+    shape = sphere; size = 0.014; color = 0xf1c7a3; label = false
   }
   entity fR2b {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.022, 0.05, 0.024); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.013, 0.05, 0.011); color = 0xf1c7a3; label = false
   }
   entity fR3a {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.024, 0.06, 0.026); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.014, 0.06, 0.013); color = 0xf1c7a3; label = false
   }
   entity fR3j {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.018; color = 0xf1c7a3; label = false
+    shape = sphere; size = 0.014; color = 0xf1c7a3; label = false
   }
   entity fR3b {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.022, 0.05, 0.024); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.013, 0.05, 0.011); color = 0xf1c7a3; label = false
   }
   entity thumbRa {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.026, 0.06, 0.028); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.016, 0.06, 0.014); color = 0xf1c7a3; label = false
   }
   entity thumbRb {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.024, 0.05, 0.026); color = 0xf1c7a3; label = false
+    shape = capsule; size = (0.014, 0.05, 0.012); color = 0xf1c7a3; label = false
   }
   entity hipR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.11; color = 0x2c3a55; label = false
+    shape = sphere; size = 0.085; color = 0x2c3a55; label = false
   }
   entity thighR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.18, 0.5, 0.18); color = 0x2c3a55; label = false
+    shape = capsule; size = (0.095, 0.5, 0.07); color = 0x2c3a55; label = false
   }
   entity kneeR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = sphere; size = 0.1; color = 0x2c3a55; label = false
+    shape = sphere; size = 0.072; color = 0x2c3a55; label = false
   }
   entity shinR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.15, 0.5, 0.15); color = 0x2c3a55; label = false
+    shape = capsule; size = (0.07, 0.5, 0.048); color = 0x2c3a55; label = false
   }
   entity footR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.3, 0.08, 0.16); color = 0x1a1d24; label = false
+    shape = box; size = (0.3, 0.09, 0.16); color = 0x1a1d24; label = false
   }
   entity toeR {
     state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
-    shape = box; size = (0.09, 0.06, 0.15); color = 0x1a1d24; label = false
+    shape = capsule; size = (0.08, 0.09, 0.06); color = 0x1a1d24; label = false
   }
 }
 
@@ -275,7 +277,7 @@ systems {
     let hy = 1.05 + bob
     let lean = 0.05
     x = (bodyX - x) + 0.0
-    y = (hy+0.3 - y) + 0.0
+    y = (hy+0.29 - y) + 0.0
     z = (0.0 - z) + 0.0
     ang = (lean - ang) + 0.0
   }
@@ -285,7 +287,7 @@ systems {
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
     x = (bodyX + 0.03 - x) + 0.0
-    y = (hy + 0.6 + 0.16 - y) + 0.0
+    y = (hy + 0.58 + 0.16 - y) + 0.0
     z = (0.0 - z) + 0.0
     ang = (0.0 - ang) + 0.0
   }
@@ -295,7 +297,7 @@ systems {
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
     x = (bodyX + 0.02 - x) + 0.0
-    y = (hy + 0.6 + 0.02 - y) + 0.0
+    y = (hy + 0.58 - 0.02 - y) + 0.0
     z = (0.0 - z) + 0.0
     ang = (0.0 - ang) + 0.0
   }
@@ -304,9 +306,9 @@ systems {
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.135 - x) + 0.0
-    y = (hy + 0.6 + 0.16 + 0.03 - y) + 0.0
-    z = (0.055 - z) + 0.0
+    x = (bodyX + 0.03 + 0.130 - x) + 0.0
+    y = (hy + 0.58 + 0.16 + 0.03 - y) + 0.0
+    z = (0.058 - z) + 0.0
     ang = (0.0 - ang) + 0.0
   }
   update { on = browL; dt = 1.0
@@ -314,9 +316,9 @@ systems {
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.145 - x) + 0.0
-    y = (hy + 0.6 + 0.16 + 0.078 - y) + 0.0
-    z = (0.055 - z) + 0.0
+    x = (bodyX + 0.03 + 0.142 - x) + 0.0
+    y = (hy + 0.58 + 0.16 + 0.078 - y) + 0.0
+    z = (0.058 - z) + 0.0
     ang = (0.0 - ang) + 0.0
   }
   update { on = eyeR; dt = 1.0
@@ -324,9 +326,9 @@ systems {
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.135 - x) + 0.0
-    y = (hy + 0.6 + 0.16 + 0.03 - y) + 0.0
-    z = (-0.055 - z) + 0.0
+    x = (bodyX + 0.03 + 0.130 - x) + 0.0
+    y = (hy + 0.58 + 0.16 + 0.03 - y) + 0.0
+    z = (-0.058 - z) + 0.0
     ang = (0.0 - ang) + 0.0
   }
   update { on = browR; dt = 1.0
@@ -334,9 +336,9 @@ systems {
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.145 - x) + 0.0
-    y = (hy + 0.6 + 0.16 + 0.078 - y) + 0.0
-    z = (-0.055 - z) + 0.0
+    x = (bodyX + 0.03 + 0.142 - x) + 0.0
+    y = (hy + 0.58 + 0.16 + 0.078 - y) + 0.0
+    z = (-0.058 - z) + 0.0
     ang = (0.0 - ang) + 0.0
   }
   update { on = nose; dt = 1.0
@@ -344,8 +346,8 @@ systems {
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.165 - x) + 0.0
-    y = (hy + 0.6 + 0.16 - 0.01 - y) + 0.0
+    x = (bodyX + 0.03 + 0.160 - x) + 0.0
+    y = (hy + 0.58 + 0.16 - 0.010 - y) + 0.0
     z = (0.0 - z) + 0.0
     ang = (0.0 - ang) + 0.0
   }
@@ -354,8 +356,8 @@ systems {
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.150 - x) + 0.0
-    y = (hy + 0.6 + 0.16 - 0.058 - y) + 0.0
+    x = (bodyX + 0.03 + 0.148 - x) + 0.0
+    y = (hy + 0.58 + 0.16 - 0.058 - y) + 0.0
     z = (0.0 - z) + 0.0
     ang = (0.0 - ang) + 0.0
   }
@@ -367,11 +369,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (bodyX - x) + 0.0
@@ -387,11 +389,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (bodyX + 0.5 * 0.4 * sin(ss) - x) + 0.0
@@ -407,11 +409,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (ex - x) + 0.0
@@ -427,11 +429,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (ex + 0.5 * 0.34 * sin(sa) - x) + 0.0
@@ -447,11 +449,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (wx - x) + 0.0
@@ -467,11 +469,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (wx + 0.5 * 0.09 * sin(sr) - x) + 0.0
@@ -488,7 +490,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -509,7 +511,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -530,7 +532,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -551,7 +553,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -572,7 +574,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -593,7 +595,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -614,7 +616,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -635,7 +637,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -656,7 +658,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -677,7 +679,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -698,7 +700,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -719,7 +721,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -740,14 +742,14 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let ta = sr + 0.9
     let tb = sr + 0.9 + 0.4
     let jx = wx + (0.09 + 0.06) * sin(sr)
     let jy = wy - (0.09 + 0.06) * cos(sr)
     x = (wx + (0.09 + 0.5 * 0.06) * sin(sr) + 0.01 - x) + 0.0
     y = (wy - (0.09 + 0.5 * 0.06) * cos(sr) - y) + 0.0
-    z = (0.19 + 0.065 - z) + 0.0
+    z = (0.19 + 0.062 - z) + 0.0
     ang = (ta - ang) + 0.0
   }
   update { on = thumbLb; dt = 1.0
@@ -759,14 +761,14 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let ta = sr + 0.9
     let tb = sr + 0.9 + 0.4
     let jx = wx + (0.09 + 0.06) * sin(sr)
     let jy = wy - (0.09 + 0.06) * cos(sr)
     x = (jx + 0.5 * 0.05 * sin(tb) - x) + 0.0
     y = (jy - 0.5 * 0.05 * cos(tb) - y) + 0.0
-    z = (0.19 + 0.075 - z) + 0.0
+    z = (0.19 + 0.070 - z) + 0.0
     ang = (tb - ang) + 0.0
   }
   update { on = hipL; dt = 1.0
@@ -860,10 +862,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (ax + 0.23 - x) + 0.0
-    y = (ay - 0.035 - y) + 0.0
+    x = (ax + 0.235 - x) + 0.0
+    y = (ay - 0.03 - y) + 0.0
     z = (0.11 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    ang = (1.5707963267948966 - ang) + 0.0
   }
   update { on = shoulderR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -873,11 +875,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph + 3.141592653589793)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (bodyX - x) + 0.0
@@ -893,11 +895,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph + 3.141592653589793)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (bodyX + 0.5 * 0.4 * sin(ss) - x) + 0.0
@@ -913,11 +915,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph + 3.141592653589793)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (ex - x) + 0.0
@@ -933,11 +935,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph + 3.141592653589793)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (ex + 0.5 * 0.34 * sin(sa) - x) + 0.0
@@ -953,11 +955,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph + 3.141592653589793)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (wx - x) + 0.0
@@ -973,11 +975,11 @@ systems {
     let ss = 0.0 - 0.5 * sin(ph + 3.141592653589793)
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
-    let sy = hy + 0.54
+    let sy = hy + 0.52
     let ex = bodyX + 0.4 * sin(ss)
-    let ey = hy + 0.54 - 0.4 * cos(ss)
+    let ey = hy + 0.52 - 0.4 * cos(ss)
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     x = (wx + 0.5 * 0.09 * sin(sr) - x) + 0.0
@@ -994,7 +996,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1015,7 +1017,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1036,7 +1038,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1057,7 +1059,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1078,7 +1080,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1099,7 +1101,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1120,7 +1122,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1141,7 +1143,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1162,7 +1164,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1183,7 +1185,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1204,7 +1206,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1225,7 +1227,7 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
     let a1 = sr + 0.35
@@ -1246,14 +1248,14 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let ta = sr + 0.9
     let tb = sr + 0.9 + 0.4
     let jx = wx + (0.09 + 0.06) * sin(sr)
     let jy = wy - (0.09 + 0.06) * cos(sr)
     x = (wx + (0.09 + 0.5 * 0.06) * sin(sr) + 0.01 - x) + 0.0
     y = (wy - (0.09 + 0.5 * 0.06) * cos(sr) - y) + 0.0
-    z = (0.0 - 0.19 + 0.065 - z) + 0.0
+    z = (0.0 - 0.19 + 0.062 - z) + 0.0
     ang = (ta - ang) + 0.0
   }
   update { on = thumbRb; dt = 1.0
@@ -1265,14 +1267,14 @@ systems {
     let sa = ss + 0.35
     let sr = ss + 0.35 + 0.1
     let wx = bodyX + 0.4 * sin(ss) + 0.34 * sin(sa)
-    let wy = hy + 0.54 - 0.4 * cos(ss) - 0.34 * cos(sa)
+    let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let ta = sr + 0.9
     let tb = sr + 0.9 + 0.4
     let jx = wx + (0.09 + 0.06) * sin(sr)
     let jy = wy - (0.09 + 0.06) * cos(sr)
     x = (jx + 0.5 * 0.05 * sin(tb) - x) + 0.0
     y = (jy - 0.5 * 0.05 * cos(tb) - y) + 0.0
-    z = (0.0 - 0.19 + 0.075 - z) + 0.0
+    z = (0.0 - 0.19 + 0.070 - z) + 0.0
     ang = (tb - ang) + 0.0
   }
   update { on = hipR; dt = 1.0
@@ -1366,9 +1368,9 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (ax + 0.23 - x) + 0.0
-    y = (ay - 0.035 - y) + 0.0
+    x = (ax + 0.235 - x) + 0.0
+    y = (ay - 0.03 - y) + 0.0
     z = (0.0 - 0.11 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    ang = (1.5707963267948966 - ang) + 0.0
   }
 }

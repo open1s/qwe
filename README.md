@@ -93,6 +93,8 @@ pwe compile cli/examples/robot.pwe -o robot.pweb && pwe present robot.pweb --por
   # a 2-link robot arm (thin-box links, sphere joints) driven by std/robotics FK
 pwe compile cli/examples/humanoid.pwe -o humanoid.pweb && pwe present humanoid.pweb --port 8000
   # a person-like figure walking (eyes, fingers), drawn from entity render attributes
+pwe compile cli/examples/shapes.pwe -o shapes.pweb && pwe present shapes.pweb --port 8000
+  # user-defined custom shapes: primitives + polyhedra (hull/poly) + SVG paths
 
 # `present` shows a top-right legend (color, name, r from the central body) and
 # a top-left run-info panel (per-body radii, satellite distances, step + title).

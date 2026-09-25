@@ -120,6 +120,8 @@ pub struct WorldModel {
     pub entities: Vec<EntityDecl>,
     pub channels: Vec<ChanDecl>,
     pub fields: Vec<FieldDecl>,
+    /// User-defined custom shapes: name -> parts (multi-primitive, local offsets).
+    pub shapes: std::collections::BTreeMap<String, Vec<crate::components::ShapePart>>,
 }
 
 impl WorldModel {
@@ -133,6 +135,7 @@ impl WorldModel {
             entities: Vec::new(),
             channels: Vec::new(),
             fields: Vec::new(),
+            shapes: std::collections::BTreeMap::new(),
         }
     }
 
@@ -193,8 +196,11 @@ impl WorldModel {
             if let Some(values) = &decl.state {
                 e.state = Some(crate::components::State::new(values.clone()));
             }
-            if decl.render.is_some() {
-                e.render = decl.render.clone();
+            if let Some(mut r) = decl.render.clone() {
+                if let Some(name) = &r.shape_name {
+                    r.parts = self.shapes.get(name).cloned();
+                }
+                e.render = Some(r);
             }
             if let Some(c) = decl.color {
                 e.color = Some(c);

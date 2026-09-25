@@ -716,6 +716,26 @@ mod tests {
 /// Presentation-only style overrides for how an entity is drawn by the viewer.
 /// Set from the language's per-entity render attributes (`shape`, `size`,
 /// `opacity`, `glow`, `label`); it never affects simulation semantics.
+/// One primitive part of a user-defined custom shape, offset in the entity's
+/// local frame. `kind`: `1` = sphere (`a` = radius), `2` = box (`a,b,c` = dims),
+/// `3` = capsule (`a,b,c` = bottom radius, length, top radius).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShapePart {
+    pub kind: u8,
+    pub a: f64,
+    pub b: f64,
+    pub c: f64,
+    pub offset: (f64, f64, f64),
+    /// For `kind == 4` (an `svg` part): the SVG path data (`d`), extruded to 3D.
+    pub path: Option<String>,
+    /// For `kind == 5` (a convex `hull`) / `kind == 6` (a `poly`): the vertices.
+    pub points: Vec<(f64, f64, f64)>,
+    /// For `kind == 6` (a `poly`): vertex-index faces (triangulated by the viewer).
+    pub faces: Vec<Vec<u32>>,
+    /// Uniform scale of this part (its "amplitude"/size); `1.0` = as written.
+    pub scale: f64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RenderStyle {
     /// `0` = point marker, `1` = sphere, `2` = box (overrides the collider).
@@ -730,4 +750,8 @@ pub struct RenderStyle {
     pub glow: Option<f64>,
     /// Whether to draw the floating name label (default `true`).
     pub label: Option<bool>,
+    /// A user-defined custom shape name (`shape = <name>`), resolved at build.
+    pub shape_name: Option<String>,
+    /// The resolved parts of that custom shape (built from the world's `shape`s).
+    pub parts: Option<Vec<ShapePart>>,
 }
