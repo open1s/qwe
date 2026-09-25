@@ -392,7 +392,7 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     match port {
         None => {
             for k in 0..steps {
-                if let Err(e) = rt.step_cross() {
+                if let Err(e) = rt.step_cross_batched(CROSS_BATCH) {
                     eprintln!("pwe: step {k} failed: {e}");
                     return 1;
                 }
@@ -403,6 +403,10 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
         Some(p) => present_live(rt, &model, p),
     }
 }
+
+/// Cross-verify the two backends every this many steps (batched; a value of 1
+/// cross-checks every step). Interactive/demo runs favor throughput.
+const CROSS_BATCH: u32 = 16;
 
 /// Executes live and serves the browser viewer until interrupted.
 fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
@@ -432,7 +436,7 @@ fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
             std::thread::sleep(std::time::Duration::from_millis(16));
             continue;
         }
-        if let Err(e) = rt.step_cross() {
+        if let Err(e) = rt.step_cross_batched(CROSS_BATCH) {
             eprintln!("pwe: step {step} failed: {e}");
             return 1;
         }

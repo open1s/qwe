@@ -396,19 +396,39 @@ impl EirRuntime for SceneRuntime<'_> {
         Ok((left + right + up + down + back + front - 6.0 * center) / (f.dx * f.dx))
     }
     fn field_diffuse(&mut self, component: ComponentTypeId, rate: f64) -> Result<()> {
-        let (w, h, d) = self.field_dims(component)?;
+        let (w, h, d, dx) = self.field_shape(component)?;
         let cur = self.effective_cells(component)?;
-        // Expose the snapshot so `field_laplacian` reads exactly the values the
-        // unrolled lowering's Jacobi pass 1 would, then sweep.
-        self.field_overlay.insert(component, cur.clone());
-        let mut out = cur.clone();
+        let mut out = vec![0.0f64; cur.len()];
+        let dx2 = dx * dx;
         for k in 0..d {
             for j in 0..h {
-                for i in 0..w {
-                    let jp = j as f64 + k as f64 * h as f64;
-                    let lap = self.field_laplacian(component, i as f64, jp, w as f64)?;
-                    let idx = (k * h + j) * w + i;
-                    out[idx] = cur[idx] + rate * lap;
+                let row = (k * h + j) * w;
+                if w > 2 {
+                    // Branch-free interior (unit-stride reads) — vectorizable.
+                    // Off-edge neighbour rows fall back to `row` (== centre for
+                    // the zero-flux stencil).
+                    let ui = if j > 0 { row - w } else { row };
+                    let di = if j + 1 < h { row + w } else { row };
+                    let bi = if k > 0 { row - w * h } else { row };
+                    let fi = if k + 1 < d { row + w * h } else { row };
+                    for i in 1..w - 1 {
+                        let c = cur[row + i];
+                        let lap = (cur[row + i - 1]
+                            + cur[row + i + 1]
+                            + cur[ui + i]
+                            + cur[di + i]
+                            + cur[bi + i]
+                            + cur[fi + i]
+                            - 6.0 * c)
+                            / dx2;
+                        out[row + i] = c + rate * lap;
+                    }
+                }
+                // The two i-edges (bounds-checked).
+                out[row] = cur[row] + rate * stencil_laplacian(&cur, w, h, d, dx2, 0, j, k);
+                if w > 1 {
+                    out[row + w - 1] = cur[row + w - 1]
+                        + rate * stencil_laplacian(&cur, w, h, d, dx2, w - 1, j, k);
                 }
             }
         }
@@ -435,19 +455,18 @@ impl EirRuntime for SceneRuntime<'_> {
                 byte_offset: 0,
             });
         }
-        self.field_overlay.insert(component, cur.clone());
-        self.field_overlay.insert(prev, prev_cells.clone());
+        let (_, _, _, dx) = self.field_shape(component)?;
         let keep = damping.clamp(0.0, 1.0);
         let ab = absorb.clamp(0.0, 0.5);
         let aw = absorb_width;
-        let mut out = cur.clone();
-        let mut new_prev = prev_cells.clone();
+        let mut out = vec![0.0f64; cur.len()];
+        let mut new_prev = vec![0.0f64; cur.len()];
+        let dx2 = dx * dx;
         for k in 0..d {
             for j in 0..h {
                 for i in 0..w {
                     let idx = (k * h + j) * w + i;
-                    let jp = j as f64 + k as f64 * h as f64;
-                    let lap = self.field_laplacian(component, i as f64, jp, w as f64)?;
+                    let lap = stencil_laplacian(&cur, w, h, d, dx2, i, j, k);
                     let c = cur[idx];
                     let p = prev_cells[idx];
                     let mut nv = (2.0 * c - p) * keep + cfl * lap;
@@ -530,6 +549,44 @@ impl EirRuntime for SceneRuntime<'_> {
         }
         Ok(())
     }
+}
+
+/// The Field zero-flux Laplacian over a flat `[k][j][i]` slice, inlined for the
+/// bulk sweeps so the per-cell map lookups of `field_laplacian` vanish. Identical
+/// arithmetic to `field_laplacian` (off-edge neighbours equal the centre).
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn stencil_laplacian(
+    cur: &[f64],
+    w: usize,
+    h: usize,
+    d: usize,
+    dx2: f64,
+    i: usize,
+    j: usize,
+    k: usize,
+) -> f64 {
+    let idx = |ci: usize, cj: usize, ck: usize| (ck * h + cj) * w + ci;
+    let center = cur[idx(i, j, k)];
+    let left = if i > 0 { cur[idx(i - 1, j, k)] } else { center };
+    let right = if i + 1 < w {
+        cur[idx(i + 1, j, k)]
+    } else {
+        center
+    };
+    let up = if j > 0 { cur[idx(i, j - 1, k)] } else { center };
+    let down = if j + 1 < h {
+        cur[idx(i, j + 1, k)]
+    } else {
+        center
+    };
+    let back = if k > 0 { cur[idx(i, j, k - 1)] } else { center };
+    let front = if k + 1 < d {
+        cur[idx(i, j, k + 1)]
+    } else {
+        center
+    };
+    (left + right + up + down + back + front - 6.0 * center) / dx2
 }
 
 /// RFC-0037: write dense field overlays back into the authoritative scene's

@@ -6493,6 +6493,20 @@ impl LangRuntime {
         }
         Ok(())
     }
+
+    /// Batched cross-backend stepping: `k-1` interpreter-only steps followed by
+    /// one cross-verified step, so the JIT runs once per `k` steps rather than
+    /// every step. Steady-state cost approaches a single backend while still
+    /// cross-checking every `k` steps. `step_cross`/`step_cross_n` stay strict
+    /// (per-step verification) for tests and conformance.
+    pub fn step_cross_batched(&mut self, k: u32) -> Result<()> {
+        let k = k.max(1);
+        for _ in 1..k {
+            self.step_interpreter()?;
+        }
+        self.step_cross()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
