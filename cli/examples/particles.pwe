@@ -1,0 +1,31 @@
+# particles.pwe — an emitter feeds a pool of particles (RFC-0038).
+#
+# A `pool` is a fixed block of initially-inactive entity slots. Each step the
+# `spawn` system activates the lowest free slot and copies the emitter's state
+# into it; `update` runs only on active slots (inactive ones are guarded and
+# hidden); `despawn` deactivates slots once they pass the right edge, so the
+# pool recycles.
+
+world {
+  gravity = (0, 0, 0)
+  title = "Pooled particles"
+  entity emitter {
+    position = (-6, 0, 0)
+    state = (x = -6.0, vx = 1.5)
+    shape = box
+    size = 0.4
+    color = 0xffaa33
+  }
+  pool p[24] {
+    state = (x = 0.0, vx = 0.0)
+    shape = sphere
+    size = 0.18
+    color = 0x66ccff
+  }
+}
+
+systems {
+  spawn   { on = emitter; pool = p }
+  update  { on = p; dt = 0.1 x = 0.0 + vx }
+  despawn { on = p; when = x > 6.0 }
+}

@@ -17,6 +17,16 @@ use crate::math::Vec3;
 use crate::wir::WirDocument;
 use pwe_api::{ComponentTypeId, EntityId, Hash256, Result};
 
+/// RFC-0038: an entity pool — `count` contiguous slots sharing one declaration,
+/// all inactive at boot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PoolDecl {
+    pub name: String,
+    pub count: u32,
+    /// Per-slot template (state/position/...); slots are named `<name>#<k>`.
+    pub decl: EntityDecl,
+}
+
 /// One declared entity in a world model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityDecl {
@@ -118,6 +128,8 @@ pub struct WorldModel {
     /// namespaces (`--param` updates every alias of one parameter).
     pub param_alias: std::collections::BTreeMap<String, String>,
     pub entities: Vec<EntityDecl>,
+    /// RFC-0038: entity pools (fixed blocks of initially-inactive slots).
+    pub pools: Vec<PoolDecl>,
     pub channels: Vec<ChanDecl>,
     pub fields: Vec<FieldDecl>,
     /// User-defined custom shapes: name -> parts (multi-primitive, local offsets).
@@ -133,6 +145,7 @@ impl WorldModel {
             param_units: std::collections::BTreeMap::new(),
             param_alias: std::collections::BTreeMap::new(),
             entities: Vec::new(),
+            pools: Vec::new(),
             channels: Vec::new(),
             fields: Vec::new(),
             shapes: std::collections::BTreeMap::new(),
@@ -141,7 +154,6 @@ impl WorldModel {
 
     /// Lowers to a runtime `Scene` (executable world state).
     pub fn build_scene(&self) -> crate::scene::Scene {
-        use crate::components::{Collider, RigidBody, Transform, Velocity};
         let mut scene = crate::scene::Scene::new(self.gravity);
         scene.params = self.params.clone();
         for decl in &self.fields {
@@ -151,60 +163,7 @@ impl WorldModel {
             );
         }
         for (index, decl) in self.entities.iter().enumerate() {
-            let mut e = crate::scene::Entity::dynamic();
-            if let Some(p) = decl.position {
-                let t = e.transform.get_or_insert_with(Transform::default);
-                t.position = p;
-            }
-            if let Some(v) = decl.velocity {
-                let vel = e.velocity.get_or_insert_with(Velocity::default);
-                vel.linear = v;
-            }
-            if decl.mass.is_some()
-                || decl.dynamic.is_some()
-                || decl.restitution.is_some()
-                || decl.friction.is_some()
-            {
-                let rb = e.rigid_body.get_or_insert_with(|| RigidBody::dynamic(1.0));
-                if let Some(m) = decl.mass {
-                    rb.mass = m;
-                }
-                if let Some(d) = decl.dynamic {
-                    rb.is_dynamic = if d { 1 } else { 0 };
-                }
-                if let Some(r) = decl.restitution {
-                    rb.restitution = r;
-                }
-                if let Some(f) = decl.friction {
-                    rb.friction = f;
-                }
-                // A dynamic body always carries a velocity component.
-                if rb.is_dynamic == 1 && e.velocity.is_none() {
-                    e.velocity = Some(Velocity::default());
-                }
-            }
-            if let Some(c) = &decl.collider {
-                e.collider = Some(match c {
-                    ColliderDecl::Box { dims } => Collider::aabb(*dims),
-                    ColliderDecl::Sphere { radius } => Collider::sphere(*radius),
-                    ColliderDecl::ConvexHull { points } => Collider::convex_hull(points.clone()),
-                });
-            }
-            if decl.camera == Some(true) {
-                e.camera = Some(crate::components::Camera::default());
-            }
-            if let Some(values) = &decl.state {
-                e.state = Some(crate::components::State::new(values.clone()));
-            }
-            if let Some(mut r) = decl.render.clone() {
-                if let Some(name) = &r.shape_name {
-                    r.parts = self.shapes.get(name).cloned();
-                }
-                e.render = Some(r);
-            }
-            if let Some(c) = decl.color {
-                e.color = Some(c);
-            }
+            let e = self.build_entity(decl, true);
             scene.insert(EntityId((index as u128) + 1), e);
         }
         // Channel entities follow the bodies; each holds its latest value in
@@ -215,7 +174,90 @@ impl WorldModel {
             e.state = Some(crate::components::State::new(vec![chan.value]));
             scene.insert(EntityId(body_count + (index as u128) + 1), e);
         }
+        // RFC-0038: pool slots follow the channels, all inactive.
+        let mut next_slot = body_count + self.channels.len() as u128 + 1;
+        for pool in &self.pools {
+            for _ in 0..pool.count {
+                let e = self.build_entity(&pool.decl, false);
+                scene.insert(EntityId(next_slot), e);
+                next_slot += 1;
+            }
+        }
         scene
+    }
+
+    /// RFC-0038: `(name, base id, count)` for each pool, in declaration order,
+    /// matching `build_scene`'s slot assignment.
+    pub fn pool_ranges(&self) -> Vec<(String, u128, u32)> {
+        let mut out = Vec::new();
+        let mut next = self.entities.len() as u128 + self.channels.len() as u128 + 1;
+        for p in &self.pools {
+            out.push((p.name.clone(), next, p.count));
+            next += p.count as u128;
+        }
+        out
+    }
+
+    /// Builds one runtime entity from a declaration; `active` is the RFC-0038
+    /// lifecycle flag (true for ordinary entities, false for pool slots).
+    fn build_entity(&self, decl: &EntityDecl, active: bool) -> crate::scene::Entity {
+        use crate::components::{Collider, RigidBody, Transform, Velocity};
+        let mut e = crate::scene::Entity::dynamic();
+        e.active = active;
+        if let Some(p) = decl.position {
+            let t = e.transform.get_or_insert_with(Transform::default);
+            t.position = p;
+        }
+        if let Some(v) = decl.velocity {
+            let vel = e.velocity.get_or_insert_with(Velocity::default);
+            vel.linear = v;
+        }
+        if decl.mass.is_some()
+            || decl.dynamic.is_some()
+            || decl.restitution.is_some()
+            || decl.friction.is_some()
+        {
+            let rb = e.rigid_body.get_or_insert_with(|| RigidBody::dynamic(1.0));
+            if let Some(m) = decl.mass {
+                rb.mass = m;
+            }
+            if let Some(d) = decl.dynamic {
+                rb.is_dynamic = if d { 1 } else { 0 };
+            }
+            if let Some(r) = decl.restitution {
+                rb.restitution = r;
+            }
+            if let Some(f) = decl.friction {
+                rb.friction = f;
+            }
+            // A dynamic body always carries a velocity component.
+            if rb.is_dynamic == 1 && e.velocity.is_none() {
+                e.velocity = Some(Velocity::default());
+            }
+        }
+        if let Some(c) = &decl.collider {
+            e.collider = Some(match c {
+                ColliderDecl::Box { dims } => Collider::aabb(*dims),
+                ColliderDecl::Sphere { radius } => Collider::sphere(*radius),
+                ColliderDecl::ConvexHull { points } => Collider::convex_hull(points.clone()),
+            });
+        }
+        if decl.camera == Some(true) {
+            e.camera = Some(crate::components::Camera::default());
+        }
+        if let Some(values) = &decl.state {
+            e.state = Some(crate::components::State::new(values.clone()));
+        }
+        if let Some(mut r) = decl.render.clone() {
+            if let Some(name) = &r.shape_name {
+                r.parts = self.shapes.get(name).cloned();
+            }
+            e.render = Some(r);
+        }
+        if let Some(c) = decl.color {
+            e.color = Some(c);
+        }
+        e
     }
 
     /// Lowers this `WorldModel` into a canonical WIR document (RFC-0020) — the

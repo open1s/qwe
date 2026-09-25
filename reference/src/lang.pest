@@ -24,7 +24,7 @@ param_list = { ident ~ ("," ~ ident)* }
 
 // -- world model -------------------------------------------------------------
 world_section = { "world" ~ "{" ~ world_item* ~ "}" }
-world_item = _{ gravity_stmt | chan_stmt | entity_stmt | field_stmt | params_stmt | title_stmt | shape_stmt }
+world_item = _{ gravity_stmt | chan_stmt | entity_stmt | pool_stmt | field_stmt | params_stmt | title_stmt | shape_stmt }
 gravity_stmt = { "gravity" ~ "=" ~ vec3 }
 // A human-readable title for the run (shown by `pwe present`).
 title_stmt = { "title" ~ "=" ~ string }
@@ -41,6 +41,8 @@ unit_exp = @{ "-"? ~ ASCII_DIGIT+ }
 unit_op = @{ "*" | "/" }
 chan_stmt = { "chan" ~ ident ~ "{" ~ "value" ~ "=" ~ value ~ ";"? ~ "}" }
 entity_stmt = { "entity" ~ ident ~ "{" ~ entity_field* ~ "}" }
+// RFC-0038: `pool name[N] { <entity fields> }` — N initially-inactive slots.
+pool_stmt = { "pool" ~ ident ~ "[" ~ number ~ "]" ~ "{" ~ entity_field* ~ "}" }
 // A deterministic scalar grid field (PDE substrate): `field name { width = w; height = h; dx = d }`.
 field_stmt = { "field" ~ ident ~ "{" ~ param* ~ "}" }
 

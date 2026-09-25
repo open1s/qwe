@@ -506,6 +506,19 @@ impl EirRuntime for SceneRuntime<'_> {
         Ok(())
     }
 
+    fn find_free_slot(&self, base: u128, count: u32) -> Result<f64> {
+        Ok(self.free_slot_scan(base, count))
+    }
+
+    fn spawn_into(
+        &mut self,
+        base: u128,
+        count: u32,
+        caller: u128,
+    ) -> Result<(f64, Vec<crate::eir::WorldWrite>)> {
+        self.spawn_slot(base, count, caller)
+    }
+
     fn field_poisson(
         &mut self,
         component: ComponentTypeId,
@@ -557,6 +570,103 @@ impl EirRuntime for SceneRuntime<'_> {
         }
         Ok(())
     }
+}
+
+/// Shift every SSA result/operand id in a function body by `k`, leaving
+/// instruction-index operands (`Br`/`CondBr` targets, `Call` function ids)
+/// untouched. Used to make room for the RFC-0038 active-guard prologue.
+fn shift_ssa(instrs: &mut [crate::eir::Instruction], ssa: u32, ip: u32) {
+    use crate::eir::Opcode;
+    for i in instrs.iter_mut() {
+        if i.result_id != 0 {
+            i.result_id += ssa;
+        }
+        match i.opcode {
+            // `Br` target is an instruction index.
+            Opcode::Br => {
+                if let Some(o) = i.operands.get_mut(0) {
+                    *o += ip;
+                }
+            }
+            // `CondBr`: operand 0 is the SSA condition, operands 1/2 are
+            // instruction-index targets.
+            Opcode::CondBr => {
+                if let Some(o) = i.operands.get_mut(0) {
+                    *o += ssa;
+                }
+                for o in i.operands.iter_mut().skip(1) {
+                    *o += ip;
+                }
+            }
+            // `Call`: operand 0 is a function id, the rest are SSA args.
+            Opcode::Call => {
+                for o in i.operands.iter_mut().skip(1) {
+                    *o += ssa;
+                }
+            }
+            // Field-opcode operands are SSA register ids; generic shift.
+            _ => {
+                for o in i.operands.iter_mut() {
+                    *o += ssa;
+                }
+            }
+        }
+    }
+}
+
+/// RFC-0038: prepend `if !active(entity) { return }` to a lowered pool-slot
+/// function, shifting the body's SSA ids by the three prologue registers.
+pub fn prepend_active_guard(entity: u128, instrs: &mut Vec<crate::eir::Instruction>) {
+    use crate::eir::{Immediate, Instruction, Opcode, ValueType};
+    let body_len = instrs.len() as u32;
+    shift_ssa(instrs, 3, 4);
+    // After the 4-instruction prologue the body occupies `[4, 4+body_len)`; a
+    // dedicated trailing `Return` (appended below) is the inactive branch
+    // target, so no block ends without a terminator.
+    let ret_idx = body_len + 4;
+    let prologue = vec![
+        Instruction {
+            opcode: Opcode::Const,
+            result_id: 1,
+            result_type: Some(ValueType::F64),
+            operands: vec![],
+            constant: Some(Immediate::F64(0.0)),
+            target: None,
+        },
+        Instruction {
+            opcode: Opcode::ReadView,
+            result_id: 2,
+            result_type: Some(ValueType::F64),
+            operands: vec![],
+            constant: None,
+            target: Some(cr(entity, active_id(), 0)),
+        },
+        Instruction {
+            opcode: Opcode::Eq,
+            result_id: 3,
+            result_type: Some(ValueType::Bool),
+            operands: vec![2, 1],
+            constant: None,
+            target: None,
+        },
+        Instruction {
+            opcode: Opcode::CondBr,
+            result_id: 0,
+            result_type: None,
+            operands: vec![3, ret_idx, 4],
+            constant: None,
+            target: None,
+        },
+    ];
+    instrs.push(Instruction {
+        opcode: Opcode::Return,
+        result_id: 0,
+        result_type: None,
+        operands: vec![],
+        constant: None,
+        target: None,
+    });
+    instrs.splice(0..0, prologue);
 }
 
 /// The Field zero-flux Laplacian over a flat `[k][j][i]` slice, inlined for the
@@ -654,7 +764,7 @@ impl SceneRuntime<'_> {
     /// the pool is full. Deterministic ascending scan; reads this step's pending
     /// `active` writes first, then the scene, so two spawns in one step cannot
     /// pick the same slot.
-    pub fn find_free_slot(&self, base: u128, count: u32) -> f64 {
+    pub fn free_slot_scan(&self, base: u128, count: u32) -> f64 {
         for k in 0..count as u128 {
             let id = base + k;
             let pending = self.pending.get(&(id, active_id(), 0)).map(|v| *v != 0);
@@ -671,6 +781,60 @@ impl SceneRuntime<'_> {
             }
         }
         0.0
+    }
+
+    /// RFC-0038: activate one free slot and copy `caller`'s state into it,
+    /// emitting the ordered writes and mirroring them into the pending overlay
+    /// so a same-step second spawn cannot reuse the slot.
+    pub fn spawn_slot(
+        &mut self,
+        base: u128,
+        count: u32,
+        caller: u128,
+    ) -> Result<(f64, Vec<crate::eir::WorldWrite>)> {
+        let slot = self.free_slot_scan(base, count);
+        if slot == 0.0 {
+            return Ok((0.0, Vec::new()));
+        }
+        let slot_id = slot as u128;
+        let mut writes = Vec::new();
+        writes.push(crate::eir::WorldWrite {
+            entity: slot_id,
+            component: active_id(),
+            offset: 0,
+            value: 1.0f64.to_bits(),
+        });
+        let caller_state = self
+            .scene
+            .get(pwe_api::EntityId(caller))
+            .and_then(|e| e.state.as_ref())
+            .map(|s| s.values.clone())
+            .unwrap_or_default();
+        let slot_arity = self
+            .scene
+            .get(pwe_api::EntityId(slot_id))
+            .and_then(|e| e.state.as_ref())
+            .map(|s| s.values.len())
+            .unwrap_or(0);
+        for (i, value) in caller_state.iter().take(slot_arity).enumerate() {
+            writes.push(crate::eir::WorldWrite {
+                entity: slot_id,
+                component: state_id(),
+                offset: (i as u32) * field::STATE_SLOT_BYTES,
+                value: value.to_bits(),
+            });
+        }
+        for w in &writes {
+            self.write_field(
+                ComponentRef {
+                    entity: w.entity,
+                    component: w.component,
+                    offset: w.offset,
+                },
+                w.value,
+            );
+        }
+        Ok((slot, writes))
     }
 
     /// RFC-0037: the dense per-field overlays touched this step (for the
@@ -928,6 +1092,12 @@ pub trait EirSystem {
     fn name(&self) -> &'static str;
     /// Appends this system's lowering for one entity to `out`.
     fn lower_entity(&self, entity: u128, out: &mut Vec<Instruction>);
+    /// RFC-0038: whether this system's per-entity function must be guarded by
+    /// the entity's `active` flag (false for `despawn`, which must still run to
+    /// clear slots).
+    fn guards_pool_slots(&self) -> bool {
+        true
+    }
 }
 
 /// Gravity system: `velocity.y += gravity_y * dt`.
@@ -1609,6 +1779,16 @@ impl PhysicsProgram {
     /// Lower every system × every entity into one EIR module (deterministic
     /// ordering: system order, then entity id order).
     pub fn build(systems: Vec<Box<dyn EirSystem>>, entities: Vec<u128>) -> Self {
+        Self::build_with_guards(systems, entities, &std::collections::BTreeSet::new())
+    }
+
+    /// RFC-0038: like `build`, but prepends the `active` guard to each pool
+    /// slot's function (except systems that opt out).
+    pub fn build_with_guards(
+        systems: Vec<Box<dyn EirSystem>>,
+        entities: Vec<u128>,
+        guard_slots: &std::collections::BTreeSet<u128>,
+    ) -> Self {
         let mut functions = Vec::new();
         let mut fid = 1u64;
         for (s_idx, sys) in systems.iter().enumerate() {
@@ -1621,6 +1801,10 @@ impl PhysicsProgram {
                 // entity (e.g. a sensor only emits for its own entity).
                 if !instrs.iter().any(|i| i.opcode == Opcode::Return) {
                     continue;
+                }
+                // RFC-0038: pool slots skip their body until activated.
+                if guard_slots.contains(&entity) && sys.guards_pool_slots() {
+                    prepend_active_guard(entity, &mut instrs);
                 }
                 functions.push(Function {
                     id: fid,
@@ -1775,11 +1959,11 @@ mod tests {
         }
         scene.get_mut(EntityId(2)).unwrap().active = false;
         scene.get_mut(EntityId(3)).unwrap().active = false;
-        assert_eq!(SceneRuntime::new(&scene).find_free_slot(1, 3), 2.0);
+        assert_eq!(SceneRuntime::new(&scene).free_slot_scan(1, 3), 2.0);
         // A pending `active` write this step hides the slot from a second spawn.
         let mut rt = SceneRuntime::new(&scene);
         rt.write_field(cr(2, active_id(), 0), 1.0f64.to_bits());
-        assert_eq!(rt.find_free_slot(1, 3), 3.0);
+        assert_eq!(rt.free_slot_scan(1, 3), 3.0);
         // `apply_writes` commits the flag.
         apply_writes(
             &mut scene,
@@ -1796,7 +1980,7 @@ mod tests {
         for id in 1..=3u128 {
             scene.get_mut(EntityId(id)).unwrap().active = true;
         }
-        assert_eq!(SceneRuntime::new(&scene).find_free_slot(1, 3), 0.0);
+        assert_eq!(SceneRuntime::new(&scene).free_slot_scan(1, 3), 0.0);
     }
 
     #[test]

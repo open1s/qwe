@@ -392,7 +392,7 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
             // String-valued params (`chan`, `on`, `when`) keep the raw text.
             if matches!(
                 key.as_str(),
-                "chan" | "on" | "when" | "field" | "source" | "prev"
+                "chan" | "on" | "when" | "field" | "source" | "prev" | "pool"
             ) {
                 decl.string_params.insert(key, text);
             } else if let Some(v) = parse_scalar_number(&text) {
@@ -870,6 +870,13 @@ fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
             }
             "emit"
         }
+        // RFC-0038: the current entity's activation flag.
+        "active" => {
+            if !args.is_empty() {
+                return Err(error(Status::Invalid, 59));
+            }
+            "active"
+        }
         // Spatial queries: `neighbor_count(radius)` / `nearest_dist()`.
         "neighbor_count" => {
             if args.len() != 1 {
@@ -1274,207 +1281,22 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let name = inner.next().unwrap().as_str().to_string();
                             let mut decl = EntityDecl::named(&name);
                             for field in inner {
-                                match field.as_rule() {
-                                    Rule::position_field => {
-                                        decl.position =
-                                            Some(parse_vec3(field.into_inner().next().unwrap()))
-                                    }
-                                    Rule::velocity_field => {
-                                        decl.velocity =
-                                            Some(parse_vec3(field.into_inner().next().unwrap()))
-                                    }
-                                    Rule::state_field => {
-                                        let list = field.into_inner().next().unwrap();
-                                        match list.as_rule() {
-                                            Rule::vecN => {
-                                                decl.state = Some(
-                                                    list.into_inner().map(parse_value).collect(),
-                                                );
-                                            }
-                                            Rule::named_state => {
-                                                let mut values = Vec::new();
-                                                let mut names = Vec::new();
-                                                let mut units: Vec<Option<crate::units::Dim>> =
-                                                    Vec::new();
-                                                // `ident = value <unit>?` -> named slot with an
-                                                // optional compile-time dimension annotation.
-                                                let push_unit = |it: &mut pest::iterators::Pairs<'_, Rule>,
-                                                                 units: &mut Vec<Option<crate::units::Dim>>| {
-                                                    let u = it.next().and_then(|p| {
-                                                        p.as_str()
-                                                            .trim_start_matches('[')
-                                                            .trim_end_matches(']')
-                                                            .parse::<crate::units::Dim>()
-                                                            .ok()
-                                                    });
-                                                    units.push(u);
-                                                };
-                                                for item in list.into_inner() {
-                                                    // `vec3 pos` -> N consecutive slots named
-                                                    // `pos`, `pos.0`, … `pos.{N-1}` (zero-init).
-                                                    let text = item.as_str().trim();
-                                                    if let Some(rest) = text.strip_prefix("vec") {
-                                                        let digits: String = rest
-                                                            .chars()
-                                                            .take_while(|c| c.is_ascii_digit())
-                                                            .collect();
-                                                        let n: usize =
-                                                            digits.parse().map_err(|_| {
-                                                                error(Status::Invalid, 52)
-                                                            })?;
-                                                        if n == 0
-                                                            || names.len() + n
-                                                                > crate::components::State::MAX_STATE_SLOTS
-                                                        {
-                                                            return Err(error(Status::Invalid, 52));
-                                                        }
-                                                        let vname = text[3 + digits.len()..]
-                                                            .trim()
-                                                            .to_string();
-                                                        names.push(Some(vname.clone()));
-                                                        for k in 0..n {
-                                                            names
-                                                                .push(Some(format!("{vname}.{k}")));
-                                                            values.push(0.0);
-                                                            // `vecN` has no per-component unit.
-                                                            units.push(None);
-                                                        }
-                                                        continue;
-                                                    }
-                                                    let mut it = item.into_inner();
-                                                    match it.next() {
-                                                        // `ident = value` -> named slot.
-                                                        Some(p) if p.as_rule() == Rule::ident => {
-                                                            names
-                                                                .push(Some(p.as_str().to_string()));
-                                                            values.push(parse_value(
-                                                                it.next().unwrap(),
-                                                            ));
-                                                            push_unit(&mut it, &mut units);
-                                                        }
-                                                        // bare `value` -> positional slot.
-                                                        Some(p) => {
-                                                            names.push(None);
-                                                            values.push(parse_value(p));
-                                                            push_unit(&mut it, &mut units);
-                                                        }
-                                                        None => {}
-                                                    }
-                                                }
-                                                decl.state = Some(values);
-                                                decl.state_names = Some(names);
-                                                if units.iter().any(|u| u.is_some()) {
-                                                    decl.state_units = Some(units);
-                                                }
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                    Rule::mass_field => {
-                                        decl.mass =
-                                            Some(parse_value(field.into_inner().next().unwrap()))
-                                    }
-                                    Rule::dynamic_field => {
-                                        decl.dynamic = Some(
-                                            field.into_inner().next().unwrap().as_str() == "true",
-                                        )
-                                    }
-                                    Rule::nbody_field => {
-                                        decl.nbody = Some(
-                                            field.into_inner().next().unwrap().as_str() == "true",
-                                        )
-                                    }
-                                    Rule::parent_field => {
-                                        decl.parent = Some(
-                                            field.into_inner().next().unwrap().as_str().to_string(),
-                                        )
-                                    }
-                                    Rule::restitution_field => {
-                                        decl.restitution =
-                                            Some(parse_value(field.into_inner().next().unwrap()))
-                                    }
-                                    Rule::friction_field => {
-                                        decl.friction =
-                                            Some(parse_value(field.into_inner().next().unwrap()))
-                                    }
-                                    Rule::box_field => {
-                                        let dims = parse_vec3(field.into_inner().next().unwrap());
-                                        decl.collider = Some(ColliderDecl::Box { dims });
-                                    }
-                                    Rule::sphere_field => {
-                                        let radius =
-                                            parse_value(field.into_inner().next().unwrap());
-                                        decl.collider = Some(ColliderDecl::Sphere { radius });
-                                    }
-                                    Rule::hull_field => {
-                                        let list = field.into_inner().next().unwrap();
-                                        let points: Vec<Vec3> =
-                                            list.into_inner().map(parse_vec3).collect();
-                                        if points.len() < 4 {
-                                            return Err(error(Status::Invalid, 51));
-                                        }
-                                        decl.collider = Some(ColliderDecl::ConvexHull { points });
-                                    }
-                                    Rule::camera_field => {
-                                        decl.camera = Some(
-                                            field.into_inner().next().unwrap().as_str() == "true",
-                                        )
-                                    }
-                                    Rule::color_field => {
-                                        let hex = field.into_inner().next().unwrap().as_str();
-                                        let v = u32::from_str_radix(&hex[2..], 16)
-                                            .map_err(|_| error(Status::Invalid, 64))?;
-                                        decl.color = Some(v);
-                                    }
-                                    // Presentation-only render hints.
-                                    Rule::shape_field => {
-                                        let name = field.into_inner().next().unwrap().as_str();
-                                        let r = decl.render.get_or_insert_with(Default::default);
-                                        match name {
-                                            "point" | "sphere" | "box" | "capsule" => {
-                                                let code = match name {
-                                                    "sphere" => 1,
-                                                    "box" => 2,
-                                                    "capsule" => 3,
-                                                    _ => 0,
-                                                };
-                                                r.shape = Some(code);
-                                            }
-                                            // Any other name refers to a user-defined shape
-                                            // declared in the world's `shape <name> { … }`.
-                                            other => r.shape_name = Some(other.to_string()),
-                                        }
-                                    }
-                                    Rule::size_field => {
-                                        let inner = field.into_inner().next().unwrap();
-                                        let r = decl.render.get_or_insert_with(Default::default);
-                                        if inner.as_rule() == Rule::vec3 {
-                                            let d = parse_vec3(inner);
-                                            r.size3 = Some((d.x, d.y, d.z));
-                                        } else {
-                                            r.size = Some(parse_value(inner));
-                                        }
-                                    }
-                                    Rule::opacity_field => {
-                                        let v = parse_value(field.into_inner().next().unwrap());
-                                        decl.render.get_or_insert_with(Default::default).opacity =
-                                            Some(v);
-                                    }
-                                    Rule::glow_field => {
-                                        let v = parse_value(field.into_inner().next().unwrap());
-                                        decl.render.get_or_insert_with(Default::default).glow =
-                                            Some(v);
-                                    }
-                                    Rule::label_field => {
-                                        let v =
-                                            field.into_inner().next().unwrap().as_str() == "true";
-                                        decl.render.get_or_insert_with(Default::default).label =
-                                            Some(v);
-                                    }
-                                    _ => {}
-                                }
+                                apply_entity_field(field, &mut decl)?;
                             }
                             model.entities.push(decl);
+                        }
+                        Rule::pool_stmt => {
+                            let mut inner = item.into_inner();
+                            let name = inner.next().unwrap().as_str().to_string();
+                            let count = inner
+                                .next()
+                                .map(|n| n.as_str().parse::<u32>().unwrap_or(0))
+                                .unwrap_or(0);
+                            let mut decl = EntityDecl::named(&name);
+                            for field in inner {
+                                apply_entity_field(field, &mut decl)?;
+                            }
+                            model.pools.push(crate::dsl::PoolDecl { name, count, decl });
                         }
                         _ => {}
                     }
@@ -1717,6 +1539,11 @@ impl EirSystem for UpdateSystem {
         }
         for (idx_expr, _) in &self.dyn_rules {
             expr_slot_span(idx_expr, &sn, &mut let_max, &mut let_any);
+        }
+        // A rule RHS may read an own slot that no rule writes (e.g. `x = vx`
+        // reads `vx`); cover those reads too, or they would lower to register 0.
+        for (_, expr) in &self.rules {
+            expr_slot_span(expr, &sn, &mut let_max, &mut let_any);
         }
         if let_any {
             slots = slots.max(let_max + 1);
@@ -2898,6 +2725,24 @@ fn lower_expr(
                     ));
                     out_reg
                 }
+                "active" => {
+                    // RFC-0038: read the current entity's activation flag.
+                    let out_reg = *next_id;
+                    *next_id += 1;
+                    out.push(crate::physics_eir::instr(
+                        crate::eir::Opcode::ReadView,
+                        out_reg,
+                        Some(crate::eir::ValueType::F64),
+                        vec![],
+                        None,
+                        Some(crate::physics_eir::cr(
+                            ctx.current_entity,
+                            crate::physics_eir::active_id(),
+                            0,
+                        )),
+                    ));
+                    out_reg
+                }
                 "emit" => {
                     // Emit an ordered event (kind, payload); yields 0.0.
                     let kind = lower_expr(&args[0], ctx, next_id, out);
@@ -3570,6 +3415,222 @@ impl EirSystem for WatchSystem {
 /// in a step see earlier cells' fresh writes). The step runs once per step
 /// (only the first dynamic entity emits the sweep). `rate ≤ 1/4` in 2D for
 /// explicit stability.
+/// RFC-0038: `spawn { on = <caller>; pool = <name> }`. One `SpawnInto` opcode
+/// per caller/step activates the lowest free slot and copies the caller's state.
+pub struct SpawnSystem {
+    pub on: u128,
+    pub base: u128,
+    pub count: u32,
+    pub limbs: [u32; 4],
+}
+impl EirSystem for SpawnSystem {
+    fn name(&self) -> &'static str {
+        "physics.spawn"
+    }
+    fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
+        let ret = |out: &mut Vec<crate::eir::Instruction>| {
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Return,
+                0,
+                None,
+                vec![],
+                None,
+                None,
+            ));
+        };
+        if entity != self.on {
+            ret(out);
+            return;
+        }
+        let mut next_id = 1u32;
+        let mut operands = Vec::with_capacity(5);
+        for limb in self.limbs {
+            operands.push(const_u64_reg(limb as u64, &mut next_id, out));
+        }
+        operands.push(const_u64_reg(self.count as u64, &mut next_id, out));
+        let slot_reg = next_id;
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::SpawnInto,
+            slot_reg,
+            Some(crate::eir::ValueType::F64),
+            operands,
+            None,
+            Some(crate::physics_eir::cr(
+                entity,
+                crate::physics_eir::state_id(),
+                0,
+            )),
+        ));
+        ret(out);
+    }
+}
+
+/// RFC-0038: `despawn { on = <pool>; when = <expr> }`. For every slot, the
+/// activation flag is cleared when it is active and `when` holds:
+/// `active = Select(active && when, 0, active)`.
+pub struct DespawnSystem {
+    pub pool_slots: Vec<u128>,
+    pub when: Expr,
+    pub entity_map: std::collections::BTreeMap<String, u128>,
+    pub state_names_by_id:
+        std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
+    pub func_ids: std::collections::BTreeMap<String, u64>,
+    pub field_dims: std::collections::BTreeMap<String, (u32, u32)>,
+    pub namespace: String,
+    pub param_names: std::collections::BTreeSet<String>,
+}
+impl EirSystem for DespawnSystem {
+    fn name(&self) -> &'static str {
+        "physics.despawn"
+    }
+    fn guards_pool_slots(&self) -> bool {
+        // `despawn` must still run on slots it is about to clear.
+        false
+    }
+    fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
+        let ret = |out: &mut Vec<crate::eir::Instruction>| {
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Return,
+                0,
+                None,
+                vec![],
+                None,
+                None,
+            ));
+        };
+        if !self.pool_slots.contains(&entity) {
+            ret(out);
+            return;
+        }
+        let sn = self
+            .state_names_by_id
+            .get(&entity)
+            .cloned()
+            .unwrap_or_default();
+        let mut max_slot = 0usize;
+        let mut any = false;
+        expr_slot_span(&self.when, &sn, &mut max_slot, &mut any);
+        let slots = if any { max_slot + 1 } else { 0 };
+        let mut next_id = 1u32;
+        let mut slot_regs = Vec::with_capacity(slots);
+        for i in 0..slots {
+            let r = next_id;
+            next_id += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::ReadView,
+                r,
+                Some(crate::eir::ValueType::F64),
+                vec![],
+                None,
+                Some(crate::physics_eir::cr(
+                    entity,
+                    crate::physics_eir::state_id(),
+                    crate::physics_eir::field::state_slot(i),
+                )),
+            ));
+            slot_regs.push(r);
+        }
+        let empty_refs = std::collections::BTreeMap::new();
+        let empty_props = std::collections::BTreeMap::new();
+        let locals = std::collections::BTreeMap::new();
+        let ctx = LowerCtx {
+            slot_regs: &slot_regs,
+            ref_regs: &empty_refs,
+            prop_regs: &empty_props,
+            entity_map: &self.entity_map,
+            state_names: &sn,
+            state_names_by_id: &self.state_names_by_id,
+            locals: &locals,
+            func_ids: &self.func_ids,
+            field_dims: &self.field_dims,
+            namespace: &self.namespace,
+            params: &self.param_names,
+            current_entity: entity,
+        };
+        let active_reg = next_id;
+        next_id += 1;
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::ReadView,
+            active_reg,
+            Some(crate::eir::ValueType::F64),
+            vec![],
+            None,
+            Some(crate::physics_eir::cr(
+                entity,
+                crate::physics_eir::active_id(),
+                0,
+            )),
+        ));
+        let w = lower_expr(&self.when, &ctx, &mut next_id, out);
+        let zero = const_reg(0.0, &mut next_id, out);
+        let one = const_reg(1.0, &mut next_id, out);
+        let is_active = next_id;
+        next_id += 1;
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::Ne,
+            is_active,
+            Some(crate::eir::ValueType::Bool),
+            vec![active_reg, zero],
+            None,
+            None,
+        ));
+        let active_f = next_id;
+        next_id += 1;
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::Select,
+            active_f,
+            Some(crate::eir::ValueType::F64),
+            vec![is_active, one, zero],
+            None,
+            None,
+        ));
+        let w_true = next_id;
+        next_id += 1;
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::Ne,
+            w_true,
+            Some(crate::eir::ValueType::Bool),
+            vec![w, zero],
+            None,
+            None,
+        ));
+        // Mul needs numeric operands: materialize the `when` truth as 0.0/1.0.
+        let w_num = next_id;
+        next_id += 1;
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::Select,
+            w_num,
+            Some(crate::eir::ValueType::F64),
+            vec![w_true, one, zero],
+            None,
+            None,
+        ));
+        let both = binary(crate::eir::Opcode::Mul, active_f, w_num, &mut next_id, out);
+        let value = next_id;
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::Select,
+            value,
+            Some(crate::eir::ValueType::F64),
+            vec![both, zero, active_f],
+            None,
+            None,
+        ));
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::WriteView,
+            0,
+            None,
+            vec![value],
+            None,
+            Some(crate::physics_eir::cr(
+                entity,
+                crate::physics_eir::active_id(),
+                0,
+            )),
+        ));
+        ret(out);
+    }
+}
+
 pub struct DiffuseSystem {
     pub field: String,
     pub rate: f64,
@@ -4965,11 +5026,7 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                 // Optional `on = <name>` restricts the rule to one entity.
                 let only = match s.string_params.get("on") {
                     Some(name) => {
-                        let id = entity_ids
-                            .get(name)
-                            .copied()
-                            .ok_or(error(Status::Invalid, 62))?;
-                        Some(std::collections::BTreeSet::from([id]))
+                        Some(resolve_on(entity_ids, name).ok_or(error(Status::Invalid, 62))?)
                     }
                     None => None,
                 };
@@ -5029,11 +5086,7 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                 let lets = to_let_stmts(&s.update_stmts)?;
                 let only = match s.string_params.get("on") {
                     Some(name) => {
-                        let id = entity_ids
-                            .get(name)
-                            .copied()
-                            .ok_or(error(Status::Invalid, 62))?;
-                        Some(std::collections::BTreeSet::from([id]))
+                        Some(resolve_on(entity_ids, name).ok_or(error(Status::Invalid, 62))?)
                     }
                     None => None,
                 };
@@ -5072,11 +5125,7 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                 let lets = to_let_stmts(&s.update_stmts)?;
                 let only = match s.string_params.get("on") {
                     Some(name) => {
-                        let id = entity_ids
-                            .get(name)
-                            .copied()
-                            .ok_or(error(Status::Invalid, 62))?;
-                        Some(std::collections::BTreeSet::from([id]))
+                        Some(resolve_on(entity_ids, name).ok_or(error(Status::Invalid, 62))?)
                     }
                     None => None,
                 };
@@ -5117,11 +5166,7 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                 }
                 let only = match s.string_params.get("on") {
                     Some(name) => {
-                        let id = entity_ids
-                            .get(name)
-                            .copied()
-                            .ok_or(error(Status::Invalid, 62))?;
-                        Some(std::collections::BTreeSet::from([id]))
+                        Some(resolve_on(entity_ids, name).ok_or(error(Status::Invalid, 62))?)
                     }
                     None => None,
                 };
@@ -5213,6 +5258,98 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     run_on: dynamic.first().copied().unwrap_or(0),
                 }));
             }
+            // RFC-0038: `spawn { on = <caller>; pool = <name> }` — activate one
+            // free slot per caller/step and copy the caller's state into it.
+            "spawn" => {
+                let caller_name = s.string_params.get("on").ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        "spawn requires `on = <entity>`".to_string(),
+                    )
+                })?;
+                let caller = entity_ids
+                    .get(caller_name)
+                    .copied()
+                    .ok_or(error(Status::Invalid, 62))?;
+                let pool = s.string_params.get("pool").ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        "spawn requires `pool = <name>`".to_string(),
+                    )
+                })?;
+                let base = entity_ids
+                    .get(&format!("{pool}#0"))
+                    .copied()
+                    .ok_or_else(|| {
+                        error_at(
+                            Status::Invalid,
+                            78,
+                            s.byte_offset,
+                            format!("spawn references unknown pool '{pool}'"),
+                        )
+                    })?;
+                let mut count = 0u32;
+                while entity_ids.contains_key(&format!("{pool}#{count}")) {
+                    count += 1;
+                }
+                out.push(Box::new(SpawnSystem {
+                    on: caller,
+                    base,
+                    count,
+                    limbs: crate::eir::u128_limbs(base),
+                }));
+            }
+            // RFC-0038: `despawn { on = <pool>; when = <expr> }` — deactivate
+            // every matching active slot.
+            "despawn" => {
+                let pool = s.string_params.get("on").ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        "despawn requires `on = <pool>`".to_string(),
+                    )
+                })?;
+                let mut slots = Vec::new();
+                let mut k = 0u32;
+                while let Some(&id) = entity_ids.get(&format!("{pool}#{k}")) {
+                    slots.push(id);
+                    k += 1;
+                }
+                if slots.is_empty() {
+                    return Err(error_at(
+                        Status::Invalid,
+                        78,
+                        s.byte_offset,
+                        format!("despawn references unknown pool '{pool}'"),
+                    ));
+                }
+                let when = match s.string_params.get("when") {
+                    Some(text) => parse_expr_str(text)?,
+                    None => {
+                        return Err(error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            "despawn requires `when = <expr>`".to_string(),
+                        ))
+                    }
+                };
+                out.push(Box::new(DespawnSystem {
+                    pool_slots: slots,
+                    when,
+                    entity_map: entity_ids.clone(),
+                    state_names_by_id: state_names_by_id.clone(),
+                    func_ids: func_ids.clone(),
+                    field_dims: field_dims.clone(),
+                    namespace: s.namespace.clone(),
+                    param_names: param_names.clone(),
+                }));
+            }
             _ => return Err(error(Status::Invalid, 49)),
         }
     }
@@ -5221,6 +5358,27 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
 
 /// The dynamic physics bodies a system program acts on: entities that are not
 /// explicitly static and are not cameras.
+/// RFC-0038: resolve an `on = <name>` target to its entity set — a single
+/// declared entity, or every slot of a pool (`<name>#0`, `<name>#1`, …).
+fn resolve_on(
+    entity_ids: &std::collections::BTreeMap<String, u128>,
+    name: &str,
+) -> Option<std::collections::BTreeSet<u128>> {
+    if let Some(&id) = entity_ids.get(name) {
+        return Some(std::collections::BTreeSet::from([id]));
+    }
+    if entity_ids.contains_key(&format!("{name}#0")) {
+        let mut set = std::collections::BTreeSet::new();
+        let mut k = 0u32;
+        while let Some(&id) = entity_ids.get(&format!("{name}#{k}")) {
+            set.insert(id);
+            k += 1;
+        }
+        return Some(set);
+    }
+    None
+}
+
 fn dynamic_entity_ids(model: &WorldModel) -> Vec<u128> {
     model
         .entities
@@ -5563,6 +5721,19 @@ fn merge_modules(
             }
             entity_seen.insert(e.name.clone(), who.clone());
             model.entities.push(e.clone());
+        }
+        // RFC-0038: pools merge like entities, with a duplicate-name check.
+        for p in &m.parsed.model.pools {
+            if entity_seen.contains_key(&p.name) {
+                return Err(error_at(
+                    Status::Invalid,
+                    76,
+                    0,
+                    format!("pool `{}` defined twice", p.name),
+                ));
+            }
+            entity_seen.insert(p.name.clone(), who.clone());
+            model.pools.push(p.clone());
         }
         // User-defined custom shapes merge by name (later definitions win).
         for (name, parts) in &m.parsed.model.shapes {
@@ -5944,19 +6115,33 @@ pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
     for (i, c) in parsed.model.channels.iter().enumerate() {
         entity_ids.insert(c.name.clone(), body_count + (i as u128) + 1);
     }
-    let entities = dynamic_entity_ids(&parsed.model);
+    // RFC-0038: pool slots follow the channels; `<name>#<k>` names each slot.
+    let pools = parsed.model.pool_ranges();
+    for (name, base, count) in &pools {
+        for k in 0..*count {
+            entity_ids.insert(format!("{name}#{k}"), base + k as u128);
+        }
+    }
+    let mut entities = dynamic_entity_ids(&parsed.model);
+    for (_, base, count) in &pools {
+        for k in 0..*count {
+            entities.push(base + k as u128);
+        }
+    }
     // Bodies eligible for mutual `nbody`: dynamic bodies not explicitly
     // excluded (`nbody = false`, e.g. a Moon driven by a targeted update rule).
     let nbody_entities: Vec<u128> = entities
         .iter()
         .copied()
         .filter(|&id| {
-            parsed
-                .model
-                .entities
-                .get((id - 1) as usize)
-                .map(|e| e.nbody != Some(false))
-                .unwrap_or(true)
+            // RFC-0038: pool slots are never mutual-n-body bodies.
+            id <= body_count
+                && parsed
+                    .model
+                    .entities
+                    .get((id - 1) as usize)
+                    .map(|e| e.nbody != Some(false))
+                    .unwrap_or(true)
         })
         .collect();
     // User-defined functions get reserved high EIR ids (no collision with the
@@ -5982,6 +6167,26 @@ pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
             if !map.is_empty() {
                 state_names_by_id.insert((i as u128) + 1, map);
             }
+        }
+    }
+    // RFC-0038: pool slots share their pool's named-state layout.
+    {
+        let mut next = body_count + parsed.model.channels.len() as u128 + 1;
+        for p in &parsed.model.pools {
+            if let Some(names) = &p.decl.state_names {
+                let mut map = std::collections::BTreeMap::new();
+                for (slot, n) in names.iter().enumerate() {
+                    if let Some(n) = n {
+                        map.insert(n.clone(), slot);
+                    }
+                }
+                if !map.is_empty() {
+                    for k in 0..p.count {
+                        state_names_by_id.insert(next + k as u128, map.clone());
+                    }
+                }
+            }
+            next += p.count as u128;
         }
     }
     // Grid field dimensions (name -> (width, height, dx)) for the field solvers.
@@ -6018,7 +6223,11 @@ pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
         &field_info,
         &entities,
     )?;
-    let program = PhysicsProgram::build(systems, entities);
+    let pool_slots: std::collections::BTreeSet<u128> = pools
+        .iter()
+        .flat_map(|(_, base, count)| (0..*count).map(move |k| *base + k as u128))
+        .collect();
+    let program = PhysicsProgram::build_with_guards(systems, entities, &pool_slots);
     let mut module = program.module.clone();
     // Append user-defined functions as EIR CALL targets (reserved high ids).
     for (i, f) in parsed.funcs.iter().enumerate() {
@@ -6207,6 +6416,12 @@ impl LangRuntime {
             .collect();
         for (i, c) in compiled.parsed.model.channels.iter().enumerate() {
             entity_names.insert(body_count + (i as u128) + 1, c.name.clone());
+        }
+        // RFC-0038: pool slots are named `<pool>#<k>`.
+        for (name, base, count) in compiled.parsed.model.pool_ranges() {
+            for k in 0..count {
+                entity_names.insert(base + k as u128, format!("{name}#{k}"));
+            }
         }
         let mut router = ChannelRouter::new(region);
         for &cid in &channel_ids {
@@ -6507,6 +6722,175 @@ impl LangRuntime {
         self.step_cross()?;
         Ok(())
     }
+}
+
+/// RFC-0038/RFC-0038: apply one `entity_field` grammar pair to a declaration
+/// (shared by `entity` and `pool` declarations).
+fn apply_entity_field(field: pest::iterators::Pair<'_, Rule>, decl: &mut EntityDecl) -> Result<()> {
+    match field.as_rule() {
+        Rule::position_field => {
+            decl.position = Some(parse_vec3(field.into_inner().next().unwrap()))
+        }
+        Rule::velocity_field => {
+            decl.velocity = Some(parse_vec3(field.into_inner().next().unwrap()))
+        }
+        Rule::state_field => {
+            let list = field.into_inner().next().unwrap();
+            match list.as_rule() {
+                Rule::vecN => {
+                    decl.state = Some(list.into_inner().map(parse_value).collect());
+                }
+                Rule::named_state => {
+                    let mut values = Vec::new();
+                    let mut names = Vec::new();
+                    let mut units: Vec<Option<crate::units::Dim>> = Vec::new();
+                    // `ident = value <unit>?` -> named slot with an
+                    // optional compile-time dimension annotation.
+                    let push_unit =
+                        |it: &mut pest::iterators::Pairs<'_, Rule>,
+                         units: &mut Vec<Option<crate::units::Dim>>| {
+                            let u = it.next().and_then(|p| {
+                                p.as_str()
+                                    .trim_start_matches('[')
+                                    .trim_end_matches(']')
+                                    .parse::<crate::units::Dim>()
+                                    .ok()
+                            });
+                            units.push(u);
+                        };
+                    for item in list.into_inner() {
+                        // `vec3 pos` -> N consecutive slots named
+                        // `pos`, `pos.0`, … `pos.{N-1}` (zero-init).
+                        let text = item.as_str().trim();
+                        if let Some(rest) = text.strip_prefix("vec") {
+                            let digits: String =
+                                rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                            let n: usize =
+                                digits.parse().map_err(|_| error(Status::Invalid, 52))?;
+                            if n == 0 || names.len() + n > crate::components::State::MAX_STATE_SLOTS
+                            {
+                                return Err(error(Status::Invalid, 52));
+                            }
+                            let vname = text[3 + digits.len()..].trim().to_string();
+                            names.push(Some(vname.clone()));
+                            for k in 0..n {
+                                names.push(Some(format!("{vname}.{k}")));
+                                values.push(0.0);
+                                // `vecN` has no per-component unit.
+                                units.push(None);
+                            }
+                            continue;
+                        }
+                        let mut it = item.into_inner();
+                        match it.next() {
+                            // `ident = value` -> named slot.
+                            Some(p) if p.as_rule() == Rule::ident => {
+                                names.push(Some(p.as_str().to_string()));
+                                values.push(parse_value(it.next().unwrap()));
+                                push_unit(&mut it, &mut units);
+                            }
+                            // bare `value` -> positional slot.
+                            Some(p) => {
+                                names.push(None);
+                                values.push(parse_value(p));
+                                push_unit(&mut it, &mut units);
+                            }
+                            None => {}
+                        }
+                    }
+                    decl.state = Some(values);
+                    decl.state_names = Some(names);
+                    if units.iter().any(|u| u.is_some()) {
+                        decl.state_units = Some(units);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Rule::mass_field => decl.mass = Some(parse_value(field.into_inner().next().unwrap())),
+        Rule::dynamic_field => {
+            decl.dynamic = Some(field.into_inner().next().unwrap().as_str() == "true")
+        }
+        Rule::nbody_field => {
+            decl.nbody = Some(field.into_inner().next().unwrap().as_str() == "true")
+        }
+        Rule::parent_field => {
+            decl.parent = Some(field.into_inner().next().unwrap().as_str().to_string())
+        }
+        Rule::restitution_field => {
+            decl.restitution = Some(parse_value(field.into_inner().next().unwrap()))
+        }
+        Rule::friction_field => {
+            decl.friction = Some(parse_value(field.into_inner().next().unwrap()))
+        }
+        Rule::box_field => {
+            let dims = parse_vec3(field.into_inner().next().unwrap());
+            decl.collider = Some(ColliderDecl::Box { dims });
+        }
+        Rule::sphere_field => {
+            let radius = parse_value(field.into_inner().next().unwrap());
+            decl.collider = Some(ColliderDecl::Sphere { radius });
+        }
+        Rule::hull_field => {
+            let list = field.into_inner().next().unwrap();
+            let points: Vec<Vec3> = list.into_inner().map(parse_vec3).collect();
+            if points.len() < 4 {
+                return Err(error(Status::Invalid, 51));
+            }
+            decl.collider = Some(ColliderDecl::ConvexHull { points });
+        }
+        Rule::camera_field => {
+            decl.camera = Some(field.into_inner().next().unwrap().as_str() == "true")
+        }
+        Rule::color_field => {
+            let hex = field.into_inner().next().unwrap().as_str();
+            let v = u32::from_str_radix(&hex[2..], 16).map_err(|_| error(Status::Invalid, 64))?;
+            decl.color = Some(v);
+        }
+        // Presentation-only render hints.
+        Rule::shape_field => {
+            let name = field.into_inner().next().unwrap().as_str();
+            let r = decl.render.get_or_insert_with(Default::default);
+            match name {
+                "point" | "sphere" | "box" | "capsule" => {
+                    let code = match name {
+                        "sphere" => 1,
+                        "box" => 2,
+                        "capsule" => 3,
+                        _ => 0,
+                    };
+                    r.shape = Some(code);
+                }
+                // Any other name refers to a user-defined shape
+                // declared in the world's `shape <name> { … }`.
+                other => r.shape_name = Some(other.to_string()),
+            }
+        }
+        Rule::size_field => {
+            let inner = field.into_inner().next().unwrap();
+            let r = decl.render.get_or_insert_with(Default::default);
+            if inner.as_rule() == Rule::vec3 {
+                let d = parse_vec3(inner);
+                r.size3 = Some((d.x, d.y, d.z));
+            } else {
+                r.size = Some(parse_value(inner));
+            }
+        }
+        Rule::opacity_field => {
+            let v = parse_value(field.into_inner().next().unwrap());
+            decl.render.get_or_insert_with(Default::default).opacity = Some(v);
+        }
+        Rule::glow_field => {
+            let v = parse_value(field.into_inner().next().unwrap());
+            decl.render.get_or_insert_with(Default::default).glow = Some(v);
+        }
+        Rule::label_field => {
+            let v = field.into_inner().next().unwrap().as_str() == "true";
+            decl.render.get_or_insert_with(Default::default).label = Some(v);
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -7917,6 +8301,55 @@ mod tests {
     /// A bare name that resolves to no local/slot/param reads 0.0 (the
     /// documented unresolved-reference convention) instead of failing the step
     /// — an unresolved world-level component must not trip the entity lookup.
+    /// RFC-0038: `spawn` activates one free slot per step and copies the
+    /// caller's state; inactive slots are hidden; `despawn` clears them.
+    #[test]
+    fn pool_spawn_despawn_roundtrip() {
+        let src = "world { gravity=(0,0,0) \
+                   entity emitter { state = (x = 5.0, y = 1.0) } \
+                   pool p[3] { state = (x = 0.0, y = 0.0) } } \
+                   systems { spawn { on = emitter; pool = p } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        // Boot: only the emitter (id 1) is active.
+        assert_eq!(rt.scene.entities.values().filter(|e| e.active).count(), 1);
+        rt.step_cross().unwrap();
+        rt.step_cross().unwrap();
+        let active: Vec<u128> = rt
+            .scene
+            .entities
+            .iter()
+            .filter(|(_, e)| e.active)
+            .map(|(id, _)| id.0)
+            .collect();
+        assert!(
+            active.contains(&2) && active.contains(&3),
+            "active={active:?}"
+        );
+        assert!(!active.contains(&4), "third step not yet taken: {active:?}");
+        // The slot received the caller's state.
+        let s = rt.scene.get(EntityId(2)).unwrap().state.as_ref().unwrap();
+        assert_eq!((s.values[0], s.values[1]), (5.0, 1.0));
+
+        // `despawn` with a `when` that never holds leaves the slots active.
+        let src2 = "world { gravity=(0,0,0) \
+                    entity emitter { state = (x = 5.0) } \
+                    pool p[2] { state = (x = 0.0) } } \
+                    systems { spawn { on = emitter; pool = p } \
+                              despawn { on = p; when = x > 100.0 } }";
+        let mut rt2 = LangRuntime::compile(src2).unwrap();
+        rt2.step_cross().unwrap();
+        assert!(rt2.scene.get(EntityId(2)).unwrap().active);
+        // A `when` that always holds clears them.
+        let src3 = "world { gravity=(0,0,0) \
+                    entity emitter { state = (x = 5.0) } \
+                    pool p[2] { state = (x = 0.0) } } \
+                    systems { spawn { on = emitter; pool = p } \
+                              despawn { on = p; when = active() and x > 0.0 } }";
+        let mut rt3 = LangRuntime::compile(src3).unwrap();
+        rt3.step_cross().unwrap();
+        assert!(!rt3.scene.get(EntityId(2)).unwrap().active);
+    }
+
     #[test]
     fn unresolved_bare_name_reads_zero() {
         let src = "world { gravity=(0,0,0) entity e { state=(x=0.0) } } \

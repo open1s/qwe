@@ -212,6 +212,11 @@ pub enum Opcode {
     /// little-endian `u32` limbs of the pool's first slot id, then the slot
     /// count. Result: the slot id, or 0 when the pool is full.
     FindFreeSlot = 227,
+    /// RFC-0038: activate one free slot of a pool and copy the caller's state
+    /// into it. Operands as for `FindFreeSlot`; target = the caller entity.
+    /// Result: the slot id, or 0 when the pool is full. Emits the activation and
+    /// state writes.
+    SpawnInto = 228,
     Return = 0x8000,
     /// Unconditional branch to an instruction index (block target). Single
     /// operand = target index.
@@ -503,6 +508,16 @@ pub trait EirRuntime {
     /// RFC-0038: the lowest-id inactive slot in the pool `base..base+count`, or
     /// `0.0` when full. Deterministic ascending scan.
     fn find_free_slot(&self, _base: u128, _count: u32) -> Result<f64> {
+        Err(error(Status::Internal, 0, 0))
+    }
+    /// RFC-0038: activate one free slot and copy `caller`'s state into it.
+    /// Returns the slot id (`0.0` when full) and the ordered writes.
+    fn spawn_into(
+        &mut self,
+        _base: u128,
+        _count: u32,
+        _caller: u128,
+    ) -> Result<(f64, Vec<WorldWrite>)> {
         Err(error(Status::Internal, 0, 0))
     }
 }
@@ -903,8 +918,8 @@ impl EirModule {
                         Some(ValueType::F64)
                     }
                 }
-                Opcode::FindFreeSlot => {
-                    if instruction.operands.len() != 5 {
+                Opcode::FindFreeSlot | Opcode::SpawnInto => {
+                    if instruction.operands.len() != 5 || instruction.target.is_none() {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
                     Some(ValueType::F64)
@@ -1636,6 +1651,28 @@ impl EirModule {
                     stacks[depth - 1].insert(instruction.result_id, Immediate::F64(slot));
                     pcs[depth - 1] += 1;
                 }
+                Opcode::SpawnInto => {
+                    // RFC-0038: pool spawn (base in four limbs, count); target
+                    // carries the caller entity. The runtime emits the writes.
+                    let target = instruction.target.ok_or(error(Status::EirInvalid, 23, 0))?;
+                    let operand = |k: usize| -> Result<Immediate> {
+                        stacks[depth - 1]
+                            .get(&instruction.operands[k])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))
+                    };
+                    let base = u128_from_limbs(
+                        as_u64(operand(0)?),
+                        as_u64(operand(1)?),
+                        as_u64(operand(2)?),
+                        as_u64(operand(3)?),
+                    );
+                    let count = as_u64(operand(4)?) as u32;
+                    let (slot, mut new_writes) = rt.spawn_into(base, count, target.entity)?;
+                    writes.append(&mut new_writes);
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(slot));
+                    pcs[depth - 1] += 1;
+                }
                 Opcode::Atomic => {
                     let target = instruction.target.ok_or(error(Status::EirInvalid, 35, 0))?;
                     let rhs = stacks[depth - 1]
@@ -2151,6 +2188,7 @@ fn opcode_from_u16(raw: u16) -> Result<Opcode> {
         x if x == Opcode::FieldWave as u16 => Opcode::FieldWave,
         x if x == Opcode::FieldPoisson as u16 => Opcode::FieldPoisson,
         x if x == Opcode::FindFreeSlot as u16 => Opcode::FindFreeSlot,
+        x if x == Opcode::SpawnInto as u16 => Opcode::SpawnInto,
         _ => return Err(error(Status::EirInvalid, 28, 0)),
     })
 }
@@ -2293,6 +2331,16 @@ fn component_from_limbs(a: u64, b: u64, c: u64, d: u64) -> ComponentTypeId {
     bytes[8..12].copy_from_slice(&(c as u32).to_le_bytes());
     bytes[12..16].copy_from_slice(&(d as u32).to_le_bytes());
     ComponentTypeId(bytes)
+}
+
+/// The four little-endian `u32` limbs of a 128-bit entity id.
+pub(crate) fn u128_limbs(id: u128) -> [u32; 4] {
+    [
+        id as u32,
+        (id >> 32) as u32,
+        (id >> 64) as u32,
+        (id >> 96) as u32,
+    ]
 }
 
 /// Reassemble a 128-bit entity id from four little-endian `u32` limbs.

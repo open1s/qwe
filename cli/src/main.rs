@@ -391,11 +391,16 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     }
     match port {
         None => {
-            for k in 0..steps {
-                if let Err(e) = rt.step_cross_batched(CROSS_BATCH) {
-                    eprintln!("pwe: step {k} failed: {e}");
+            let mut remaining = steps;
+            let mut done = 0u64;
+            while remaining > 0 {
+                let k = remaining.min(CROSS_BATCH as u64) as u32;
+                if let Err(e) = rt.step_cross_batched(k) {
+                    eprintln!("pwe: step {done} failed: {e}");
                     return 1;
                 }
+                remaining -= k as u64;
+                done += k as u64;
             }
             report(&rt, steps);
             0
@@ -436,7 +441,14 @@ fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
             std::thread::sleep(std::time::Duration::from_millis(16));
             continue;
         }
-        if let Err(e) = rt.step_cross_batched(CROSS_BATCH) {
+        // One step per frame; cross-verify the backends every CROSS_BATCH-th
+        // frame (the interpreter alone otherwise).
+        let r = if step % CROSS_BATCH as u64 == 0 {
+            rt.step_cross()
+        } else {
+            rt.step_interpreter()
+        };
+        if let Err(e) = r {
             eprintln!("pwe: step {step} failed: {e}");
             return 1;
         }

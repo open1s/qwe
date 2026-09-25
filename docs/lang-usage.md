@@ -274,6 +274,35 @@ Space is 3D — with the simulation clock, fields are the 4D substrate
   by `1/dx²` (5-point 2D, 7-point 3D).
 * Unknown field names read `0` (unresolved-reference convention).
 
+### 3.4 Entity pools — dynamic entities (RFC-0038)
+
+A `pool` is a fixed block of pre-allocated entity slots that start **inactive**
+and are brought into and out of existence at runtime, keeping the EIR static:
+
+```
+world {
+  entity emitter { state = (x = -6.0, vx = 1.5) }
+  pool p[24] { state = (x = 0.0, vx = 0.0) shape = sphere size = 0.18 }
+}
+systems {
+  spawn   { on = emitter; pool = p }          # one free slot per step
+  update  { on = p; dt = 0.1 x = 0.0 + vx }   # runs only on active slots
+  despawn { on = p; when = x > 6.0 }          # recycle past the edge
+}
+```
+
+* Slots are named `<pool>#0`, `<pool>#1`, … and their ids follow the declared
+  entities and channels (a pool of `n` slots declared after `P` earlier slots
+  starts at the next id).
+* All slots start inactive. Inactive slots are skipped by user systems (their
+  per-entity functions begin with `active()` guard) and hidden from the render
+  view; `despawn` still runs on them to clear the flag.
+* `spawn` activates the lowest-id free slot (`0` when full) and copies the
+  caller's state; `active()` reads the current entity's flag (0/1).
+* `active` is world state: it is hashed and snapshotted (old snapshots restore
+  with every entity active). Everything is deterministic and byte-identical
+  across the interpreter and JIT.
+
 ## 4. Systems — the behaviour
 
 ### 4.1 Built-in system kinds
@@ -295,6 +324,8 @@ Space is 3D — with the simulation clock, fields are the 4D substrate
 | `diffuse` | `field`, `rate` | Explicit diffusion `T += rate·∇²T` (Jacobi sweep, exactly conservative). |
 | `poisson` | `field`, `source?`, `iters`, `scale?` | Gauss–Seidel relaxation of `∇²φ = ρ·scale`. |
 | `wave` | `field`, `prev`, `velocity`, `dt`, `damping?`, `absorb?`, `absorb_width?` | Second-order leapfrog wave equation (§4.5). |
+| `spawn` | `on`, `pool` | Activate one free pool slot per caller/step and copy the caller's state (§3.4). |
+| `despawn` | `on`, `when` | Deactivate every pool slot where `when` holds (§3.4). |
 
 Unknown system kind → detail code 49.
 
