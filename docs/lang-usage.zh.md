@@ -289,6 +289,19 @@ systems {
 * `active` 属于世界状态：参与哈希与快照（旧快照恢复后全部实体视为激活）。整个过程
   确定性、解释器与 JIT 逐字节一致。
 
+### 3.5 约束关节（RFC-0039）
+
+`joint { on = a; other = b; type = ... }` 通过迭代位置松弛维持成对约束（按质量加权；
+`dynamic = false` 一侧视为无限大质量锚点）：
+
+* `distance` / `spring`：保持 `|a − b| = length`（`spring` 追加沿轴速度 `damping`）；
+* `weld` / `hinge` / `revolute` / `ball` / `spherical`：令 `a` 偏移 `anchor` 的点与 `b` 重合；
+* `prismatic` / `slider`：令 `b` 落在过 `a`、方向 `axis` 的直线上，`limit = (lo, hi)` 限定沿轴距离。
+
+本引擎为质点模型，`hinge`/`ball` 的转动自由度不受约束；`cone`/`universal`/`gear`/
+`rack`/`pulley` 等需要转动或比例的关节会被明确拒绝。配合 `gravity` + `integrate`
+使用。示例：`cli/examples/chain.pwe`。
+
 ## 4. 系统——行为
 
 ### 4.1 内建系统种类

@@ -392,7 +392,7 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
             // String-valued params (`chan`, `on`, `when`) keep the raw text.
             if matches!(
                 key.as_str(),
-                "chan" | "on" | "when" | "field" | "source" | "prev" | "pool"
+                "chan" | "on" | "when" | "field" | "source" | "prev" | "pool" | "other" | "type"
             ) {
                 decl.string_params.insert(key, text);
             } else if let Some(v) = parse_scalar_number(&text) {
@@ -3417,6 +3417,352 @@ impl EirSystem for WatchSystem {
 /// explicit stability.
 /// RFC-0038: `spawn { on = <caller>; pool = <name> }`. One `SpawnInto` opcode
 /// per caller/step activates the lowest free slot and copies the caller's state.
+/// RFC-0039: the positional joint families.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum JointKind {
+    /// `distance` / `spring`: keep `|a - b| = rest` (spring adds velocity damping).
+    Distance,
+    /// `weld` / `hinge` / `ball`: coincide the anchor points.
+    Anchor,
+    /// `prismatic` / `slider`: keep `b` on the line through `a` along `axis`.
+    Prismatic,
+}
+
+/// RFC-0039: a pairwise position-relaxation joint. Lowers once, for entity `a`.
+pub struct JointSystem {
+    pub a: u128,
+    pub b: u128,
+    pub kind: JointKind,
+    pub rest: f64,
+    pub stiffness: f64,
+    pub damping: f64,
+    pub axis: (f64, f64, f64),
+    pub anchor_a: (f64, f64, f64),
+    pub anchor_b: (f64, f64, f64),
+    pub limit: Option<(f64, f64)>,
+    pub iterations: u32,
+}
+
+fn jt_read(
+    out: &mut Vec<crate::eir::Instruction>,
+    next: &mut u32,
+    e: u128,
+    comp: pwe_api::ComponentTypeId,
+    off: u32,
+) -> u32 {
+    let r = *next;
+    *next += 1;
+    out.push(crate::physics_eir::instr(
+        crate::eir::Opcode::ReadView,
+        r,
+        Some(crate::eir::ValueType::F64),
+        vec![],
+        None,
+        Some(crate::physics_eir::cr(e, comp, off)),
+    ));
+    r
+}
+
+fn jt_write(
+    out: &mut Vec<crate::eir::Instruction>,
+    e: u128,
+    comp: pwe_api::ComponentTypeId,
+    off: u32,
+    v: u32,
+) {
+    out.push(crate::physics_eir::instr(
+        crate::eir::Opcode::WriteView,
+        0,
+        None,
+        vec![v],
+        None,
+        Some(crate::physics_eir::cr(e, comp, off)),
+    ));
+}
+
+/// `is_dynamic ? 1/mass : 0` (RFC-0039 mass weighting).
+fn jt_inv_mass(
+    out: &mut Vec<crate::eir::Instruction>,
+    next: &mut u32,
+    e: u128,
+    zero: u32,
+    one: u32,
+    eps: u32,
+) -> u32 {
+    use crate::physics_eir::{field, rigid_body_id};
+    let m = jt_read(out, next, e, rigid_body_id(), field::MASS);
+    let d = jt_read(out, next, e, rigid_body_id(), field::IS_DYNAMIC);
+    let ms = nb_arith(out, next, crate::eir::Opcode::Add, m, eps);
+    let inv = nb_arith(out, next, crate::eir::Opcode::Div, one, ms);
+    let dneq = *next;
+    *next += 1;
+    out.push(crate::physics_eir::instr(
+        crate::eir::Opcode::Ne,
+        dneq,
+        Some(crate::eir::ValueType::Bool),
+        vec![d, zero],
+        None,
+        None,
+    ));
+    let dflt = *next;
+    *next += 1;
+    out.push(crate::physics_eir::instr(
+        crate::eir::Opcode::Select,
+        dflt,
+        Some(crate::eir::ValueType::F64),
+        vec![dneq, one, zero],
+        None,
+        None,
+    ));
+    nb_arith(out, next, crate::eir::Opcode::Mul, inv, dflt)
+}
+
+impl EirSystem for JointSystem {
+    fn name(&self) -> &'static str {
+        "physics.joint"
+    }
+    fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
+        use crate::eir::Opcode;
+        use crate::physics_eir::{field, transform_id, velocity_id};
+        let ret = |out: &mut Vec<crate::eir::Instruction>| {
+            out.push(crate::physics_eir::instr(
+                Opcode::Return,
+                0,
+                None,
+                vec![],
+                None,
+                None,
+            ));
+        };
+        if entity != self.a {
+            ret(out);
+            return;
+        }
+        let mut next = 1u32;
+        let zero = nb_const(out, &mut next, 0.0);
+        let eps = nb_const(out, &mut next, 1e-12);
+        let one = nb_const(out, &mut next, 1.0);
+        let inv_a = jt_inv_mass(out, &mut next, self.a, zero, one, eps);
+        let inv_b = jt_inv_mass(out, &mut next, self.b, zero, one, eps);
+        let total = nb_arith(out, &mut next, Opcode::Add, inv_a, inv_b);
+        // A joint with no movable side is a no-op (guard, not silent NaN).
+        let skip = next;
+        next += 1;
+        out.push(crate::physics_eir::instr(
+            Opcode::Le,
+            skip,
+            Some(crate::eir::ValueType::Bool),
+            vec![total, zero],
+            None,
+            None,
+        ));
+        let gi = out.len();
+        out.push(crate::physics_eir::instr(
+            Opcode::CondBr,
+            0,
+            None,
+            vec![skip, 0, 0],
+            None,
+            None,
+        ));
+
+        let stiff = nb_const(out, &mut next, self.stiffness);
+        let sd_total = nb_arith(out, &mut next, Opcode::Div, stiff, total);
+        let wa = nb_arith(out, &mut next, Opcode::Mul, sd_total, inv_a);
+        let wb = nb_arith(out, &mut next, Opcode::Mul, sd_total, inv_b);
+        let axis = (
+            nb_const(out, &mut next, self.axis.0),
+            nb_const(out, &mut next, self.axis.1),
+            nb_const(out, &mut next, self.axis.2),
+        );
+        let aan = (
+            nb_const(out, &mut next, self.anchor_a.0),
+            nb_const(out, &mut next, self.anchor_a.1),
+            nb_const(out, &mut next, self.anchor_a.2),
+        );
+        let abn = (
+            nb_const(out, &mut next, self.anchor_b.0),
+            nb_const(out, &mut next, self.anchor_b.1),
+            nb_const(out, &mut next, self.anchor_b.2),
+        );
+        let rest = nb_const(out, &mut next, self.rest);
+        let damping = nb_const(out, &mut next, self.damping);
+        let (lo, hi) = match self.limit {
+            Some((l, h)) => (
+                Some(nb_const(out, &mut next, l)),
+                Some(nb_const(out, &mut next, h)),
+            ),
+            None => (None, None),
+        };
+
+        for _ in 0..self.iterations.max(1) {
+            let ax = jt_read(out, &mut next, self.a, transform_id(), field::POS_X);
+            let ay = jt_read(out, &mut next, self.a, transform_id(), field::POS_Y);
+            let az = jt_read(out, &mut next, self.a, transform_id(), field::POS_Z);
+            let bx = jt_read(out, &mut next, self.b, transform_id(), field::POS_X);
+            let by = jt_read(out, &mut next, self.b, transform_id(), field::POS_Y);
+            let bz = jt_read(out, &mut next, self.b, transform_id(), field::POS_Z);
+            let (nax, nay, naz, nbx, nby, nbz) = match self.kind {
+                JointKind::Distance => {
+                    let dx = nb_arith(out, &mut next, Opcode::Sub, ax, bx);
+                    let dy = nb_arith(out, &mut next, Opcode::Sub, ay, by);
+                    let dz = nb_arith(out, &mut next, Opcode::Sub, az, bz);
+                    let r2 = {
+                        let x2 = nb_arith(out, &mut next, Opcode::Mul, dx, dx);
+                        let y2 = nb_arith(out, &mut next, Opcode::Mul, dy, dy);
+                        let z2 = nb_arith(out, &mut next, Opcode::Mul, dz, dz);
+                        let s = nb_arith(out, &mut next, Opcode::Add, x2, y2);
+                        nb_arith(out, &mut next, Opcode::Add, s, z2)
+                    };
+                    let r2e = nb_arith(out, &mut next, Opcode::Add, r2, eps);
+                    let r = nb_un(Opcode::Sqrt, out, &mut next, r2e);
+                    let err0 = nb_arith(out, &mut next, Opcode::Sub, r, rest);
+                    let mut err = nb_arith(out, &mut next, Opcode::Mul, err0, stiff);
+                    // spring damping along the axis: err += damping·((va-vb)·dir).
+                    // Only emitted when damping is non-zero (a static side has no
+                    // velocity component, so an unconditional read would fail).
+                    if self.damping != 0.0 {
+                        let vax = jt_read(out, &mut next, self.a, velocity_id(), field::VEL_X);
+                        let vay = jt_read(out, &mut next, self.a, velocity_id(), field::VEL_Y);
+                        let vaz = jt_read(out, &mut next, self.a, velocity_id(), field::VEL_Z);
+                        let vbx = jt_read(out, &mut next, self.b, velocity_id(), field::VEL_X);
+                        let vby = jt_read(out, &mut next, self.b, velocity_id(), field::VEL_Y);
+                        let vbz = jt_read(out, &mut next, self.b, velocity_id(), field::VEL_Z);
+                        let dvx = nb_arith(out, &mut next, Opcode::Sub, vax, vbx);
+                        let dvy = nb_arith(out, &mut next, Opcode::Sub, vay, vby);
+                        let dvz = nb_arith(out, &mut next, Opcode::Sub, vaz, vbz);
+                        let t1 = nb_arith(out, &mut next, Opcode::Mul, dvx, dx);
+                        let t2 = nb_arith(out, &mut next, Opcode::Mul, dvy, dy);
+                        let t3 = nb_arith(out, &mut next, Opcode::Mul, dvz, dz);
+                        let s1 = nb_arith(out, &mut next, Opcode::Add, t1, t2);
+                        let s2 = nb_arith(out, &mut next, Opcode::Add, s1, t3);
+                        let relv = nb_arith(out, &mut next, Opcode::Div, s2, r);
+                        let dv = nb_arith(out, &mut next, Opcode::Mul, damping, relv);
+                        err = nb_arith(out, &mut next, Opcode::Add, err, dv);
+                    }
+                    let den = nb_arith(out, &mut next, Opcode::Mul, r, total);
+                    let scale = nb_arith(out, &mut next, Opcode::Div, err, den);
+                    let ca = nb_arith(out, &mut next, Opcode::Mul, scale, inv_a);
+                    let cb = nb_arith(out, &mut next, Opcode::Mul, scale, inv_b);
+                    (
+                        nb_sub_mul(out, &mut next, ax, dx, ca),
+                        nb_sub_mul(out, &mut next, ay, dy, ca),
+                        nb_sub_mul(out, &mut next, az, dz, ca),
+                        nb_add_mul(out, &mut next, bx, dx, cb),
+                        nb_add_mul(out, &mut next, by, dy, cb),
+                        nb_add_mul(out, &mut next, bz, dz, cb),
+                    )
+                }
+                JointKind::Anchor => {
+                    let ex = {
+                        let aa = nb_arith(out, &mut next, Opcode::Add, ax, aan.0);
+                        let bb = nb_arith(out, &mut next, Opcode::Add, bx, abn.0);
+                        nb_arith(out, &mut next, Opcode::Sub, aa, bb)
+                    };
+                    let ey = {
+                        let aa = nb_arith(out, &mut next, Opcode::Add, ay, aan.1);
+                        let bb = nb_arith(out, &mut next, Opcode::Add, by, abn.1);
+                        nb_arith(out, &mut next, Opcode::Sub, aa, bb)
+                    };
+                    let ez = {
+                        let aa = nb_arith(out, &mut next, Opcode::Add, az, aan.2);
+                        let bb = nb_arith(out, &mut next, Opcode::Add, bz, abn.2);
+                        nb_arith(out, &mut next, Opcode::Sub, aa, bb)
+                    };
+                    (
+                        nb_sub_mul(out, &mut next, ax, ex, wa),
+                        nb_sub_mul(out, &mut next, ay, ey, wa),
+                        nb_sub_mul(out, &mut next, az, ez, wa),
+                        nb_add_mul(out, &mut next, bx, ex, wb),
+                        nb_add_mul(out, &mut next, by, ey, wb),
+                        nb_add_mul(out, &mut next, bz, ez, wb),
+                    )
+                }
+                JointKind::Prismatic => {
+                    let dx = nb_arith(out, &mut next, Opcode::Sub, bx, ax);
+                    let dy = nb_arith(out, &mut next, Opcode::Sub, by, ay);
+                    let dz = nb_arith(out, &mut next, Opcode::Sub, bz, az);
+                    let t1 = nb_arith(out, &mut next, Opcode::Mul, dx, axis.0);
+                    let t2 = nb_arith(out, &mut next, Opcode::Mul, dy, axis.1);
+                    let t3 = nb_arith(out, &mut next, Opcode::Mul, dz, axis.2);
+                    let s1 = nb_arith(out, &mut next, Opcode::Add, t1, t2);
+                    let along = nb_arith(out, &mut next, Opcode::Add, s1, t3);
+                    let clamped = match (lo, hi) {
+                        (Some(l), Some(h)) => {
+                            let lt = next;
+                            next += 1;
+                            out.push(crate::physics_eir::instr(
+                                Opcode::Lt,
+                                lt,
+                                Some(crate::eir::ValueType::Bool),
+                                vec![along, h],
+                                None,
+                                None,
+                            ));
+                            let mn = next;
+                            next += 1;
+                            out.push(crate::physics_eir::instr(
+                                Opcode::Select,
+                                mn,
+                                Some(crate::eir::ValueType::F64),
+                                vec![lt, along, h],
+                                None,
+                                None,
+                            ));
+                            let gt = next;
+                            next += 1;
+                            out.push(crate::physics_eir::instr(
+                                Opcode::Gt,
+                                gt,
+                                Some(crate::eir::ValueType::Bool),
+                                vec![mn, l],
+                                None,
+                                None,
+                            ));
+                            let mx = next;
+                            next += 1;
+                            out.push(crate::physics_eir::instr(
+                                Opcode::Select,
+                                mx,
+                                Some(crate::eir::ValueType::F64),
+                                vec![gt, mn, l],
+                                None,
+                                None,
+                            ));
+                            mx
+                        }
+                        _ => along,
+                    };
+                    let px = nb_sub_mul(out, &mut next, dx, axis.0, clamped);
+                    let py = nb_sub_mul(out, &mut next, dy, axis.1, clamped);
+                    let pz = nb_sub_mul(out, &mut next, dz, axis.2, clamped);
+                    (
+                        nb_add_mul(out, &mut next, ax, px, wa),
+                        nb_add_mul(out, &mut next, ay, py, wa),
+                        nb_add_mul(out, &mut next, az, pz, wa),
+                        nb_sub_mul(out, &mut next, bx, px, wb),
+                        nb_sub_mul(out, &mut next, by, py, wb),
+                        nb_sub_mul(out, &mut next, bz, pz, wb),
+                    )
+                }
+            };
+            jt_write(out, self.a, transform_id(), field::POS_X, nax);
+            jt_write(out, self.a, transform_id(), field::POS_Y, nay);
+            jt_write(out, self.a, transform_id(), field::POS_Z, naz);
+            jt_write(out, self.b, transform_id(), field::POS_X, nbx);
+            jt_write(out, self.b, transform_id(), field::POS_Y, nby);
+            jt_write(out, self.b, transform_id(), field::POS_Z, nbz);
+        }
+        // Body ends in a terminator; the guard skips to a second Return.
+        ret(out);
+        let ret_idx = out.len();
+        ret(out);
+        if let Some(ins) = out.get_mut(gi) {
+            ins.operands = vec![skip, ret_idx as u32, (gi + 1) as u32];
+        }
+    }
+}
+
 pub struct SpawnSystem {
     pub on: u128,
     pub base: u128,
@@ -4195,6 +4541,27 @@ fn nb_un(
         None,
     ));
     r
+}
+
+fn nb_sub_mul(
+    out: &mut Vec<crate::eir::Instruction>,
+    next: &mut u32,
+    a: u32,
+    b: u32,
+    c: u32,
+) -> u32 {
+    let p = nb_arith(out, next, crate::eir::Opcode::Mul, b, c);
+    nb_arith(out, next, crate::eir::Opcode::Sub, a, p)
+}
+fn nb_add_mul(
+    out: &mut Vec<crate::eir::Instruction>,
+    next: &mut u32,
+    a: u32,
+    b: u32,
+    c: u32,
+) -> u32 {
+    let p = nb_arith(out, next, crate::eir::Opcode::Mul, b, c);
+    nb_arith(out, next, crate::eir::Opcode::Add, a, p)
 }
 
 fn nb_const(out: &mut Vec<crate::eir::Instruction>, next: &mut u32, v: f64) -> u32 {
@@ -5437,6 +5804,126 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     param_names: param_names.clone(),
                 }));
             }
+            // RFC-0039: pairwise constraint joints (position relaxation).
+            "joint" => {
+                let a_name = s.string_params.get("on").ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        "joint requires `on = <entity>`".to_string(),
+                    )
+                })?;
+                let b_name = s.string_params.get("other").ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        "joint requires `other = <entity>`".to_string(),
+                    )
+                })?;
+                let a0 = entity_ids
+                    .get(a_name)
+                    .copied()
+                    .ok_or(error(Status::Invalid, 62))?;
+                let b0 = entity_ids
+                    .get(b_name)
+                    .copied()
+                    .ok_or(error(Status::Invalid, 62))?;
+                // The joint lowers once, on whichever side runs systems (a static
+                // anchor is excluded from `dynamic`); the math is symmetric.
+                let (a, b) = if dynamic.contains(&a0) {
+                    (a0, b0)
+                } else if dynamic.contains(&b0) {
+                    (b0, a0)
+                } else {
+                    (a0, b0)
+                };
+                let ty = s
+                    .string_params
+                    .get("type")
+                    .map(|t| t.as_str())
+                    .unwrap_or("distance");
+                let kind = match ty {
+                    "distance" | "spring" => JointKind::Distance,
+                    "weld" | "fixed" | "hinge" | "revolute" | "ball" | "spherical" => {
+                        JointKind::Anchor
+                    }
+                    "prismatic" | "slider" => JointKind::Prismatic,
+                    "cone" | "twist" | "universal" | "gear" | "rack" | "pulley" => {
+                        return Err(error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            format!(
+                                "joint type '{ty}' enforces a rotational/ratio constraint; \
+the engine has no rotational state (RFC-0039)"
+                            ),
+                        ))
+                    }
+                    other => {
+                        return Err(error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            format!("unknown joint type '{other}'"),
+                        ))
+                    }
+                };
+                let rest = s.params.get("length").copied().unwrap_or(0.0);
+                let stiffness = s.params.get("stiffness").copied().unwrap_or(1.0);
+                let damping = match (ty, s.params.get("damping").copied()) {
+                    ("spring", None) => 0.5,
+                    (_, Some(d)) => d,
+                    _ => 0.0,
+                };
+                let axis_raw = s
+                    .vec_params
+                    .get("axis")
+                    .cloned()
+                    .unwrap_or_else(|| vec![0.0, 0.0, 1.0]);
+                let axis = normalize3(&axis_raw);
+                let anchor_raw = s
+                    .vec_params
+                    .get("anchor")
+                    .cloned()
+                    .unwrap_or_else(|| vec![0.0, 0.0, 0.0]);
+                let limit = s.vec_params.get("limit").cloned().map(|v| {
+                    (
+                        v.first().copied().unwrap_or(0.0),
+                        v.get(1).copied().unwrap_or(0.0),
+                    )
+                });
+                let iterations = match s.params.get("iterations").copied() {
+                    Some(v) if (1.0..=64.0).contains(&v) && v.fract() == 0.0 => v as u32,
+                    Some(_) => {
+                        return Err(error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            "joint `iterations` must be an integer in 1..=64".to_string(),
+                        ))
+                    }
+                    None => 4,
+                };
+                out.push(Box::new(JointSystem {
+                    a,
+                    b,
+                    kind,
+                    rest,
+                    stiffness,
+                    damping,
+                    axis,
+                    anchor_a: (
+                        anchor_raw.first().copied().unwrap_or(0.0),
+                        anchor_raw.get(1).copied().unwrap_or(0.0),
+                        anchor_raw.get(2).copied().unwrap_or(0.0),
+                    ),
+                    anchor_b: (0.0, 0.0, 0.0),
+                    limit,
+                    iterations,
+                }));
+            }
             _ => return Err(error(Status::Invalid, 49)),
         }
     }
@@ -5464,6 +5951,21 @@ fn resolve_on(
         return Some(set);
     }
     None
+}
+
+/// Normalize a 3-vector (RFC-0039 axes); a zero vector falls back to +z.
+fn normalize3(v: &[f64]) -> (f64, f64, f64) {
+    let (x, y, z) = (
+        v.first().copied().unwrap_or(0.0),
+        v.get(1).copied().unwrap_or(0.0),
+        v.get(2).copied().unwrap_or(0.0),
+    );
+    let len = (x * x + y * y + z * z).sqrt();
+    if len < 1e-12 {
+        (0.0, 0.0, 1.0)
+    } else {
+        (x / len, y / len, z / len)
+    }
 }
 
 fn dynamic_entity_ids(model: &WorldModel) -> Vec<u128> {
@@ -8471,6 +8973,54 @@ mod tests {
         assert_eq!(count_active(&rt), 1);
         rt.step_cross().unwrap(); // step 1 -> emit
         assert_eq!(count_active(&rt), 1 + 1);
+    }
+
+    /// RFC-0039: distance joints converge to the rest length, prismatic joints
+    /// pull a body onto the axis, and rotational joints are rejected clearly.
+    #[test]
+    fn joint_family_behaves() {
+        let pos = |rt: &LangRuntime, id: u128| {
+            rt.scene
+                .get(EntityId(id))
+                .unwrap()
+                .transform
+                .unwrap()
+                .position
+        };
+        // distance: bodies 2 apart converge to rest length 1.
+        let d = "world { gravity=(0,0,0) \
+                 entity a { position=(0,0,0) mass=1.0 dynamic=true } \
+                 entity b { position=(2,0,0) mass=1.0 dynamic=true } } \
+                 systems { joint { on = a; other = b; type = distance; length = 1.0; iterations = 8 } }";
+        let mut rt = LangRuntime::compile(d).unwrap();
+        rt.step_cross_n(20).unwrap();
+        let (pa, pb) = (pos(&rt, 1), pos(&rt, 2));
+        let dist = ((pb.x - pa.x).powi(2) + (pb.y - pa.y).powi(2) + (pb.z - pa.z).powi(2)).sqrt();
+        assert!((dist - 1.0).abs() < 1e-3, "distance {dist}");
+        // the correction is symmetric for equal masses.
+        assert!(
+            (pa.x + pb.x - 2.0).abs() < 1e-6,
+            "centre preserved: {} {}",
+            pa.x,
+            pb.x
+        );
+
+        // prismatic along +x removes the perpendicular offset.
+        let p = "world { gravity=(0,0,0) \
+                 entity a { position=(0,0,0) mass=1.0 dynamic=false } \
+                 entity b { position=(1,2,3) mass=1.0 dynamic=true } } \
+                 systems { joint { on = a; other = b; type = prismatic; axis = (1,0,0); iterations = 8 } }";
+        let mut rt = LangRuntime::compile(p).unwrap();
+        rt.step_cross_n(10).unwrap();
+        let pb = pos(&rt, 2);
+        assert!(pb.y.abs() < 1e-3 && pb.z.abs() < 1e-3, "on axis: {pb:?}");
+        assert!((pb.x - 1.0).abs() < 1e-6, "x free: {}", pb.x);
+
+        // rotational joints are rejected.
+        let bad = "world { gravity=(0,0,0) entity a { position=(0,0,0) mass=1 } \
+                   entity b { position=(1,0,0) mass=1 } } \
+                   systems { joint { on = a; other = b; type = cone } }";
+        assert!(LangRuntime::compile(bad).is_err(), "cone must be rejected");
     }
 
     #[test]
