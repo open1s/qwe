@@ -32,6 +32,8 @@ pub struct Entity {
     pub state: Option<crate::components::State>,
     /// Presentation color as `0xRRGGBB` (visualization only; not physics).
     pub color: Option<u32>,
+    /// Presentation-only render overrides (shape/size/opacity/glow/label).
+    pub render: Option<crate::components::RenderStyle>,
 }
 
 impl Entity {

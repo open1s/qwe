@@ -64,9 +64,17 @@ hull_field = { "hull" ~ "=" ~ hull_list ~ ";"? }
 camera_field = { "camera" ~ "=" ~ boolean ~ ";"? }
 color_field = { "color" ~ "=" ~ color ~ ";"? }
 color = @{ "0x" ~ ASCII_HEX_DIGIT+ }
+// Presentation-only render hints (they do not affect simulation state).
+shape_field = { "shape" ~ "=" ~ shape_kind ~ ";"? }
+shape_kind = @{ "point" | "sphere" | "box" }
+size_field = { "size" ~ "=" ~ (vec3 | value) ~ ";"? }
+opacity_field = { "opacity" ~ "=" ~ value ~ ";"? }
+glow_field = { "glow" ~ "=" ~ value ~ ";"? }
+label_field = { "label" ~ "=" ~ boolean ~ ";"? }
 entity_field = _{ position_field | velocity_field | state_field | mass_field | dynamic_field
                  | nbody_field | parent_field | restitution_field | friction_field | box_field
-                 | sphere_field | hull_field | camera_field | color_field }
+                 | sphere_field | hull_field | camera_field | color_field
+                 | shape_field | size_field | opacity_field | glow_field | label_field }
 
 hull_list = { "[" ~ vec3 ~ ("," ~ vec3)* ~ "]" }
 vec3 = { "(" ~ value ~ "," ~ value ~ "," ~ value ~ ")" }

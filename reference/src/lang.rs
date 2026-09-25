@@ -1341,6 +1341,43 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                             .map_err(|_| error(Status::Invalid, 64))?;
                                         decl.color = Some(v);
                                     }
+                                    // Presentation-only render hints.
+                                    Rule::shape_field => {
+                                        let kind = field.into_inner().next().unwrap().as_str();
+                                        let code = match kind {
+                                            "sphere" => 1,
+                                            "box" => 2,
+                                            _ => 0,
+                                        };
+                                        decl.render.get_or_insert_with(Default::default).shape =
+                                            Some(code);
+                                    }
+                                    Rule::size_field => {
+                                        let inner = field.into_inner().next().unwrap();
+                                        let r = decl.render.get_or_insert_with(Default::default);
+                                        if inner.as_rule() == Rule::vec3 {
+                                            let d = parse_vec3(inner);
+                                            r.size3 = Some((d.x, d.y, d.z));
+                                        } else {
+                                            r.size = Some(parse_value(inner));
+                                        }
+                                    }
+                                    Rule::opacity_field => {
+                                        let v = parse_value(field.into_inner().next().unwrap());
+                                        decl.render.get_or_insert_with(Default::default).opacity =
+                                            Some(v);
+                                    }
+                                    Rule::glow_field => {
+                                        let v = parse_value(field.into_inner().next().unwrap());
+                                        decl.render.get_or_insert_with(Default::default).glow =
+                                            Some(v);
+                                    }
+                                    Rule::label_field => {
+                                        let v =
+                                            field.into_inner().next().unwrap().as_str() == "true";
+                                        decl.render.get_or_insert_with(Default::default).label =
+                                            Some(v);
+                                    }
                                     _ => {}
                                 }
                             }
@@ -8017,7 +8054,24 @@ mod tests {
         );
     }
 
-    /// A bare name that resolves to no local/slot/param reads 0.0 (the
+    /// Per-entity render attributes (`shape`/`size`/`opacity`/`glow`/`label`)
+    /// parse into the entity's render style (presentation only).
+    #[test]
+    fn entity_render_attributes_parse() {
+        let src = "world { gravity=(0,0,0) entity a { state=(x=0.0) shape=sphere; size=1.5; \
+                   color=0xFF6B4A; glow=1.2; opacity=0.6; label=false } }";
+        let model = parse(src).unwrap().model;
+        let e = &model.entities[0];
+        let r = e.render.as_ref().expect("render style");
+        assert_eq!(r.shape, Some(1));
+        assert_eq!(r.size, Some(1.5));
+        assert_eq!(r.glow, Some(1.2));
+        assert_eq!(r.opacity, Some(0.6));
+        assert_eq!(r.label, Some(false));
+        assert_eq!(e.color, Some(0xFF6B4A));
+    }
+
+    /// A named state slot that merely starts with `s` (e.g. `speed`) is not a
     /// numeric `sN` token and must still resolve to its slot.
     #[test]
     fn named_slots_starting_with_s_resolve() {

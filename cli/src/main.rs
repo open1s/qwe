@@ -531,7 +531,9 @@ fn auto_frame_camera(rt: &LangRuntime) -> CameraVisual {
         (lo.y + hi.y) / 2.0,
         (lo.z + hi.z) / 2.0,
     );
-    let extent = (hi - lo).length().max(1.0);
+    // At t=0 a rule-driven scene (robot/humanoid) may not have assembled yet,
+    // so keep a sensible floor so the camera is never inside the model.
+    let extent = (hi - lo).length().max(3.0);
     CameraVisual {
         position: center + Vec3::new(extent * 1.25, extent * 0.95, extent * 1.25),
         target: center,

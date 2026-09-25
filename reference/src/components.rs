@@ -712,3 +712,22 @@ mod tests {
         assert_eq!(decoded, hull);
     }
 }
+
+/// Presentation-only style overrides for how an entity is drawn by the viewer.
+/// Set from the language's per-entity render attributes (`shape`, `size`,
+/// `opacity`, `glow`, `label`); it never affects simulation semantics.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RenderStyle {
+    /// `0` = point marker, `1` = sphere, `2` = box (overrides the collider).
+    pub shape: Option<u8>,
+    /// Marker size / sphere radius / box edge length (world units).
+    pub size: Option<f64>,
+    /// Per-axis box dimensions (`size = (dx, dy, dz)`), for long thin links.
+    pub size3: Option<(f64, f64, f64)>,
+    /// Material opacity in `[0, 1]`.
+    pub opacity: Option<f64>,
+    /// Emissive glow intensity (0 = matte, >0 = self-lit).
+    pub glow: Option<f64>,
+    /// Whether to draw the floating name label (default `true`).
+    pub label: Option<bool>,
+}

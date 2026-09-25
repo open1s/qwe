@@ -48,6 +48,8 @@ pub struct EntityDecl {
     /// with `state` by index; `None` marks an unannotated slot. Compile-time
     /// only (gradual dimensional analysis).
     pub state_units: Option<Vec<Option<crate::units::Dim>>>,
+    /// Presentation-only render overrides (`shape`/`size`/`opacity`/`glow`/`label`).
+    pub render: Option<crate::components::RenderStyle>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -75,6 +77,7 @@ impl EntityDecl {
             nbody: None,
             parent: None,
             state_units: None,
+            render: None,
         }
     }
 }
@@ -189,6 +192,9 @@ impl WorldModel {
             }
             if let Some(values) = &decl.state {
                 e.state = Some(crate::components::State::new(values.clone()));
+            }
+            if decl.render.is_some() {
+                e.render = decl.render.clone();
             }
             if let Some(c) = decl.color {
                 e.color = Some(c);

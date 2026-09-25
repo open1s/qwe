@@ -42,6 +42,12 @@ pub struct EntityVisual {
     pub color: u32,
     /// Visual size for state-only bodies (derived from mass).
     pub size: f64,
+    /// Material opacity in `[0, 1]` (language `opacity` attribute; default 1).
+    pub opacity: f64,
+    /// Emissive glow intensity (language `glow` attribute; default 0.8).
+    pub glow: f64,
+    /// Whether to draw the floating name label (language `label`; default true).
+    pub label: bool,
 }
 
 impl EntityVisual {
@@ -190,7 +196,7 @@ pub fn snapshot_with(
                 }
             }
         };
-        entities.push(EntityVisual {
+        let mut vis = EntityVisual {
             id: id.0,
             name: names
                 .get(&id.0)
@@ -202,7 +208,44 @@ pub fn snapshot_with(
             state: state.clone(),
             color: e.color.unwrap_or_else(|| EntityVisual::color_for(id.0)),
             size: visual_size(&state),
-        });
+            opacity: 1.0,
+            glow: 0.8,
+            label: true,
+        };
+        // Presentation-only overrides declared in the language.
+        if let Some(r) = &e.render {
+            if let Some(code) = r.shape {
+                vis.shape = match code {
+                    1 => Shape::Sphere {
+                        radius: r.size.unwrap_or(0.3),
+                    },
+                    2 => {
+                        let dims = match r.size3 {
+                            Some((x, y, z)) => Vec3::new(x, y, z),
+                            None => {
+                                let e = r.size.unwrap_or(0.5);
+                                Vec3::new(e, e, e)
+                            }
+                        };
+                        Shape::Box { dims }
+                    }
+                    _ => Shape::Point,
+                };
+            }
+            if let Some(sz) = r.size {
+                vis.size = sz.max(0.01);
+            }
+            if let Some(o) = r.opacity {
+                vis.opacity = o.clamp(0.0, 1.0);
+            }
+            if let Some(g) = r.glow {
+                vis.glow = g.max(0.0);
+            }
+            if let Some(l) = r.label {
+                vis.label = l;
+            }
+        }
+        entities.push(vis);
     }
     entities.sort_by_key(|e| e.id);
     channel_list.sort_by_key(|c| c.id);
@@ -280,12 +323,15 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
             out.push(',');
         }
         out.push_str(&format!(
-            "{{\"id\":{},\"name\":\"{}\",\"pos\":{},\"rot\":{},\"color\":{},\"kind\":",
+            "{{\"id\":{},\"name\":\"{}\",\"pos\":{},\"rot\":{},\"color\":{},\"opacity\":{},\"glow\":{},\"label\":{},\"kind\":",
             e.id,
             e.name.replace('\\', "\\\\").replace('"', "\\\""),
             vec3_json(e.position),
             quat_json(e.rotation),
-            e.color_value()
+            e.color_value(),
+            fmt_f64(e.opacity),
+            fmt_f64(e.glow),
+            e.label
         ));
         match &e.shape {
             Shape::Box { dims } => {
@@ -417,6 +463,7 @@ input[type=range]{{flex:1}}label{{color:#89b4fa}}
   <label>t=<span id="time">0</span></label>
   <input type="range" id="slider" min="0" value="0">
   <label>frame <span id="frame">0</span>/<span id="maxf">0</span></label>
+  <button id="lbl" title="show / hide all labels">🏷 Labels</button>
 </div>
 <script type="importmap">{{
   "imports": {{
@@ -450,6 +497,8 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping=true; controls.dampingFactor=0.08; controls.autoRotate=true; controls.autoRotateSpeed=1.2;
 controls.minDistance=0.5; controls.maxDistance=500; controls.screenSpacePanning=true; controls.maxPolarAngle=Math.PI;
 let cameraSet=false;
+let labelsOn=true;
+document.getElementById('lbl').onclick=()=>{{ labelsOn=!labelsOn; const b=document.getElementById('lbl'); b.style.opacity=labelsOn?'1':'0.45'; if(FRAMES.length) applyFrame(FRAMES[idx]); }};
 let userMoved=false; controls.addEventListener('start',()=>{{userMoved=true;controls.autoRotate=false;}});
 renderer.domElement.addEventListener('pointerdown',()=>{{controls.autoRotate=false;userMoved=true;}});
 (function(){{
@@ -470,8 +519,8 @@ renderer.domElement.addEventListener('pointerdown',(ev)=>{{
 }});
 const panel = document.getElementById('panel');
 const meshes = new Map();
-function makeMesh(kind, dims, radius, points, color, size) {{
-  const mat = new THREE.MeshStandardMaterial({{color: color,emissive:new THREE.Color(color),emissiveIntensity:0.8,metalness:0.0,roughness:0.5}});
+function makeMesh(kind, dims, radius, points, color, size, opacity, glow) {{
+  const mat = new THREE.MeshStandardMaterial({{color: color,emissive:new THREE.Color(color),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity}});
   if (kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(dims[0],dims[1],dims[2]), mat);
   if (kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(radius,20,16), mat);
   if (kind==='hull' && points) {{
@@ -630,13 +679,13 @@ function applyFrame(f) {{
   for (const e of f.entities) {{ const r=Math.hypot(e.pos[0],e.pos[1]); if(!sun||r<sun.r) sun={{r:r,x:e.pos[0],y:e.pos[1],z:e.pos[2]}}; }}
   if (sun) sunLight.position.set(sun.x,sun.y,sun.z);
   for (const e of f.entities) {{
-    const m = makeMesh(e.kind, e.dims, e.radius, e.points, e.color, e.size || 0.25);
+    const m = makeMesh(e.kind, e.dims, e.radius, e.points, e.color, e.size || 0.25, e.opacity==null?1:e.opacity, e.glow==null?0.8:e.glow);
     m.position.set(e.pos[0],e.pos[1],e.pos[2]);
     m.quaternion.set(e.rot[0],e.rot[1],e.rot[2],e.rot[3]);
-    if (e.name==='sun'||(sun&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6)) {{ m.material.emissive=new THREE.Color(e.color); m.material.emissiveIntensity=1.2; }}
+    if (e.name==='sun'||(sun&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6)) {{ m.material.emissive=new THREE.Color(e.color); if (e.glow==null) m.material.emissiveIntensity=1.2; }}
     m.userData=e; scene.add(m); meshes.set(e.id, m);
-    if (e.name) {{ const el=document.createElement('div'); el.className='lbl'; el.textContent=e.name; const l=new CSS2DObject(el); l.position.set(e.pos[0],e.pos[1]+(e.size||0.3),e.pos[2]); scene.add(l); decals.push(l); }}
-    if (!isMol && sun) addOrbit(sun, Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y), e.color);
+    if (e.name && e.label!==false && labelsOn) {{ const el=document.createElement('div'); el.className='lbl'; el.textContent=e.name; const l=new CSS2DObject(el); l.position.set(e.pos[0],e.pos[1]+(e.size||0.3),e.pos[2]); scene.add(l); decals.push(l); }}
+    if (!isMol && sun && e.state && e.state.length>=5 && Math.hypot(e.state[3],e.state[4],e.state[5])>1e-6) addOrbit(sun, Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y), e.color);
     if (!isMol && e.state && e.state.length>=5) addVel(e.pos[0],e.pos[1],e.pos[2],e.state[3],e.state[4],e.state[5],e.color);
     if (e.state && e.state.length) html += (e.name||('#'+e.id))+' r='+Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y).toFixed(2)+'<br>';
   }}
@@ -811,6 +860,7 @@ fn live_viewer_html() -> String {
 <div id="conn">connecting…</div>
 <button id="rst" style="position:fixed;right:8px;bottom:8px;z-index:11;background:#3a4a6b;border:none;color:#fff;padding:6px 12px;cursor:pointer;border-radius:4px;font-family:monospace">⟳ Restart</button>
 <button id="pse" style="position:fixed;right:110px;bottom:8px;z-index:11;background:#3a4a6b;border:none;color:#fff;padding:6px 12px;cursor:pointer;border-radius:4px;font-family:monospace">⏸ Pause</button>
+<button id="lbl" style="position:fixed;right:210px;bottom:8px;z-index:11;background:#3a4a6b;border:none;color:#fff;padding:6px 12px;cursor:pointer;border-radius:4px;font-family:monospace">🏷 Labels</button>
 <script type="importmap">{"imports":{
   "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
   "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
@@ -833,6 +883,7 @@ const controls=new OrbitControls(camera,renderer.domElement);
 controls.enableDamping=true; controls.dampingFactor=0.08; controls.autoRotate=true; controls.autoRotateSpeed=1.4;
 controls.minDistance=0.5; controls.maxDistance=250; controls.screenSpacePanning=true; controls.maxPolarAngle=Math.PI;
 let cameraInit=false;
+let labelsOn=true;
 let userMoved=false; controls.addEventListener('start',()=>{userMoved=true;controls.autoRotate=false;});
 renderer.domElement.addEventListener('pointerdown',()=>{controls.autoRotate=false;userMoved=true;});
 // Starfield background.
@@ -850,8 +901,8 @@ renderer.domElement.addEventListener('pointerdown',(ev)=>{
 });
 const panel=document.getElementById('panel'), procEl=document.getElementById('proc'), conn=document.getElementById('conn');
 const meshes=new Map();
-function make(kind,dims,radius,points,color,size){
-  const mat=new THREE.MeshStandardMaterial({color:color});
+function make(kind,dims,radius,points,color,size,opacity,glow){
+  const mat=new THREE.MeshStandardMaterial({color:color,emissive:new THREE.Color(color),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity});
   if(kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(dims[0],dims[1],dims[2]),mat);
   if(kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(radius,20,16),mat);
   if(kind==='hull'&&points){const v=points.map(p=>new THREE.Vector3(p[0],p[1],p[2]));let g;try{g=new ConvexGeometry(v);}catch(e){g=new THREE.SphereGeometry(0.1,8,6);}return new THREE.Mesh(g,mat);}
@@ -992,15 +1043,15 @@ function apply(f){
   for(const e of f.frame.entities){const r=Math.hypot(e.pos[0],e.pos[1]);if(!sun.r||r<sun.r){sun.r=r;sun.x=e.pos[0];sun.y=e.pos[1];sun.z=e.pos[2];}}
   sunLight.position.set(sun.x,sun.y,sun.z);
   for(const e of f.frame.entities){
-    const m=make(e.kind,e.dims,e.radius,e.points,e.color,e.size||0.25);
+    const m=make(e.kind,e.dims,e.radius,e.points,e.color,e.size||0.25,e.opacity==null?1:e.opacity,e.glow==null?0.8:e.glow);
     m.position.set(e.pos[0],e.pos[1],e.pos[2]);m.quaternion.set(e.rot[0],e.rot[1],e.rot[2],e.rot[3]);
-    if(e.name==='sun'||(sun.r&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6)){m.material.emissive=new THREE.Color(e.color);m.material.emissiveIntensity=0.6;}
+    if(e.name==='sun'||(sun.r&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6)){m.material.emissive=new THREE.Color(e.color);if(e.glow==null)m.material.emissiveIntensity=0.6;}
     m.userData=e; scene.add(m);meshes.set(e.id,m);
     // Name label.
-    const el=document.createElement('div'); el.className='lbl'; el.textContent=e.name||('#'+e.id);
-    const l=new CSS2DObject(el); l.position.set(e.pos[0],e.pos[1]+(e.size||0.3),e.pos[2]); scene.add(l); decals.push(l);
+    if(e.label!==false && labelsOn){ const el=document.createElement('div'); el.className='lbl'; el.textContent=e.name||('#'+e.id);
+    const l=new CSS2DObject(el); l.position.set(e.pos[0],e.pos[1]+(e.size||0.3),e.pos[2]); scene.add(l); decals.push(l); }
     // For a molecule (bonds present) skip orbit rings; atoms don't orbit.
-    if(!isMol){ if(sun.r){const r=Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y);addOrbit(sun,r,e.color);} }
+    if(!isMol && e.state && e.state.length>=5 && Math.hypot(e.state[3],e.state[4],e.state[5])>1e-6){ if(sun.r){const r=Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y);addOrbit(sun,r,e.color);} }
     // Velocity vector (skip for static molecule atoms).
     if(!isMol && e.state&&e.state.length>=5){addVel(e.pos[0],e.pos[1],e.pos[2],e.state[3],e.state[4],e.state[5],e.color);}
     html+='<span style="color:#'+e.color.toString(16).padStart(6,'0')+'">■</span> '+(e.name||('#'+e.id))+' r='+Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y).toFixed(2)+'<br>';
@@ -1057,6 +1108,7 @@ document.getElementById('rst').onclick=()=>{fetch('/reset').catch(()=>{});};
 let paused=false;
 document.getElementById('pse').onclick=()=>{paused=!paused;fetch('/pause?on='+(paused?1:0)).then(r=>r.text()).then(()=>{document.getElementById('pse').textContent=(paused?'▶ Resume':'⏸ Pause');}).catch(()=>{});};
 document.getElementById('rst').addEventListener('click',()=>{paused=true;document.getElementById('pse').textContent='▶ Resume';});
+document.getElementById('lbl').onclick=()=>{labelsOn=!labelsOn;document.getElementById('lbl').style.opacity=labelsOn?'1':'0.45';};
 poll();
 renderer.setAnimationLoop(()=>{controls.update();renderer.render(scene,camera);labelRenderer.render(scene,camera);});
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);labelRenderer.setSize(innerWidth,innerHeight);});
@@ -1119,6 +1171,32 @@ mod tests {
         let html = template(&format!("[{json}]"));
         assert!(html.contains("renderFields"));
         assert!(html.contains("MarchingCubes"));
+    }
+
+    #[test]
+    fn entity_render_overrides_apply() {
+        let mut scene = Scene::new(Vec3::ZERO);
+        let mut e = Entity::dynamic();
+        e.state = Some(crate::components::State::new(vec![0.0]));
+        e.render = Some(crate::components::RenderStyle {
+            shape: Some(1),
+            size: Some(2.0),
+            size3: None,
+            opacity: Some(0.4),
+            glow: Some(1.5),
+            label: Some(false),
+        });
+        scene.insert(EntityId(1), e);
+        let frame = snapshot(&scene, None);
+        let v = &frame.entities[0];
+        assert!(matches!(v.shape, Shape::Sphere { radius } if (radius - 2.0).abs() < 1e-9));
+        assert!((v.opacity - 0.4).abs() < 1e-9);
+        assert!((v.glow - 1.5).abs() < 1e-9);
+        assert!(!v.label);
+        let json = frame_to_json(&frame);
+        assert!(json.contains("\"opacity\":0.4"), "{json}");
+        assert!(json.contains("\"glow\":1.5"));
+        assert!(json.contains("\"label\":false"));
     }
 
     #[test]

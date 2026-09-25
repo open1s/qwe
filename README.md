@@ -89,6 +89,10 @@ pwe compile cli/examples/acoustics.pwe -o acoustics.pweb && pwe run acoustics.pw
   # 2-D sound: a driven monopole radiates; probes ride the field (std/acoustics dB)
 pwe compile cli/examples/wave3d.pwe -o wave3d.pweb && pwe present wave3d.pweb --port 8000
   # 3D wave: a pulse radiates through a cube, rendered as a glowing scalar volume
+pwe compile cli/examples/robot.pwe -o robot.pweb && pwe present robot.pweb --port 8000
+  # a 2-link robot arm (thin-box links, sphere joints) driven by std/robotics FK
+pwe compile cli/examples/humanoid.pwe -o humanoid.pweb && pwe present humanoid.pweb --port 8000
+  # a person-like figure walking (eyes, fingers), drawn from entity render attributes
 
 # `present` shows a top-right legend (color, name, r from the central body) and
 # a top-left run-info panel (per-body radii, satellite distances, step + title).
@@ -104,7 +108,8 @@ dimensional analysis** (opt-in `[m/s^2]` unit annotations checked against rules)
 and a growing **standard library** (`std/`: `math`, `particles`, `forces`,
 `mechanics`, `chemistry` (1–118 periodic table), `thermal`, `acoustics`,
 `optics`, `em`, `robotics`, `units`, `control` — pure-function modules keyed by
-namespaced physical constants).
+namespaced physical constants). Entities describe **how they render** (`shape`,
+`size`, `color`, `opacity`, `glow`, `label`) — e.g. a robot arm or a humanoid.
 
 A `.pweb` artifact is a self-describing container (magic + version) holding the
 verified canonical (RFC-0021) EIR module plus the world-model source the runtime

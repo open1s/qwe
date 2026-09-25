@@ -1,0 +1,70 @@
+# robot.pwe — a simulated 2-link planar robot arm, expressed in PWE and rendered
+# by the viewer. The arm's joint angles are driven by a slow sine; each link's
+# centre position and orientation are computed from the forward kinematics in
+# std/robotics. Links are drawn as thin boxes (`shape = box; size = (L, w, w)`),
+# joints as glowing spheres, and the tool at the end effector as a red glow.
+import "../../std/robotics"
+
+world {
+  gravity = (0, 0, 0)
+  params { L1 = 2.0; L2 = 1.6 }
+
+  # frame / base
+  entity base { state = (x = 0.0, y = 0.0, z = 0.0)
+    shape = box; size = (0.5, 0.5, 0.5); color = 0x556070 }
+  entity shoulder { state = (x = 0.0, y = 0.0, z = 0.0)
+    shape = sphere; size = 0.30; color = 0xFFC24A; glow = 1.4 }
+
+  # upper arm: 8 slots so the Z spin angle sits at state[7]
+  entity link1 {
+    state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
+    shape = box; size = (2.0, 0.30, 0.30); color = 0x4AC3FF
+  }
+  entity elbow { state = (x = 0.0, y = 0.0, z = 0.0)
+    shape = sphere; size = 0.26; color = 0xFFC24A; glow = 1.4 }
+
+  # forearm
+  entity link2 {
+    state = (x = 0.0, y = 0.0, z = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0, ang = 0.0)
+    shape = box; size = (1.6, 0.26, 0.26); color = 0x66E0A3
+  }
+  entity tool { state = (x = 0.0, y = 0.0, z = 0.0)
+    shape = sphere; size = 0.18; color = 0xFF6B4A; glow = 1.8 }
+}
+
+systems {
+  # upper arm: centre at L1/2 along q1, oriented by q1
+  update { on = link1; dt = 1.0
+    let q1 = 1.1 * sin(6.283185307179586 * t / 40.0)
+    x = (0.5 * L1 * cos(q1) - x) + 0.0
+    y = (0.5 * L1 * sin(q1) - y) + 0.0
+    z = (0.0 - z) + 0.0
+    ang = (q1 - ang) + 0.0
+  }
+  # elbow at the end of the upper arm
+  update { on = elbow; dt = 1.0
+    let q1 = 1.1 * sin(6.283185307179586 * t / 40.0)
+    x = (L1 * cos(q1) - x) + 0.0
+    y = (L1 * sin(q1) - y) + 0.0
+    z = (0.0 - z) + 0.0
+  }
+  # forearm: centre between the elbow and the forward-kinematics tip
+  update { on = link2; dt = 1.0
+    let q1 = 1.1 * sin(6.283185307179586 * t / 40.0)
+    let q2 = 0.9 * sin(6.283185307179586 * t / 40.0 + 1.5)
+    let tipx = robotics.planar2_x(L1, L2, q1, q2)
+    let tipy = robotics.planar2_y(L1, L2, q1, q2)
+    x = (0.5 * (L1 * cos(q1) + tipx) - x) + 0.0
+    y = (0.5 * (L1 * sin(q1) + tipy) - y) + 0.0
+    z = (0.0 - z) + 0.0
+    ang = ((q1 + q2) - ang) + 0.0
+  }
+  # tool at the end effector (forward kinematics)
+  update { on = tool; dt = 1.0
+    let q1 = 1.1 * sin(6.283185307179586 * t / 40.0)
+    let q2 = 0.9 * sin(6.283185307179586 * t / 40.0 + 1.5)
+    x = (robotics.planar2_x(L1, L2, q1, q2) - x) + 0.0
+    y = (robotics.planar2_y(L1, L2, q1, q2) - y) + 0.0
+    z = (0.0 - z) + 0.0
+  }
+}

@@ -74,8 +74,15 @@ Comments: `#` or `//` to end of line. Whitespace is insignificant.
 | `hull = [(x,y,z), …]` | Convex-hull collider; needs ≥ 4 points. |
 | `camera = true` | Marks the entity as the viewer camera (excluded from simulation). |
 | `color = 0xRRGGBB` | Presentation color for the 3D viewer. |
+| `shape = point \| sphere \| box` | Presentation shape (overrides the collider-derived one). |
+| `size = v \| (dx, dy, dz)` | Presentation size: marker diameter / sphere radius / box edge, or per-axis box dimensions (long thin links). |
+| `opacity = v` | Presentation opacity in `[0, 1]`. |
+| `glow = v` | Presentation emissive glow intensity (0 = matte, >0 = self-lit). |
+| `label = false` | Hide the floating name label (default `true`); the viewer's 🏷 button hides/shows all labels. |
 
-Entity ids are 1-based in declaration order; channels follow the bodies.
+Entity ids are 1-based in declaration order; channels follow the bodies. The
+`color`/`shape`/`size`/`opacity`/`glow`/`label` attributes are **presentation
+only** — they never affect simulation state, determinism, or the state hash.
 
 ## Systems
 
