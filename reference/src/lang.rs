@@ -3598,64 +3598,22 @@ impl EirSystem for DiffuseSystem {
             ret(out);
             return;
         }
-        let (w, h, d) = (self.width, self.height, self.depth);
-        let target =
-            crate::physics_eir::cr(0, crate::physics_eir::field_component_id(&self.field), w);
+        // RFC-0037: one bulk opcode runs the whole grid sweep natively.
+        let target = crate::physics_eir::cr(
+            0,
+            crate::physics_eir::field_component_id(&self.field),
+            self.width,
+        );
         let mut next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
         let rate = const_reg(self.rate, &mut next, out);
-        // Pass 1 (Jacobi): read every cell's value and laplacian from the same
-        // snapshot, so the sweep is exactly conservative (matching
-        // `Field::diffusion_step`).
-        let cells = w as usize * h as usize * d as usize;
-        let mut cur_regs: Vec<u32> = Vec::with_capacity(cells);
-        let mut lap_regs: Vec<u32> = Vec::with_capacity(cells);
-        let mut ij_regs: Vec<(u32, u32)> = Vec::with_capacity(cells);
-        for k in 0..cells {
-            let i = (k % w as usize) as f64;
-            // Pack `(j, k)` as `j + k·height` — the linear index the
-            // field opcodes fold back into a 3D `[k][j][i]` cell.
-            let j = (((k / w as usize) % h as usize) + (k / (w as usize * h as usize)) * h as usize)
-                as f64;
-            let i_reg = const_reg(i, &mut next, out);
-            let j_reg = const_reg(j, &mut next, out);
-            let cur = next;
-            next += 1;
-            out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::ReadFieldCell,
-                cur,
-                Some(crate::eir::ValueType::F64),
-                vec![i_reg, j_reg],
-                None,
-                Some(target),
-            ));
-            let lap = next;
-            next += 1;
-            out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::FieldLaplacian,
-                lap,
-                Some(crate::eir::ValueType::F64),
-                vec![i_reg, j_reg],
-                None,
-                Some(target),
-            ));
-            cur_regs.push(cur);
-            lap_regs.push(lap);
-            ij_regs.push((i_reg, j_reg));
-        }
-        // Pass 2: apply `T += rate·∇²T` to every cell.
-        for k in 0..cells {
-            let (i_reg, j_reg) = ij_regs[k];
-            let delta = binary(crate::eir::Opcode::Mul, rate, lap_regs[k], &mut next, out);
-            let new = binary(crate::eir::Opcode::Add, cur_regs[k], delta, &mut next, out);
-            out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::WriteFieldCell,
-                0,
-                None,
-                vec![i_reg, j_reg, new],
-                None,
-                Some(target),
-            ));
-        }
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::FieldDiffuse,
+            0,
+            None,
+            vec![rate],
+            None,
+            Some(target),
+        ));
         ret(out);
     }
 }
@@ -3695,90 +3653,33 @@ impl EirSystem for PoissonSystem {
             ret(out);
             return;
         }
-        let (w, h, d, dx) = (self.width, self.height, self.depth, self.dx);
-        let target =
-            crate::physics_eir::cr(0, crate::physics_eir::field_component_id(&self.field), w);
-        let src_target = self
+        // RFC-0037: `iters` Gauss-Seidel sweeps run natively in one opcode; the
+        // runtime derives `div` and `dx^2 * scale` from the field and `scale`.
+        let target = crate::physics_eir::cr(
+            0,
+            crate::physics_eir::field_component_id(&self.field),
+            self.width,
+        );
+        let mut next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+        let limbs = self
             .source
             .as_ref()
-            .map(|s| crate::physics_eir::cr(0, crate::physics_eir::field_component_id(s), w));
-        let mut next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
-        // ∇² is 6-point in 3D, 4-point in a 2D slice.
-        let div = const_reg(if d > 1 { 6.0 } else { 4.0 }, &mut next, out);
-        let dx2 = const_reg(dx * dx * self.scale, &mut next, out);
-        let hh = h as i32;
-        // Neighbour offsets in the packed `(i, j + k·height)` index space.
-        let mut offsets: Vec<(i32, i32)> = vec![(-1, 0), (1, 0), (0, -1), (0, 1)];
-        if d > 1 {
-            offsets.push((0, -hh));
-            offsets.push((0, hh));
+            .map(|src| crate::eir::component_limbs(crate::physics_eir::field_component_id(src)))
+            .unwrap_or([0u32; 4]);
+        let mut operands = Vec::with_capacity(6);
+        for limb in limbs {
+            operands.push(const_u64_reg(limb as u64, &mut next, out));
         }
-        // Interior cells relax; boundary cells are held (fixed potentials).
-        let k_range: Vec<usize> = if d > 1 {
-            (1..(d as usize).saturating_sub(1)).collect()
-        } else {
-            vec![0]
-        };
-        for _ in 0..self.iters {
-            for &k in &k_range {
-                for j in 1..(h as usize).saturating_sub(1) {
-                    for i in 1..(w as usize).saturating_sub(1) {
-                        let jp = j as i32 + (k as i32) * hh;
-                        let mut sum: Option<u32> = None;
-                        for (di, dj) in &offsets {
-                            let ci = (i as i32 + di) as f64;
-                            let cj = (jp + dj) as f64;
-                            let ci_r = const_reg(ci, &mut next, out);
-                            let cj_r = const_reg(cj, &mut next, out);
-                            let v = next;
-                            next += 1;
-                            out.push(crate::physics_eir::instr(
-                                crate::eir::Opcode::ReadFieldCell,
-                                v,
-                                Some(crate::eir::ValueType::F64),
-                                vec![ci_r, cj_r],
-                                None,
-                                Some(target),
-                            ));
-                            sum = Some(match sum {
-                                None => v,
-                                Some(s) => binary(crate::eir::Opcode::Add, s, v, &mut next, out),
-                            });
-                        }
-                        let sum = sum.unwrap();
-                        let i_r = const_reg(i as f64, &mut next, out);
-                        let j_r = const_reg(jp as f64, &mut next, out);
-                        // rho(x)·dx²·scale (0 without a source field)
-                        let rhs = match src_target {
-                            Some(st) => {
-                                let rho = next;
-                                next += 1;
-                                out.push(crate::physics_eir::instr(
-                                    crate::eir::Opcode::ReadFieldCell,
-                                    rho,
-                                    Some(crate::eir::ValueType::F64),
-                                    vec![i_r, j_r],
-                                    None,
-                                    Some(st),
-                                ));
-                                binary(crate::eir::Opcode::Mul, rho, dx2, &mut next, out)
-                            }
-                            None => const_reg(0.0, &mut next, out),
-                        };
-                        let num = binary(crate::eir::Opcode::Sub, sum, rhs, &mut next, out);
-                        let val = binary(crate::eir::Opcode::Div, num, div, &mut next, out);
-                        out.push(crate::physics_eir::instr(
-                            crate::eir::Opcode::WriteFieldCell,
-                            0,
-                            None,
-                            vec![i_r, j_r, val],
-                            None,
-                            Some(target),
-                        ));
-                    }
-                }
-            }
-        }
+        operands.push(const_u64_reg(self.iters as u64, &mut next, out));
+        operands.push(const_reg(self.scale, &mut next, out));
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::FieldPoisson,
+            0,
+            None,
+            operands,
+            None,
+            Some(target),
+        ));
         ret(out);
     }
 }
@@ -3825,127 +3726,33 @@ impl EirSystem for WaveSystem {
             ret(out);
             return;
         }
-        let (w, h, d) = (self.width, self.height, self.depth);
-        let target =
-            crate::physics_eir::cr(0, crate::physics_eir::field_component_id(&self.field), w);
-        let prev_target =
-            crate::physics_eir::cr(0, crate::physics_eir::field_component_id(&self.prev), w);
+        // RFC-0037: one bulk opcode runs the leapfrog step and the `prev <- u`
+        // shift natively. The `prev` field id rides as four little-endian `u32`
+        // limbs; `cfl` is the squared Courant number.
+        let target = crate::physics_eir::cr(
+            0,
+            crate::physics_eir::field_component_id(&self.field),
+            self.width,
+        );
         let mut next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
-        let two = const_reg(2.0, &mut next, out);
-        let cfl = const_reg(self.velocity * self.dt / self.dx, &mut next, out);
-        let cfl = binary(crate::eir::Opcode::Mul, cfl, cfl, &mut next, out);
-        // Pass 1 (Jacobi): read u, u_prev and ∇²u for every cell from the same
-        // snapshot.
-        let cells = w as usize * h as usize * d as usize;
-        let mut cur_regs: Vec<u32> = Vec::with_capacity(cells);
-        let mut prev_regs: Vec<u32> = Vec::with_capacity(cells);
-        let mut lap_regs: Vec<u32> = Vec::with_capacity(cells);
-        let mut ij_regs: Vec<(u32, u32)> = Vec::with_capacity(cells);
-        for k in 0..cells {
-            let i = (k % w as usize) as f64;
-            // Pack `(j, k)` as `j + k·height` — the linear index the
-            // field opcodes fold back into a 3D `[k][j][i]` cell.
-            let j = (((k / w as usize) % h as usize) + (k / (w as usize * h as usize)) * h as usize)
-                as f64;
-            let i_reg = const_reg(i, &mut next, out);
-            let j_reg = const_reg(j, &mut next, out);
-            let cur = next;
-            next += 1;
-            out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::ReadFieldCell,
-                cur,
-                Some(crate::eir::ValueType::F64),
-                vec![i_reg, j_reg],
-                None,
-                Some(target),
-            ));
-            let pv = next;
-            next += 1;
-            out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::ReadFieldCell,
-                pv,
-                Some(crate::eir::ValueType::F64),
-                vec![i_reg, j_reg],
-                None,
-                Some(prev_target),
-            ));
-            let lap = next;
-            next += 1;
-            out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::FieldLaplacian,
-                lap,
-                Some(crate::eir::ValueType::F64),
-                vec![i_reg, j_reg],
-                None,
-                Some(target),
-            ));
-            cur_regs.push(cur);
-            prev_regs.push(pv);
-            lap_regs.push(lap);
-            ij_regs.push((i_reg, j_reg));
+        let pl = crate::eir::component_limbs(crate::physics_eir::field_component_id(&self.prev));
+        let mut operands = Vec::with_capacity(8);
+        for limb in pl {
+            operands.push(const_u64_reg(limb as u64, &mut next, out));
         }
-        // Pass 2: u(t+h) = (2u − u_prev)·keep + cfl·∇²u − γ·(u − u_prev), then
-        // shift u_prev ← u. `keep` is the global retention; `γ` is a graded
-        // sponge coefficient that absorbs outgoing waves near the boundary.
-        let (hd, dd) = (h as usize, d as usize);
-        let (aw, ab) = (self.absorb_width as f64, self.absorb.clamp(0.0, 0.5));
-        let keep = const_reg(self.damping.clamp(0.0, 1.0), &mut next, out);
-        for k in 0..cells {
-            let (iu, ju, ku) = (k % w as usize, (k / w as usize) % hd, k / (w as usize * hd));
-            // Distance to the nearest face, over axes with an interior only, and
-            // the sponge coefficient (0 in the interior, `absorb` at the edge).
-            let mut edge = f64::MAX;
-            if w as usize > 2 {
-                edge = edge.min((iu.min(w as usize - 1 - iu)) as f64);
-            }
-            if hd > 2 {
-                edge = edge.min((ju.min(hd - 1 - ju)) as f64);
-            }
-            if dd > 2 {
-                edge = edge.min((ku.min(dd - 1 - ku)) as f64);
-            }
-            let gamma = if aw > 0.0 && edge < aw {
-                ab * (1.0 - edge / aw)
-            } else {
-                0.0
-            };
-            let (i_reg, j_reg) = ij_regs[k];
-            let twice = binary(crate::eir::Opcode::Mul, two, cur_regs[k], &mut next, out);
-            let diff = binary(crate::eir::Opcode::Sub, twice, prev_regs[k], &mut next, out);
-            let diff = binary(crate::eir::Opcode::Mul, diff, keep, &mut next, out);
-            let wave = binary(crate::eir::Opcode::Mul, cfl, lap_regs[k], &mut next, out);
-            let new = binary(crate::eir::Opcode::Add, diff, wave, &mut next, out);
-            let new = if gamma > 0.0 {
-                let g = const_reg(gamma, &mut next, out);
-                let vel = binary(
-                    crate::eir::Opcode::Sub,
-                    cur_regs[k],
-                    prev_regs[k],
-                    &mut next,
-                    out,
-                );
-                let loss = binary(crate::eir::Opcode::Mul, g, vel, &mut next, out);
-                binary(crate::eir::Opcode::Sub, new, loss, &mut next, out)
-            } else {
-                new
-            };
-            out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::WriteFieldCell,
-                0,
-                None,
-                vec![i_reg, j_reg, cur_regs[k]],
-                None,
-                Some(prev_target),
-            ));
-            out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::WriteFieldCell,
-                0,
-                None,
-                vec![i_reg, j_reg, new],
-                None,
-                Some(target),
-            ));
-        }
+        let cfl = self.velocity * self.dt / self.dx;
+        operands.push(const_reg(cfl * cfl, &mut next, out));
+        operands.push(const_reg(self.damping, &mut next, out));
+        operands.push(const_reg(self.absorb, &mut next, out));
+        operands.push(const_reg(self.absorb_width as f64, &mut next, out));
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::FieldWave,
+            0,
+            None,
+            operands,
+            None,
+            Some(target),
+        ));
         ret(out);
     }
 }
@@ -4403,6 +4210,21 @@ fn const_reg(value: f64, next_id: &mut u32, out: &mut Vec<crate::eir::Instructio
         Some(crate::eir::ValueType::F64),
         vec![],
         Some(crate::eir::Immediate::F64(value)),
+        None,
+    ));
+    r
+}
+
+/// A `U64` constant register (bulk-opcode field ids / iteration counts).
+fn const_u64_reg(value: u64, next_id: &mut u32, out: &mut Vec<crate::eir::Instruction>) -> u32 {
+    let r = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        crate::eir::Opcode::Const,
+        r,
+        Some(crate::eir::ValueType::U64),
+        vec![],
+        Some(crate::eir::Immediate::U64(value)),
         None,
     ));
     r
@@ -6576,7 +6398,9 @@ impl LangRuntime {
             .module
             .execute(&mut rt, &mut self.env, WorldId(0), WorldVersion(0))?;
         self.check_invariants(&writes)?;
+        let overlays = rt.take_overlays();
         apply_writes(&mut self.scene, &writes)?;
+        crate::physics_eir::flush_overlays(&mut self.scene, &overlays);
         self.advance_clock();
         Ok(writes)
     }
@@ -6597,7 +6421,9 @@ impl LangRuntime {
             WorldVersion(0),
         )?;
         self.check_invariants(&writes)?;
+        let overlays = rt.take_overlays();
         apply_writes(&mut self.scene, &writes)?;
+        crate::physics_eir::flush_overlays(&mut self.scene, &overlays);
         self.advance_clock();
         Ok(writes)
     }
@@ -6644,12 +6470,19 @@ impl LangRuntime {
         if env_a.events != env_b.events || env_a.queue != env_b.queue {
             return Err(error(Status::EirInvalid, 50));
         }
+        // RFC-0037: bulk field sweeps live in the dense overlays rather than the
+        // write list, so require byte-identical overlays too.
+        if rt_a.field_overlays() != rt_b.field_overlays() {
+            return Err(error(Status::EirInvalid, 50));
+        }
+        let overlays = rt_a.take_overlays();
         // An invariant violation fails the step before any write is applied.
         self.check_invariants(&int_writes)?;
         // Advance the live env to match the interpreter's consumed random state,
         // so random streams accumulate deterministically across steps.
         self.env = env_a;
         apply_writes(&mut self.scene, &int_writes)?;
+        crate::physics_eir::flush_overlays(&mut self.scene, &overlays);
         self.advance_clock();
         Ok(int_writes)
     }

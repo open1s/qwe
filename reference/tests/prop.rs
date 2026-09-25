@@ -310,7 +310,10 @@ fn random_instruction(rng: &mut Rng, next: &mut u32) -> Instruction {
         | Opcode::Exp
         | Opcode::Ln
         | Opcode::Sqrt
-        | Opcode::Pow => Instruction {
+        | Opcode::Pow
+        | Opcode::FieldDiffuse
+        | Opcode::FieldWave
+        | Opcode::FieldPoisson => Instruction {
             opcode,
             result_id: 0,
             result_type: None,
@@ -318,6 +321,73 @@ fn random_instruction(rng: &mut Rng, next: &mut u32) -> Instruction {
             constant: None,
             target: None,
         },
+    }
+}
+
+#[test]
+fn bulk_field_sweep_opcodes_round_trip() {
+    // RFC-0037: the three bulk solver opcodes and their operand shapes must
+    // survive the canonical EIR codec byte-identically, and decode back to the
+    // same opcode (guarding the decode table).
+    let target = ComponentRef {
+        entity: 0,
+        component: ComponentTypeId([9u8; 16]),
+        offset: 7,
+    };
+    let opcodes = [
+        (Opcode::FieldDiffuse, vec![1u32]),
+        (Opcode::FieldWave, vec![1, 2, 3, 4, 5, 6, 7, 8]),
+        (Opcode::FieldPoisson, vec![1, 2, 3, 4, 5, 6]),
+    ];
+    for (opcode, operands) in opcodes {
+        let mut instructions: Vec<Instruction> = operands
+            .iter()
+            .enumerate()
+            .map(|(i, _)| Instruction {
+                opcode: Opcode::Const,
+                result_id: i as u32 + 1,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: Some(Immediate::F64(i as f64)),
+                target: None,
+            })
+            .collect();
+        instructions.push(Instruction {
+            opcode,
+            result_id: 0,
+            result_type: None,
+            operands,
+            constant: None,
+            target: Some(target),
+        });
+        instructions.push(Instruction {
+            opcode: Opcode::Return,
+            result_id: 0,
+            result_type: None,
+            operands: vec![],
+            constant: None,
+            target: None,
+        });
+        let module = EirModule {
+            module_hash: Hash256([0; 32]),
+            schema_set_hash: Hash256([1; 32]),
+            domain_ir_hash: Hash256([2; 32]),
+            target_kind: 0,
+            functions: vec![Function {
+                id: 1,
+                effect_mask: 0,
+                argument_count: 0,
+                instructions,
+            }],
+        };
+        let bytes = module.encode().expect("EIR encode");
+        let decoded = EirModule::decode(&bytes).expect("EIR decode");
+        assert_eq!(
+            decoded.functions[0].instructions[decoded.functions[0].instructions.len() - 2].opcode,
+            opcode,
+            "decode table must recognize {opcode:?}"
+        );
+        assert_eq!(decoded.encode().unwrap(), bytes, "EIR round-trip");
     }
 }
 

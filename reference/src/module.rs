@@ -92,7 +92,9 @@ impl PweRuntime {
         let writes = module
             .eir
             .interpret_with(&mut rt, WorldId(0), WorldVersion(0))?;
+        let overlays = rt.take_overlays();
         apply_writes(&mut self.scene, &writes)?;
+        crate::physics_eir::flush_overlays(&mut self.scene, &overlays);
         Ok(writes)
     }
 

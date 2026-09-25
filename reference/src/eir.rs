@@ -198,6 +198,16 @@ pub enum Opcode {
     /// kind, payload. Yields nothing. Gate on a per-step pulse (`at`/`periodic`
     /// or `last_event`) to schedule exactly once.
     ScheduleEvent = 223,
+    /// RFC-0037: one Jacobi diffusion sweep `T += rate·∇²T` over a grid field
+    /// (the whole sweep in one instruction). Operand 0 = rate; target = field.
+    FieldDiffuse = 224,
+    /// RFC-0037: one leapfrog wave step over a grid field. Operands: the four
+    /// little-endian `u32` limbs of the `prev` field id, then `cfl`, `damping`,
+    /// `absorb`, `absorb_width`.
+    FieldWave = 225,
+    /// RFC-0037: `iters` Gauss–Seidel sweeps of `∇²φ = ρ·scale`. Operands: the
+    /// four limbs of the `source` field id (all zero = none), `iters`, `scale`.
+    FieldPoisson = 226,
     Return = 0x8000,
     /// Unconditional branch to an instruction index (block target). Single
     /// operand = target index.
@@ -458,6 +468,34 @@ pub trait EirRuntime {
         j: f64,
         width: f64,
     ) -> Result<f64>;
+    /// RFC-0037: one Jacobi diffusion sweep `T += rate·∇²T` over the grid field
+    /// `component`, in place. Runtimes that do not implement bulk sweeps return
+    /// an error; the reference interpreter is the semantic oracle.
+    fn field_diffuse(&mut self, _component: ComponentTypeId, _rate: f64) -> Result<()> {
+        Err(error(Status::Internal, 0, 0))
+    }
+    /// RFC-0037: one leapfrog wave step over `component`, shifting `prev`.
+    fn field_wave(
+        &mut self,
+        _component: ComponentTypeId,
+        _prev: ComponentTypeId,
+        _cfl: f64,
+        _damping: f64,
+        _absorb: f64,
+        _absorb_width: f64,
+    ) -> Result<()> {
+        Err(error(Status::Internal, 0, 0))
+    }
+    /// RFC-0037: `iters` Gauss–Seidel sweeps of `∇²φ = ρ·scale` over `component`.
+    fn field_poisson(
+        &mut self,
+        _component: ComponentTypeId,
+        _source: Option<ComponentTypeId>,
+        _iters: u32,
+        _scale: f64,
+    ) -> Result<()> {
+        Err(error(Status::Internal, 0, 0))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -824,18 +862,33 @@ impl EirModule {
                     }
                     None
                 }
-                Opcode::ReadFieldCell | Opcode::WriteFieldCell | Opcode::FieldLaplacian => {
+                Opcode::ReadFieldCell
+                | Opcode::WriteFieldCell
+                | Opcode::FieldLaplacian
+                | Opcode::FieldDiffuse
+                | Opcode::FieldWave
+                | Opcode::FieldPoisson => {
                     // Grid field access: the field's width rides in the
-                    // target's offset (compile-time, from the model).
+                    // target's offset (compile-time, from the model). The bulk
+                    // solver opcodes (RFC-0037) run the whole sweep natively and
+                    // yield no SSA value.
                     let want = match instruction.opcode {
                         Opcode::WriteFieldCell => 3,
-                        Opcode::FieldLaplacian => 2,
+                        Opcode::FieldDiffuse => 1,
+                        Opcode::FieldWave => 8,
+                        Opcode::FieldPoisson => 6,
                         _ => 2,
                     };
                     if instruction.operands.len() != want || instruction.target.is_none() {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
-                    if instruction.opcode == Opcode::WriteFieldCell {
+                    if matches!(
+                        instruction.opcode,
+                        Opcode::WriteFieldCell
+                            | Opcode::FieldDiffuse
+                            | Opcode::FieldWave
+                            | Opcode::FieldPoisson
+                    ) {
                         None
                     } else {
                         Some(ValueType::F64)
@@ -1498,6 +1551,57 @@ impl EirModule {
                     }
                     pcs[depth - 1] += 1;
                 }
+                Opcode::FieldDiffuse | Opcode::FieldWave | Opcode::FieldPoisson => {
+                    // RFC-0037: the whole grid sweep runs in the runtime; the
+                    // result lives in its dense field overlay, so no `WorldWrite`
+                    // is emitted here. The `prev`/`source` field id arrives as
+                    // four little-endian `u32` limbs (a 128-bit component id
+                    // cannot fit an operand).
+                    let target = instruction.target.ok_or(error(Status::EirInvalid, 23, 0))?;
+                    let operand = |k: usize| -> Result<Immediate> {
+                        stacks[depth - 1]
+                            .get(&instruction.operands[k])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))
+                    };
+                    match instruction.opcode {
+                        Opcode::FieldDiffuse => {
+                            rt.field_diffuse(target.component, as_f64(operand(0)?))?;
+                        }
+                        Opcode::FieldWave => {
+                            let prev = component_from_limbs(
+                                as_u64(operand(0)?),
+                                as_u64(operand(1)?),
+                                as_u64(operand(2)?),
+                                as_u64(operand(3)?),
+                            );
+                            rt.field_wave(
+                                target.component,
+                                prev,
+                                as_f64(operand(4)?),
+                                as_f64(operand(5)?),
+                                as_f64(operand(6)?),
+                                as_f64(operand(7)?),
+                            )?;
+                        }
+                        _ => {
+                            let sid = component_from_limbs(
+                                as_u64(operand(0)?),
+                                as_u64(operand(1)?),
+                                as_u64(operand(2)?),
+                                as_u64(operand(3)?),
+                            );
+                            let source = if sid.0 == [0u8; 16] { None } else { Some(sid) };
+                            rt.field_poisson(
+                                target.component,
+                                source,
+                                as_u64(operand(4)?) as u32,
+                                as_f64(operand(5)?),
+                            )?;
+                        }
+                    }
+                    pcs[depth - 1] += 1;
+                }
                 Opcode::Atomic => {
                     let target = instruction.target.ok_or(error(Status::EirInvalid, 35, 0))?;
                     let rhs = stacks[depth - 1]
@@ -2009,6 +2113,9 @@ fn opcode_from_u16(raw: u16) -> Result<Opcode> {
         x if x == Opcode::FiredAt as u16 => Opcode::FiredAt,
         x if x == Opcode::FiredEvery as u16 => Opcode::FiredEvery,
         x if x == Opcode::ScheduleEvent as u16 => Opcode::ScheduleEvent,
+        x if x == Opcode::FieldDiffuse as u16 => Opcode::FieldDiffuse,
+        x if x == Opcode::FieldWave as u16 => Opcode::FieldWave,
+        x if x == Opcode::FieldPoisson as u16 => Opcode::FieldPoisson,
         _ => return Err(error(Status::EirInvalid, 28, 0)),
     })
 }
@@ -2140,6 +2247,29 @@ fn arith(op: Opcode, a: Immediate, b: Immediate) -> Option<Immediate> {
         (Opcode::Mul, Immediate::F64(a), Immediate::F64(b)) => Some(Immediate::F64(a * b)),
         _ => None,
     }
+}
+
+/// Reassemble a 128-bit `ComponentTypeId` from four little-endian `u32` limbs
+/// (the encoding of the bulk field opcodes' second field id, RFC-0037).
+fn component_from_limbs(a: u64, b: u64, c: u64, d: u64) -> ComponentTypeId {
+    let mut bytes = [0u8; 16];
+    bytes[0..4].copy_from_slice(&(a as u32).to_le_bytes());
+    bytes[4..8].copy_from_slice(&(b as u32).to_le_bytes());
+    bytes[8..12].copy_from_slice(&(c as u32).to_le_bytes());
+    bytes[12..16].copy_from_slice(&(d as u32).to_le_bytes());
+    ComponentTypeId(bytes)
+}
+
+/// The four little-endian `u32` limbs of a `ComponentTypeId` (inverse of
+/// `component_from_limbs`), for the bulk field opcodes' lowering (RFC-0037).
+pub(crate) fn component_limbs(id: ComponentTypeId) -> [u32; 4] {
+    let b = id.0;
+    [
+        u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+        u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
+        u32::from_le_bytes([b[8], b[9], b[10], b[11]]),
+        u32::from_le_bytes([b[12], b[13], b[14], b[15]]),
+    ]
 }
 
 fn as_u64(value: Immediate) -> u64 {

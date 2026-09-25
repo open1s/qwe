@@ -395,9 +395,208 @@ impl EirRuntime for SceneRuntime<'_> {
         // equal the centre, collapsing to the 5-point `−4·centre` form.
         Ok((left + right + up + down + back + front - 6.0 * center) / (f.dx * f.dx))
     }
+    fn field_diffuse(&mut self, component: ComponentTypeId, rate: f64) -> Result<()> {
+        let (w, h, d) = self.field_dims(component)?;
+        let cur = self.effective_cells(component)?;
+        // Expose the snapshot so `field_laplacian` reads exactly the values the
+        // unrolled lowering's Jacobi pass 1 would, then sweep.
+        self.field_overlay.insert(component, cur.clone());
+        let mut out = cur.clone();
+        for k in 0..d {
+            for j in 0..h {
+                for i in 0..w {
+                    let jp = j as f64 + k as f64 * h as f64;
+                    let lap = self.field_laplacian(component, i as f64, jp, w as f64)?;
+                    let idx = (k * h + j) * w + i;
+                    out[idx] = cur[idx] + rate * lap;
+                }
+            }
+        }
+        self.field_overlay.insert(component, out);
+        Ok(())
+    }
+
+    fn field_wave(
+        &mut self,
+        component: ComponentTypeId,
+        prev: ComponentTypeId,
+        cfl: f64,
+        damping: f64,
+        absorb: f64,
+        absorb_width: f64,
+    ) -> Result<()> {
+        let (w, h, d) = self.field_dims(component)?;
+        let cur = self.effective_cells(component)?;
+        let prev_cells = self.effective_cells(prev)?;
+        if cur.len() != prev_cells.len() {
+            return Err(pwe_api::Error {
+                status: pwe_api::Status::Invalid,
+                detail: 7,
+                byte_offset: 0,
+            });
+        }
+        self.field_overlay.insert(component, cur.clone());
+        self.field_overlay.insert(prev, prev_cells.clone());
+        let keep = damping.clamp(0.0, 1.0);
+        let ab = absorb.clamp(0.0, 0.5);
+        let aw = absorb_width;
+        let mut out = cur.clone();
+        let mut new_prev = prev_cells.clone();
+        for k in 0..d {
+            for j in 0..h {
+                for i in 0..w {
+                    let idx = (k * h + j) * w + i;
+                    let jp = j as f64 + k as f64 * h as f64;
+                    let lap = self.field_laplacian(component, i as f64, jp, w as f64)?;
+                    let c = cur[idx];
+                    let p = prev_cells[idx];
+                    let mut nv = (2.0 * c - p) * keep + cfl * lap;
+                    let mut edge = f64::MAX;
+                    if w > 2 {
+                        edge = edge.min(i.min(w - 1 - i) as f64);
+                    }
+                    if h > 2 {
+                        edge = edge.min(j.min(h - 1 - j) as f64);
+                    }
+                    if d > 2 {
+                        edge = edge.min(k.min(d - 1 - k) as f64);
+                    }
+                    let gamma = if aw > 0.0 && edge < aw {
+                        ab * (1.0 - edge / aw)
+                    } else {
+                        0.0
+                    };
+                    if gamma > 0.0 {
+                        nv -= gamma * (c - p);
+                    }
+                    out[idx] = nv;
+                    new_prev[idx] = c;
+                }
+            }
+        }
+        self.field_overlay.insert(component, out);
+        self.field_overlay.insert(prev, new_prev);
+        Ok(())
+    }
+
+    fn field_poisson(
+        &mut self,
+        component: ComponentTypeId,
+        source: Option<ComponentTypeId>,
+        iters: u32,
+        scale: f64,
+    ) -> Result<()> {
+        let (w, h, d, dx) = self.field_shape(component)?;
+        let snapshot = self.effective_cells(component)?;
+        let src = match source {
+            Some(sc) => Some(self.effective_cells(sc)?),
+            None => None,
+        };
+        self.field_overlay.insert(component, snapshot);
+        let div = if d > 1 { 6.0 } else { 4.0 };
+        let rhs_scale = dx * dx * scale;
+        let k_range: Vec<usize> = if d > 1 {
+            (1..d.saturating_sub(1)).collect()
+        } else {
+            vec![0]
+        };
+        let cells = self
+            .field_overlay
+            .get_mut(&component)
+            .ok_or(pwe_api::Error {
+                status: pwe_api::Status::HandleStale,
+                detail: 6,
+                byte_offset: 0,
+            })?;
+        for _ in 0..iters {
+            for &k in &k_range {
+                for j in 1..h.saturating_sub(1) {
+                    for i in 1..w.saturating_sub(1) {
+                        let at = |ci: usize, cj: usize, ck: usize| (ck * h + cj) * w + ci;
+                        let mut sum = 0.0;
+                        sum += cells[at(i - 1, j, k)];
+                        sum += cells[at(i + 1, j, k)];
+                        sum += cells[at(i, j - 1, k)];
+                        sum += cells[at(i, j + 1, k)];
+                        if d > 1 {
+                            sum += cells[at(i, j, k - 1)];
+                            sum += cells[at(i, j, k + 1)];
+                        }
+                        let rho = src.as_ref().map(|s| s[at(i, j, k)]).unwrap_or(0.0);
+                        cells[at(i, j, k)] = (sum - rho * rhs_scale) / div;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// RFC-0037: write dense field overlays back into the authoritative scene's
+/// grid fields — the sole path by which a bulk sweep reaches the scene.
+pub fn flush_overlays(
+    scene: &mut Scene,
+    overlays: &std::collections::BTreeMap<ComponentTypeId, Vec<f64>>,
+) {
+    for (component, cells) in overlays {
+        for (name, f) in scene.fields.iter_mut() {
+            if field_component_id(name) == *component && cells.len() == f.cells().len() {
+                f.set_cells(cells);
+                break;
+            }
+        }
+    }
 }
 
 impl SceneRuntime<'_> {
+    /// `(width, height, depth)` of a registered grid field.
+    fn field_dims(&self, component: ComponentTypeId) -> Result<(usize, usize, usize)> {
+        let f = self.field_ids.get(&component).ok_or(pwe_api::Error {
+            status: pwe_api::Status::HandleStale,
+            detail: 6,
+            byte_offset: 0,
+        })?;
+        Ok((f.width, f.height, f.depth))
+    }
+
+    /// `(width, height, depth, dx)` of a registered grid field.
+    fn field_shape(&self, component: ComponentTypeId) -> Result<(usize, usize, usize, f64)> {
+        let f = self.field_ids.get(&component).ok_or(pwe_api::Error {
+            status: pwe_api::Status::HandleStale,
+            detail: 6,
+            byte_offset: 0,
+        })?;
+        Ok((f.width, f.height, f.depth, f.dx))
+    }
+
+    /// The current effective cells of `component`: the dense overlay once it has
+    /// been touched, else a snapshot copy of the authoritative field.
+    fn effective_cells(&self, component: ComponentTypeId) -> Result<Vec<f64>> {
+        if let Some(c) = self.field_overlay.get(&component) {
+            return Ok(c.clone());
+        }
+        self.field_ids
+            .get(&component)
+            .map(|f| f.cells().to_vec())
+            .ok_or(pwe_api::Error {
+                status: pwe_api::Status::HandleStale,
+                detail: 6,
+                byte_offset: 0,
+            })
+    }
+
+    /// RFC-0037: the dense per-field overlays touched this step (for the
+    /// cross-backend equality check).
+    pub fn field_overlays(&self) -> &std::collections::BTreeMap<ComponentTypeId, Vec<f64>> {
+        &self.field_overlay
+    }
+
+    /// RFC-0037: take the dense overlays for flushing into the authoritative
+    /// scene once a step has been verified (`mem::take`, no copy).
+    pub fn take_overlays(&mut self) -> std::collections::BTreeMap<ComponentTypeId, Vec<f64>> {
+        std::mem::take(&mut self.field_overlay)
+    }
+
     /// Position of a scene entity by id: its `Transform`, or `state[0..2]` for
     /// state-only bodies (the same convention the viewer uses).
     fn position_of(&self, entity: u128) -> Result<Vec3> {

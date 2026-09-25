@@ -55,6 +55,14 @@ impl Field {
         self.cells[idx]
     }
 
+    /// Overwrite every cell from `cells` (same length): the RFC-0037 overlay
+    /// flush.
+    pub fn set_cells(&mut self, cells: &[f64]) {
+        for (dst, src) in self.cells.iter_mut().zip(cells) {
+            *dst = *src;
+        }
+    }
+
     /// Writes the cell at a linear `[k][j][i]` index.
     pub fn set_linear(&mut self, idx: usize, value: f64) {
         self.cells[idx] = value;
