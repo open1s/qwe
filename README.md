@@ -1,284 +1,296 @@
-# PWE — Physical World Engine
+# PWE — Program the physical world in 4D.
 
-PWE is a Rust microkernel runtime for programmable, distributed representation,
-simulation, compilation, and rendering of a physical world.
+**A Rust microkernel runtime + language for deterministic, distributed simulation
+of a 4D world — 3D space, plus time.**
 
-The World is the single authoritative source of truth. Entities are identity,
-components are data, and systems are behavior. Physics, render, sensor, AI, and
-network are peer domains — never independent worlds — and all authoritative
-mutation goes through a `WorldTransaction`.
+[中文](README-ZH.md)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![rust](https://img.shields.io/badge/rust-1.81%2B-orange.svg)](https://www.rust-lang.org)
+[![tests](https://img.shields.io/badge/tests-304%20passing-brightgreen.svg)](#tests--conformance)
+[![conformance](https://img.shields.io/badge/conformance-17%2F17%20%C2%B7%200%20skips-brightgreen.svg)](#tests--conformance)
+[![RFCs](https://img.shields.io/badge/frozen%20contract-37%20RFCs-purple.svg)](#the-frozen-contract)
+[![repo](https://img.shields.io/badge/github-open1s%2Fqwe-181717.svg)](https://github.com/open1s/qwe)
+
+PWE is not another physics toy. It is a **substrate**: one authoritative world,
+one typed intermediate representation, and one language that models *anything*
+expressible as coupled differential or difference equations — gravity and
+collisions, chemical kinetics, population dynamics, electromagnetism, heat,
+sound, waves, robot arms, and machines that walk.
+
+And it is **deterministic you can prove**: the interpreter is the semantic
+oracle, the JIT must agree with it **byte-for-byte on every step**, and 300+
+tests plus 17 conformance checks enforce it — with zero skips.
 
 ```
-World Model → WIR → Domain IR → EIR → Interpreter/JIT/AOT → Runtime → CPU/GPU/NPU/Edge/Cloud
+World Model → WIR → Domain IR → EIR → Interpreter / JIT / AOT → Runtime → CPU / GPU / NPU / Edge / Cloud
 ```
 
-Execution backend status: the reference implements the **interpreter**
-(semantic reference), the interpreter-backed **JIT**, and the **AOT** artifact
-path — all differential-verified. The **GPU / NPU / SIMD** backends are
-**TODO** (not implemented; see `tasks/todo.md`); they plug in at the
-`AotProgram.target` boundary and must be differentially verified against the
-interpreter before use.
+---
 
-## Tools
-- use zg to query and search
-- use jj for versioning control
+## The 60-second tour
 
+```sh
+cargo build --release -p pwe-cli
 
-## Repository layout
+# A person-like figure walks (62-part humanoid: capsule limbs, eyes, fingers)
+./target/release/pwe compile cli/examples/humanoid.pwe -o humanoid.pweb
+./target/release/pwe present humanoid.pweb --port 8000   # open http://localhost:8000
 
-| Path | Contents |
+# A pulse radiates through a 3-D cube — ⟳ Restart, then ▶ Resume
+./target/release/pwe compile cli/examples/wave3d.pwe -o wave3d.pweb
+./target/release/pwe present wave3d.pweb --port 8000
+
+# A whole solar system, live
+./target/release/pwe compile cli/examples/solar.pwe -o solar.pweb
+./target/release/pwe present solar.pweb --port 8000
+```
+
+Every artifact is a **self-describing, verified binary** (`.pweb`): recompile,
+rerun, restage — the same bytes, the same world.
+
+---
+
+## Why PWE is different
+
+| Typical engine | PWE |
 | --- | --- |
-| `pwe-api` | `no_std`, dependency-free frozen Rust contract (types, traits, ABI, limits, detail codes). |
-| `reference/` | `pwe-reference`: deterministic in-memory semantic oracle and the reference CPU JIT. |
-| `conformance/` | `pwe-conformance`: RFC-0029 conforming report runner + RFC-0030 ground/vehicle/camera scenario. |
-| `cli/` | `pwe`: the command-line toolchain — `pwe compile` (`.pwe` → verified `.pweb` artifact), `pwe run` (deterministic execution), `pwe present` (live browser 3D viewer). |
-| `rfc/` | The frozen v0.2 contract (RFC-0019..RFC-0036) and superseded v0.1 drafts (RFC-0001..RFC-0018). |
-| `include/pwe_abi.h` | Generated C11 ABI header locked to the Rust layouts by layout tests. |
-| `docs/` | RFC alignment matrix and the Draft→Frozen supersession map. |
+| A fixed set of built-in behaviors you configure | **A language** — model any law as rules on state |
+| "Deterministic-ish," trusted by convention | **Provably deterministic** — interpreter ≡ JIT, asserted every step |
+| Physics *or* chemistry *or* rendering, in separate tools | **Peer domains on one world** — physics, render, sensor, AI, network share one source of truth |
+| 2D/3D scenes | **4D substrate** — 3D space + time; grid fields are volumetric |
+| A black box you hope is stable | **A frozen, versioned contract** — 37 RFCs, canonical bytes, content hashes |
+| Closed visuals | **Open live viewer** — 3D web viewport, restart / pause / label controls |
 
-## Requirements
+**The World is the single authoritative source of truth.** Entity is identity,
+component is data, system is behavior. All authoritative mutation goes through a
+`WorldTransaction`.
 
-- Rust 1.81 or newer. `pwe-api` is `no_std` and dependency-free; `pwe-reference`
-  depends only on `pwe-api` and PEST (`pest`/`pest_derive`) for its language
-  grammar.
+---
 
-## Build, test, run
+## One language, every domain
 
-```sh
-cargo build --workspace
-cargo test --workspace                  # 241 unit + 17 law-conformance + 3 property tests
-cargo run -p pwe-conformance            # RFC-0029 report: all PASS, no skips
-cargo run -p pwe-reference --example vehicle_scenario   # live physics demo
-cargo run -p pwe-reference --example language_demo      # PWE language → EIR → cross-backend
-cargo run -p pwe-reference --example distributed_demo   # cluster + RFC-0024 field migration
-cargo clippy --workspace --all-targets --all-features
+PWE's language is the same for every discipline — only the equations change.
+
+```pwe
+world {
+  gravity = (0, 0, 0)
+  field heat { width = 32; height = 32; depth = 32; dx = 1.0 }   # a 3D grid field
+  entity body { state = (x = 1.0, vx = 0.0, temp = 353.15) }
+}
+systems {
+  diffuse { field = heat; rate = 0.16 }        # PDE:  T += rate·∇²T
+  update  { on = body; dt = 0.1
+    vx   = forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0) + 0.0
+    temp = thermal.radiative_cooling(temp, 293.15, 0.9, 1.0, 1.0, 700.0) + 0.0
+  }
+}
 ```
 
-Run the `no_std` check on the API crate:
-
-```sh
-cargo check -p pwe-api --no-default-features
-```
-
-## Command-line toolchain
-
-Like `javac`/`java` for the PWE language:
-
-```sh
-cargo build -p pwe-cli
-
-pwe compile scene.pwe -o scene.pweb      # source -> verified .pweb binary
-pwe run     scene.pweb --steps 600       # run the binary (interpreter == JIT each step)
-pwe present scene.pweb --port 8000       # live browser 3D viewer (http://localhost:8000)
-```
-
-Ready-to-run examples live in `cli/examples/`:
-
-```sh
-pwe compile cli/examples/solar.pwe  -o solar.pweb  && pwe present solar.pweb --port 8000
-pwe compile cli/examples/bounce.pwe -o bounce.pweb && pwe run bounce.pweb --steps 300
-pwe compile cli/examples/heat.pwe   -o heat.pweb   && pwe run heat.pweb --steps 400
-pwe compile cli/examples/flock.pwe  -o flock.pweb  && pwe present flock.pweb --port 8000
-pwe compile cli/examples/spring/spring.pwe -o spring.pweb && pwe run spring.pweb --steps 400 \
-  --param k=16.0    # multi-file (imports) + params + units + scheduled events
-pwe compile cli/examples/domains.pwe -o domains.pweb && pwe run domains.pweb --steps 200
-  # composes the std/ library (forces + thermal + em + chemistry)
-pwe compile cli/examples/wave.pwe -o wave.pweb && pwe present wave.pweb --port 8000
-  # the `wave` solver: u_tt = c²∇²u (a pulse splits, reflects, recombines)
-pwe compile cli/examples/acoustics.pwe -o acoustics.pweb && pwe run acoustics.pweb --steps 80
-  # 2-D sound: a driven monopole radiates; probes ride the field (std/acoustics dB)
-pwe compile cli/examples/wave3d.pwe -o wave3d.pweb && pwe present wave3d.pweb --port 8000
-  # 3D wave: a pulse radiates through a cube, rendered as a glowing scalar volume
-pwe compile cli/examples/robot.pwe -o robot.pweb && pwe present robot.pweb --port 8000
-  # a 2-link robot arm (thin-box links, sphere joints) driven by std/robotics FK
-pwe compile cli/examples/humanoid.pwe -o humanoid.pweb && pwe present humanoid.pweb --port 8000
-  # a person-like figure walking (eyes, fingers), drawn from entity render attributes
-pwe compile cli/examples/shapes.pwe -o shapes.pweb && pwe present shapes.pweb --port 8000
-  # user-defined custom shapes: primitives + polyhedra (hull/poly) + SVG paths
-
-# `present` shows a top-right legend (color, name, r from the central body) and
-# a top-left run-info panel (per-body radii, satellite distances, step + title).
-# For many-body runs build in release: cargo build --release -p pwe-cli
-```
-
-The language also supports **model parameters** (`params { G = 1.0 }`, overridden
-with `--param G=2` on the same artifact), **Python-style modules**
-(`import "mod"` / `import "mod" as m` / `from "mod" import f`; packages via directories + `__init__.pwe`; functions and parameters namespaced as `mod.name`), **scheduled events**
-(`at(T)` / `periodic(P)`, exact-once on the step grid), **gradual
-dimensional analysis** (opt-in `[m/s^2]` unit annotations checked against rules),
-**continuum solver systems** (`diffuse`/`poisson`/`wave` step a 3D grid field in one line — space is 3D + time = 4D), and a **field viewport** that renders a 1D field as an energy-coloured sine curve and a 2D/3D field as a smooth marching-cubes isosurface whose colour encodes wave energy (hot near the source, cool with radius; dimming as it attenuates), with ⟳ Restart / ⏸ Pause controls,
-and a growing **standard library** (`std/`: `math`, `particles`, `forces`,
-`mechanics`, `chemistry` (1–118 periodic table), `thermal`, `acoustics`,
-`optics`, `em`, `robotics`, `units`, `control` — pure-function modules keyed by
-namespaced physical constants). Entities describe **how they render** (`shape`,
-`size`, `color`, `opacity`, `glow`, `label`) — e.g. a robot arm or a humanoid.
-
-A `.pweb` artifact is a self-describing container (magic + version) holding the
-verified canonical (RFC-0021) EIR module plus the world-model source the runtime
-derives its initial scene from; `run`/`present` execute the artifact's compiled
-EIR. Compile failures render the offending source line with a caret, javac-style.
-
-## The simulation core
-
-Beyond the frozen contract, PWE ships a real, deterministic rigid-body
-simulation (`reference/src/`):
-
-| Module | Purpose |
+| Domain | In PWE |
 | --- | --- |
-| `math` | `Vec3`, `Quat`, `Aabb` — lossless `f64`, deterministic. |
-| `components` | Typed `Transform`, `Velocity`, `Force`, `RigidBody`, `Collider` (AABB + sphere), `Camera`, `DistanceJoint` with canonical byte encoding. |
-| `scene` | The authoritative typed World State (ordered, deterministic). |
-| `physics` | Fixed-step integration (gravity, damping, forces), interchangeable broad phase (uniform grid or BVH), sphere/box/convex-hull narrow phase (hull is exact SAT), impulse + friction resolution, ground contact, distance-joint constraint solver, anti-tunneling substepping. |
-| `physics_eir` | **EIR-backed physics**: reusable `EirSystem` components (`GravitySystem`, `ForceSystem`, `IntegrateSystem`, `DampingSystem`, `GroundContactSystem`, `LinearSystem`, `UpdateSystem`) that lower to typed EIR and are composed into a `PhysicsProgram`; the interpreter executes them and produces ordered world writes. `EirSimulation` drives a scene purely through EIR (no bypass). A generic `State` component carries user-defined dynamical-system slots. |
-| `present` | **3D web presentation layer**: snapshots a running `Scene` into frames, serializes them to JSON, and writes a self-contained HTML file with a **Three.js 3D viewport** (playback, orbit controls, timeline, state panel). Space-feel **starfield background**; each entity renders with a **distinct shape, color, size, and CSS2D name label**; the central body **glows** (emissive + point light); **orbit rings** and **velocity vectors** show motion; **click a body to highlight + inspect its full state**. **Molecules** (CO₂ / CH₄) render with **bonds** as lines between bonded atoms (`with_bonds`). Also serves a **live viewer** (`serve_live`) — the browser polls the running runtime's `LiveState` (frame + step + procedure log) in real time (`--example live_demo` / `solar_demo` at `http://localhost:8000`). |
-| `lang` | **The PWE language**: a declarative **PEST grammar** front end that compiles `world { … } systems { … }` to low-level EIR and runs it cross-backend (interpreter + CPU JIT) with byte-identical write agreement. `chan`/`send`/`recv`/`nbody` are first-class grammar productions. Collider DSL: box, sphere, convex hull; systems: gravity, force, integrate, damping, ground_contact, **`wall` (bounded domain, velocity reflects on impact)**, linear, **`nbody` (mutual multi-body gravity/Coulomb for micro & macro — entities sense each other's forces and react)**, **`send`/`recv` (Go-style channels, cross-runtime over the wire)**; plus **generic `state` slots** (up to 16 per entity), a `linear` dynamical system, and nonlinear `update` **and `rk4`** systems with scalar expressions over `+ − × ÷`, parens, state slots `s0…`, **constants `π` and `e`**, **transcendental functions `sin cos exp ln sqrt pow`**, **comparisons `< > <= >= == !=`** and **`min`/`max`/`if` selection**, **cross-entity references `@name.sN`**, **`update { on = name }` targeting**, **`nbody = false` exclusion**, **simulation time `t`**, **`random()` (seeded, reproducible stochastic draws)**, **`emit(kind, payload)` (ordered events)**, **user-defined pure functions** (`funcs { clamp(a,b) { … } }` lowered to EIR `CALL`s, reusable from any `update` rule), **named state slots** (`state = (x = 0, y = 0)` — assign by name in rules, read via `@self.x` / `@name.x` / `@name.state.x`), **rich math builtins** (`abs floor ceil round sign log10 log2 sinh cosh tanh asin acos atan atan2 hypot`), and **cross-entity property access** (`@other.mass`, `@other.position.x/y/z`, `@other.velocity.x/y/z`, `@other.is_dynamic`), **`let` local variables** (compute intermediate values once in an `update` rule, reused by several rules — elegant, no inlining), **`print(x)` debugging** (a transparent log channel that logs `x` and yields it back, never changing world state), **bounded control flow** (`repeat N`, `for i in lo..hi`, `break`/`continue` with `if` conditions, `until`/`while` gates — unrolled to straight-line EIR with run/skip predication, no back-edges), **`invariant { expr }` per-step assertions** (lowered to a hidden verdict field; a violated invariant fails the step **before any write is applied**, so the scene never silently proceeds past a broken state), **spatial queries** (`neighbor_count(r)` / `nearest_dist()` — deterministic sorted-id scene scans served through EIR, valid in system rules), **`when = expr` mode gating** (every rule's write predicated on a mode expression — state-machine semantics), **`watch` zero-crossing detection** (sign-change flags across steps, with the watch memory in ordinary state slots), **`every = n` scheduling** and **`substeps = n` multi-rate integration** (the `STEP` opcode reads the host-advanced step counter; substeps re-integrate with dt/n), **`noise()` seeded Gaussian** (Box–Muller over two reproducible draws) and **vector helpers** (`vlen`/`vdot`/`vdist` over scalar components), and **dynamic slot indexing** (`s[i]` reads/writes the State slot at a runtime index — arrays up to the 16-slot cap), **grid fields (the PDE substrate)** (`field <name> { width; height; dx }` declarations; deterministic cells read/written by rules via `fget`/`fset`/`flap` — the zero-flux laplacian composing heat/diffusion/Poisson laws), **vector state sugar** (`state = (vec3 pos, …)` reserving N named slots), and **in-language event consumption** (`last_event(kind)` reads the step's events; per-step clearing, host observability via `emitted_events()`) — expressing pendulums, forced oscillators, waves, saturation/threshold laws, exact growth/decay, inverse-square laws, N-body gravity, coupled oscillators, reaction kinetics, logistic growth, predator–prey, RLC, damped motion, **stochastic/noisy dynamics**, and **multi-entity coupled / property-aware models** across micro and macro scales entirely in source. Compile failures carry rich **diagnostics** (`lang::diagnose` renders the code, message, and a source caret); comments are skipped anywhere in a program. |
-| `field` + `continuum` | **A generic continuum runtime**: a domain-neutral scalar field (storage, Laplacian, Poisson relaxation, diffusion, content hash) on which peer domains simulate distinct phenomena — **electromagnetics** (electrostatic potential via Gauss–Seidel, verified against the analytic solution) and **chemistry** (reaction–diffusion with mass conservation). |
-| `broadphase` | Deterministic broad phase with interchangeable backends: a uniform grid (conservative) and a median-split **BVH** (exact), both under one `pairs()` contract verified against a brute-force oracle. |
-| `cluster` | **A BEAM-like runtime cluster**: processes with reduction budgets, a preemptive round-robin scheduler, multiple runtime nodes, and entity migration between nodes through the RFC-0024 ownership state machine. |
-| `channel` | **Go-like channels across runtimes**: bounded FIFO channels (`send`/`recv`, deterministic non-blocking) plus a `ChannelRouter` that exchanges messages between independent runtimes via the portable `wire` format — cross-runtime, cross-platform communication (the same bytes that would travel over a network). |
-| `distributed` | **Distributed continuum**: runs the generic EM/chemistry field on the cluster — one field per node evolved by the preemptive scheduler, with node-to-node field migration through RFC-0024 carrying state and ownership together (`--example distributed_demo`). |
-| `aot` | **AOT compile path**: a validated, frozen `AotProgram` whose execution is byte-identical to the interpreter (RFC-0010/0027), with a self-authenticating RFC-0035 artifact codec (encode/decode with content-hash verification). |
-| `dominance` | **RFC-0021 block/dominance verification**: a CFG built from EIR instructions, with branch-target validation and SSA dominance checking. Enforced as a compile gate by the AOT and JIT paths. |
-| `fence` | **RFC-0022 explicit fences**: bounded `MemoryOrder` and a CPU/GPU `CpuGpuHandoff` that fails closed unless a Release/Acquire fence and an ownership transfer are present. |
-| `simulation` | `Input → Physics → Commit → RenderPrepare` loop, tracking/look-at camera, content-addressed state hash, snapshot/restore with replay. |
+| **Mechanics / gravity / collisions** | `nbody`, `gravity`, `integrate`, `ground_contact`, `wall`, `force`, `linear`, `update` / `rk4` |
+| **PDE fields (4D)** | `field` + `diffuse` / `poisson` / `wave` (heat, potential, sound, waves) |
+| **Chemistry** | `std/chemistry` — full periodic table (Z = 1–118), Arrhenius, kinetics, pH |
+| **Thermodynamics** | `std/thermal` — Newton cooling, Stefan–Boltzmann, conduction |
+| **Acoustics & optics** | `std/acoustics`, `std/optics` — SPL, Doppler, Beer–Lambert, Fresnel |
+| **Electromagnetism** | `std/em` + `poisson` — Coulomb, Lorentz, cyclotron, Poynting |
+| **Robotics** | `std/robotics` — forward/inverse kinematics, PID, differential drive |
+| **Anything stochastic** | `random()`, `noise()`, `emit()` — seeded and replay-stable |
 
-Run `cargo run -p pwe-reference --example vehicle_scenario` to see a vehicle
-fall under gravity, land and drift on a ground plane, tracked by a camera —
-with replay determinism proven (two runs and a snapshot-replay both reproduce
-the identical state hash).
+And the **standard library** is just PWE: `std/` ships `math`, `particles`,
+`forces`, `mechanics`, `chemistry` (1–118), `thermal`, `acoustics`, `optics`,
+`em`, `robotics`, `units`, `control` — pure functions keyed by namespaced
+physical constants you can override with `--param`.
 
-## Demo examples
+---
 
-Each runs with `cargo run -p pwe-reference --example <name>` and shows a slice
-of the runtime working end to end:
+## Showcase — see it move
 
-| Example | What it demonstrates |
+Each compiles with `pwe compile … -o out.pweb`, then `pwe present out.pweb`.
+
+| Demo | What it is |
 | --- | --- |
-| `language_physics_demo` | **Use the PWE language**: define a physics world (`world { … }` model + `systems { … }`) in source, parse it, compile to typed EIR, and run cross-backend with `interpreter == JIT` asserted every step. |
-| `language_demo` | The same language pipeline on a single-vehicle scene. |
-| `continuum_demo` | The generic field: electromagnetics (electrostatic potential vs analytic) and chemistry (diffusion conserving mass) on one scalar `Field`, with deterministic content hashes. |
-| `broadphase_demo` | Uniform-grid vs BVH broad phase: interchangeable candidate pairs, and both backends drive physics to identical positions. |
-| `physics_hull_demo` | Convex-hull collider in a live, deterministic rigid-body sim (pyramid + slab + sphere), with replay determinism. |
-| `compile_stack_demo` | The compile stack: source → EIR → interpreter/JIT/AOT agreement, RFC-0021 dominance + RFC-0022 fence checks, and the RFC-0035 AOT artifact codec. |
-| `pipeline_demo` | The full documented pipeline in one place: **World → WIR (RFC-0020) → Domain IR (RFC-0032 physics pipeline) → EIR (RFC-0021) → interpreter/JIT/AOT runtime**, with WIR and EIR binary round-trips and cross-backend agreement. |
-| `distributed_demo` | BEAM-like cluster: a continuum field per node evolved by the scheduler, migrated between nodes through RFC-0024 ownership with identical state. |
-| `state_dynamics_demo` | **User-defined phenomena in the language**: radioactive decay, a harmonic oscillator, logistic growth, a nonlinear pendulum (`sin`), and exact exponential growth — expressed purely as `state` + `linear`/`update` systems, with cross-backend execution. |
-| `rk4_demo` | **4th-order Runge–Kutta (`rk4`) integration**: the same `slot = expr` rules as `update` but integrated with RK4 — oscillators stay accurate at coarse `dt` where explicit Euler drifts, and multi-variable models use >8 state slots (up to 16). |
-| `na_water_demo` | **Water + sodium reaction, live**: `2Na + 2H₂O → 2NaOH + H₂` with mass-action kinetics and an **Arrhenius** rate constant `k(T) = A·e^{−Ea/T}`; the exotherm feeds back into temperature (which speeds the reaction) as the reactor **heats and swells** in the 3D viewport (`http://localhost:8000`). |
-| `scientific_laws_demo` | **Scientific-laws gallery, live**: five independent laws run simultaneously in one 3D scene — simple **harmonic motion**, a **Keplerian orbit** (Newton gravity), **reversible chemical kinetics** `A ⇌ B` (mass conserved), **logistic growth** `N' = rN(1−N/K)`, and **radioactive decay** `N' = −λN` — each modeled in PWE source and visualized as bodies that move/grow/shrink (`http://localhost:8000`). |
-| `carbon_atom_demo` | **Carbon atom (micro-scale), live**: a red nucleus + 6 electrons in the K(2)/L(4) shell configuration, each bound by inverse-square Coulomb force, served live over HTTP (`http://localhost:8000`) — orbit rings, velocity arrows, per-shell colors, stable shells. |
-| `molecule_demo` | **Carbon molecular structure**: **CO₂** (linear O=C=O) and **CH₄** (tetrahedral, 109.5°) — atoms are `dynamic=false` entities (element color + mass→size) with bonds drawn as lines between bonded atoms via `present::with_bonds`, live at `http://localhost:8001`. |
-| `stochastic_demo` | **General-purpose substrate proof (non-physics)**: a **stochastic ecology** model — noisy logistic population with carrying capacity, demographic noise via `random()`, event emission via `emit(...)`, and time via `t` — run cross-backend every step with **seeded, reproducible** trajectories (replay matches bit-for-bit). Demonstrates the engine simulates arbitrary stochastic requirements, not just physics. |
-| `functions_demo` | **User-defined functions in the language**: reusable pure helpers (`clamp`/`smoothstep`/`logistic`) lowered to EIR `CALL`s and called from an `update` rule — run cross-backend (interpreter == JIT) every step, reproducible. Shows the language is a general modeling substrate, not a fixed rule DSL. |
-| `expressive_demo` | **Live expressiveness showcase**: a target orbits and a glider chases it using named state slots, `let` locals, rich builtins, cross-entity property access, and user-defined functions — served **live** over HTTP (`http://localhost:8003`), run cross-backend (interpreter == JIT) every step, reproducible. |
-| `solar_system_demo` | **N-body / orbital (macro-scale)**: a fixed `sun` anchoring a planet and a moon via **cross-entity `@sun.sN` coupling** under inverse-square gravity — circular orbits hold steady across backends. |
-| `chemistry_reaction_demo` | **Chemical kinetics (mass action)**: reversible `A + B ⇌ C` with `dA/dt = −k_f[A][B] + k_r[C]`, relaxing to chemical equilibrium `K_eq = k_f/k_r` with mass conserved. |
-| `channel_demo` | **Cross-runtime channels**: two independent `ChannelRouter`s (different regions / hosts) exchange messages Go-style over the portable wire format. |
-| `chan_demo` | **Go-style channels in the language**: a `chan` system sends a value to a channel entity and reads it back — plain cross-entity EIR, interpreter == JIT enforced. |
-| `nbody_demo` | **Micro & macro multi-body**: a planet in a stable circular orbit (macro, `G>0`) and like-charged particles repelling with conserved momentum (micro, `G<0`), via the `nbody` system. |
-| `interaction_demo` | **Interaction & reaction, macro + micro**: a star and two planets mutually attract (`G>0`) and charged particles interact (`G<0`), each a distinct shape + color, written to a 3D viewer (`interaction_viewer.html`). Newton's third law verified (momentum conserved). |
-| `solar_demo` | **Live solar system**: all 8 planets + Moon — every body **revolves** (公转) around the Sun via `nbody`, **self-rotates** (自转), and has a **distinct size** derived from its real relative mass (Sun 2.5, Jupiter 2.0, Earth 0.35, Moon 0.09), served live over HTTP (`http://localhost:8000`). |
-| `science_demo` | **Breadth of scientific phenomena, verified**: Newton cooling, radioactive decay, logistic growth, harmonic-oscillator energy, projectile motion, and chemical equilibrium — each checked against its analytic solution. |
-| `present_demo` | **3D web viewport**: runs a physics sim, snapshots frames, and writes `science_viewer.html` (Three.js playback) — open in a browser to watch the simulation. |
-| `live_demo` | **Live runtime interface**: the browser connects to the running runtime over HTTP and shows the simulation **in real time** — 3D scene, step counter, and a procedure log (`http://localhost:8000`). The car drives in a **walled domain** and bounces off the walls. |
-| `vehicle_scenario` / `terrain_scenario` | Full scenes with camera tracking, state hashing, and snapshot+replay determinism. |
+| `humanoid.pwe` | A **62-part humanoid** walking — capsule limbs, facial detail, knuckled fingers. |
+| `robot.pwe` | A **2-link robot arm** waving, driven by `std/robotics` forward kinematics. |
+| `shapes.pwe` | **Custom shapes**: composites, a convex octahedron, an explicit-face gem, an extruded **SVG** star. |
+| `wave3d.pwe` | A **3D wave** radiating through a cube — a translucent energy-coloured shell that expands and fades. |
+| `acoustics.pwe` | **2-D sound** from a driven monopole; probes register arrival delay and level in dB. |
+| `solar.pwe` | The **solar system**, live: 8 planets + Moon, orbiting and self-rotating. |
+| `flock.pwe` | A **flock** coalescing and aligning via neighbourhood queries. |
+| `domains.pwe` | One probe under a **damped spring** while **radiatively cooling** — forces + thermal + EM + chemistry composed. |
+| `spring/spring.pwe` | Multi-file **modules**, parameters, units, and scheduled events (`--param k=16`). |
+| `wave.pwe` | A **sine standing wave** on a 1-D line, drawn as an energy-coloured curve. |
+| `heat.pwe` | **Heat diffusion** on a 2-D grid (an unrolled Gauss–Seidel sweep). |
+| `bounce.pwe` | The classic: **gravity + ground contact** with restitution. |
 
-## The PWE language
+The viewer renders entities from their own declaration — `shape`, `size`,
+`color`, `opacity`, `glow`, `label` — and fields as an isosurface (2D/3D) or a
+curve (1D). Controls: **⟳ Restart**, **⏸ Pause / ▶ Resume**, **🏷 Labels**.
 
-`pwe-reference` ships a small textual front end (`reference/src/lang.rs`). A
-source program declares a world model and systems, compiles to low-level EIR,
-and runs cross-backend (interpreter + CPU JIT) through `LangRuntime`, which
-asserts the two backends produce byte-identical writes every step.
+---
+
+## The language at a glance
 
 ```pwe
 world {
   gravity = (0, -9.81, 0)
   entity vehicle {
-    position = (0, 8, 0); velocity = (4, 0, 0)
-    mass = 4; dynamic = true; box = (1, 0.5, 0.7)
+    position = (0, 8, 0)  velocity = (4, 0, 0)
+    mass = 4  dynamic = true  box = (1, 0.5, 0.7)
   }
-  entity ground {
-    position = (0, -5, 0); dynamic = false; box = (50, 5, 50)
-  }
+  entity ground { position = (0, -5, 0)  dynamic = false  box = (50, 5, 50) }
 }
 systems {
-  gravity { gravity_y = -9.81; dt = 1 / 60 }
-  integrate { dt = 1 / 60 }
+  gravity { gravity_y = -9.81; dt = 1/60 }
+  integrate { dt = 1/60 }
   ground_contact { restitution = 0.6 }
 }
 ```
 
-`cargo run -p pwe-reference --example language_demo` runs it: the vehicle falls,
-bounces, and settles while `interpreter == JIT` is enforced on every step.
+* **Rules are equations.** `slot = expr` means `slot += dt·expr` (Euler); `rk4`
+  integrates the same rules at 4th order.
+* **State, not scripts.** Named slots, cross-entity reads (`@other.state.x`),
+  properties (`@other.mass`), spatial queries (`neighbor_count`, `nearest_dist`,
+  `neighbor_mean`).
+* **Modules, Python-style.** `import "std/forces"`, `import "m" as x`,
+  `from "m" import f`; packages are directories; circular imports resolve.
+* **Units, checked.** Opt-in `[m/s^2]` annotations with gradual dimensional
+  analysis — unannotated stays a wildcard.
+* **Events & scheduling.** `at(T)`, `periodic(P)`, `schedule(gate, delay, …)`,
+  `emit` / `last_event` — exact-once, deterministic, on the step grid.
+* **Control flow, bounded.** `repeat` / `for` / `break` / `continue` unroll to
+  straight-line EIR; Newton iteration inside a step is a one-liner.
+* **Diagnostics that teach.** Compile failures print the detail code and the
+  offending line with a caret, javac-style.
 
-Compile failures carry rich **diagnostics**: `lang::diagnose(source, &err)`
-renders the detail code, a human message, and the offending source line with a
-caret (e.g. `error 48: system 'update' is missing required parameter 'dt'`).
+The full reference — lexical rules, **every keyword**, EBNF, operator
+precedence, and a complete **intrinsic function** table — lives in
+[`docs/lang-usage.md`](docs/lang-usage.md).
 
-## Law conformance
+---
 
-`reference/tests/laws.rs` gates correctness: each PWE-language simulation is run
-and asserted against its analytic / objective result, so every simulation obeys
-the underlying physical, chemical, or biological law — not just spot-checked:
+## Determinism you can prove
 
-| Law | Checked result |
+Determinism is not a slogan here; it is a **compile-and-run gate**:
+
+* **Interpreter ≡ JIT** — `step_cross` runs both backends on identical state and
+  requires byte-identical writes *and* identical event/queue streams, every step.
+* **Analytic law conformance** — every simulation is asserted against its closed
+  form (Newton cooling, radioactive decay, logistic growth, Kepler orbits,
+  harmonic energy, action–reaction, reversible kinetics, wall reflection, …).
+* **Snapshot / replay** — state hashes reproduce bit-for-bit across runs and
+  snapshots.
+* **Frozen contract** — 37 RFCs define canonical bytes, schemas, and protocols;
+  conformance runs with **zero skips**.
+
+---
+
+## Architecture
+
+```
+application  →  world  →  IR  →  compiler  →  runtime  →  kernel  →  platform
+```
+
+| Crate | Role |
 | --- | --- |
-| Newton's law of cooling | `T(t) = T_env + (T0−T_env)(1−k·dt)^n` |
-| Radioactive decay | `N = N0·(1−λ·dt)^n` |
-| Exponential growth | `N = N0·(1+r·dt)^n` |
-| Logistic growth | `N → 1/(1+e^{−rt})` |
-| Projectile (ballistics) | `y(t) = v0·t − ½gt²` |
-| Harmonic oscillator | total mechanical energy conserved |
-| Reversible reaction | `[C]/([A][B]) = K_eq = k_f/k_r`, mass conserved |
-| N-body gravity | stable circular orbit |
-| **Kepler orbit** | **elliptical orbit conserves angular momentum** |
-| N-body Coulomb | linear momentum conserved |
-| **N-body action–reaction** | **Newton's third law: equal & opposite forces, total momentum conserved** |
-| Wall boundary | body kept inside `|x|,|z| ≤ limit`, velocity reflects with restitution |
-| Channel | deterministic round-trip |
+| `pwe-api` | `no_std`, dependency-free **frozen contract** (types, traits, ABI, limits, detail codes). |
+| `reference/` (`pwe-reference`) | The **semantic oracle**: deterministic world, interpreter, interpreter-backed JIT, AOT, language front end. |
+| `conformance/` | RFC-0029 report runner + RFC-0030 scenario. |
+| `cli/` (`pwe`) | The toolchain: `compile` / `run` / `present`. |
 
-## What is implemented
+Inside `pwe-reference`:
 
-The full frozen v0.2 contract:
+| Module | Purpose |
+| --- | --- |
+| `lang` | The **PWE language**: PEST grammar → EIR, cross-backend execution, diagnostics. |
+| `physics` / `physics_eir` | Deterministic rigid-body simulation; reusable `EirSystem`s lowered to typed EIR. |
+| `field` / `continuum` | The generic 4D scalar field: storage, Laplacian, Poisson, diffusion, content hash. |
+| `present` | The 3D web presentation layer: frames → JSON → a live Three.js viewer. |
+| `eir` / `dominance` / `fence` / `aot` | Typed SSA IR, dominance verification, explicit fences, AOT artifact codec. |
+| `broadphase` / `cluster` / `channel` / `distributed` | Interchangeable broad phase; a BEAM-like cluster; cross-runtime channels; distributed continuum. |
+| `simulation` | `Input → Physics → Commit → RenderPrepare`, tracking camera, hashed snapshots. |
 
-- **Schema & canonicalization** (RFC-0019): bounded little-endian wire primitives, SHA-256, schema registry keyed by canonical hash.
-- **WIR** (RFC-0020): envelope, CRC32C, section kinds, full-consumption + duplicate/unknown-section rejection, validation order.
-- **EIR** (RFC-0021): typed SSA subset, validator, deterministic interpreter (the semantic oracle), plus the `PWEEIR2` binary envelope / directory / module-hash / TYPES+FUNCTIONS codec and a **block/dominance verifier** (`EirModule::verify_linear_dominance`) enforced by the AOT and JIT compile gates (RFC-0021 "one definition/value, dominance, block targets"). Arithmetic includes the elementary functions `sin cos exp ln sqrt pow`.
-- **Memory & concurrency** (RFC-0022): declared-access scheduler, view lifetime, and **explicit fences** for CPU/GPU resource handoff (Release/Acquire strength + ownership transfer, else fail-closed).
-- **World transaction** (RFC-0023): create/destroy/write, read set, ordered events, atomic commit, `OPEN→PREPARED→VALIDATED→COMMITTED|ABORTED`, and all four conflict policies (`Reject`, `LastWriterByPriority`, `Merge`, `CommutativeMerge`) with a registered merge registry.
-- **Distributed ownership** (RFC-0024): multi-region state machine, epochs, split-brain detection.
-- **Snapshot & delta** (RFC-0025): deterministic snapshot (SimTime + resource refs), base-version-checked delta, transactional restore, resource updates.
-- **Runtime ABI** (RFC-0026): C11 function table, `include/pwe_abi.h`, layout-locked.
-- **JIT** (RFC-0027): compiled-cache CPU JIT with hotness, assumptions, safe-point deopt; differential with the interpreter. Refuses install without a capability manifest. **AOT** (RFC-0010/0027): a validated, frozen program object whose execution is byte-identical to the interpreter, with a self-authenticating RFC-0035 artifact codec.
-- **Render frame** (RFC-0028): immutable frame reading one `WorldVersion`, two-tick interpolation, and an external `Present` path.
-- **Conformance** (RFC-0029) & **minimal profile** (RFC-0030): `pwe-conformance` with zero skips, a single ground+vehicle+camera scenario, and a `PhysicsView` peer of `RenderView`.
-- **Component ABI** (RFC-0031), **Domain IR** (RFC-0032), **Capability** (RFC-0033), **Errors/limits** (RFC-0034), **Artifact identity** (RFC-0035), **Interchange envelope** (RFC-0036).
+---
 
-Plus the kernel-neutral definitions folded in from the v0.1 drafts (see
-`docs/rfc-supersession.md`): simulation time/clock domains/determinism levels,
-version-compatibility matrix, resource identity/residency, spatial/interest
-queries, security-audit events, and the plugin/backend C ABI.
+## Quick start
 
-## Current limits (v0.2)
+```sh
+git clone git@github.com:open1s/qwe.git && cd qwe
 
-The reference is deterministic and self-contained but intentionally scoped:
+cargo build --workspace
+cargo test  --workspace          # 304 tests
+cargo run -p pwe-conformance     # RFC-0029: all PASS, no skips
 
-- **Rigid-body scope**: AABB, sphere, **convex-hull** (SAT narrow phase, exact
-  for convex polyhedra), compound, and heightfield colliders; uniform gravity,
-  impulses, restitution, friction, distance joints, and a ground plane. No soft
-  bodies or a full joint family yet.
-- **Broad phase** is deterministic and interchangeable: a uniform grid and a
-  median-split **BVH** (RFC-0014) expose the same `pairs()` contract, proven
-  against a shared brute-force oracle; the grid is conservative (no false
-  negatives), the BVH is exact. The physics system can select either backend
-  (`BroadPhaseKind`) and produces identical simulated positions.
-- **No GPU backends** (Metal/Vulkan/wgpu), native codegen (Cranelift/LLVM), or
-  neural rendering. The reference "JIT" is a validated compiled cache that locks
-  the JIT *contract* without emitting native machine code.
+# the language, end to end:
+cargo run -p pwe-reference --example language_demo
+```
 
-These are bounded, deliberate gaps behind the kernel boundary, not missing
-contracts.
+**Requirements:** Rust 1.81+. `pwe-api` is `no_std` and dependency-free;
+`pwe-reference` depends only on `pwe-api` and PEST.
+
+---
+
+## Tests & conformance
+
+| Suite | Count |
+| --- | --- |
+| Runtime / language unit tests | 266 |
+| Analytic law-conformance | 17 |
+| Property tests | 3 |
+| Standard-library tests | 3 |
+| Integration / other | 15 |
+| **Total** | **304** |
+
+Plus `pwe-conformance`: **17 / 17, zero skips**. The `no_std` check:
+`cargo check -p pwe-api --no-default-features`.
+
+---
+
+## The frozen contract
+
+The full frozen v0.2 contract (RFC-0019 … RFC-0036): schema & canonicalization,
+WIR, EIR (typed SSA + dominance), memory & fences, world transactions,
+distributed ownership, snapshots & deltas, the runtime ABI (`include/pwe_abi.h`),
+JIT/AOT, render frames, conformance & the minimal profile, component ABI,
+Domain IR, capabilities, errors/limits, artifact identity, and the interchange
+envelope. See [`rfc/`](rfc) and [`docs/rfc-alignment.md`](docs/rfc-alignment.md).
+
+---
+
+## Honest limits & roadmap
+
+Bounded, deliberate gaps behind the kernel boundary — **not** missing contracts:
+
+* **Backends**: the reference implements the interpreter (the oracle), the
+  interpreter-backed JIT, and the AOT path — all differential-verified. GPU /
+  NPU / SIMD plug in at `AotProgram.target` and are **on the roadmap**. The
+  reference "JIT" locks the JIT *contract* rather than emitting native code.
+* **Rigid bodies**: AABB, sphere, convex-hull (exact SAT), compound and
+  heightfield colliders, impulses, friction, distance joints, a ground plane. No
+  soft bodies or a full joint family yet.
+* **Dynamic entity sets are fixed at compile time** (object-pool activation is
+  planned).
+
+See [`tasks/todo.md`](tasks/todo.md) for the live list.
+
+---
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `pwe-api` | Frozen, `no_std` contract. |
+| `reference/` | Semantic oracle + JIT/AOT + the PWE language. |
+| `conformance/` | Conformance runner. |
+| `cli/` + `cli/examples/` | The `pwe` toolchain and ready-to-run worlds. |
+| `std/` | The standard library (pure-function modules). |
+| `rfc/` · `docs/` | The frozen contract and the usage guide. |
+| `include/pwe_abi.h` | Generated C11 ABI header, layout-locked. |
+
+---
 
 ## License
 
 Apache-2.0. Copyright 2026 Open1s. See [LICENSE](LICENSE).
+
+**The world is the single source of truth. Program it. Prove it. Watch it move.**

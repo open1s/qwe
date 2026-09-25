@@ -437,28 +437,38 @@ arity validated at lowering). There is **no `tan`** — write `sin(x)/cos(x)`.
 
 **Selection**
 
+| Call | Result |
+| --- | --- |
 | `if(c, a, b)` | `a` when `c ≠ 0`, else `b` (both arms are evaluated; the unused one is discarded) |
 | `min(a, b)`, `max(a, b)` | smaller / larger of two values |
 
 **Randomness (seeded, replay-stable)**
 
+| Call | Result |
+| --- | --- |
 | `random()` | uniform draw in `[0, 1)` |
 | `noise()` | standard normal (Box–Muller over two draws); always finite |
 
 **I/O & events**
 
+| Call | Effect |
+| --- | --- |
 | `print(x)` | logs `x`, returns it unchanged (never mutates world state) |
 | `emit(kind, payload)` | appends an ordered event `(kind, payload)`, returns `0.0` |
 | `last_event(kind)` | payload of the most recent event of that `kind` emitted so far this step (`0` when none). Events are cleared each step; the host reads them via `emitted_events()`. `kind` is a numeric value, not a bit pattern. |
 
 **Scheduling (exactly-once, on the step grid)**
 
+| Call | Fires |
+| --- | --- |
 | `at(T)` | `1.0` in the one step whose window `[t, t+dt)` contains `T`, else `0.0` |
 | `periodic(P[, phase])` | `1.0` once per `P` seconds (optional phase offset); requires `P > dt` |
 | `schedule(gate, delay, kind, payload)` | when `gate ≠ 0`, enqueue `(kind, payload)` to fire `delay` seconds later — a dynamic event queue, drained deterministically (part of the cross-backend contract) |
 
 **Spatial queries** (valid only inside system rules and their `let` blocks; detail 70 in a function body)
 
+| Call | Result |
+| --- | --- |
 | `neighbor_count(r)` | number of other bodies within `r` of self |
 | `nearest_dist()` | distance to the nearest other body (`f64::MAX` when alone) |
 | `neighbor_mean(slot, r)` | mean of state slot `slot` over neighbours within `r` (`0` when none) |
@@ -468,12 +478,16 @@ All are deterministic (sorted-id scans). Position is `Transform`, else `state[0.
 
 **Vector helpers** (pure arithmetic over scalar components)
 
+| Call | Result |
+| --- | --- |
 | `vlen(x, y, z)` | √(x²+y²+z²) |
 | `vdot(x1,y1,z1, x2,y2,z2)` | x1·x2 + y1·y2 + z1·z2 |
 | `vdist(x1,y1,z1, x2,y2,z2)` | distance between the two points |
 
 **Grid-field access** — the first argument must be a literal field name (2-D or 3-D)
 
+| Call | Effect |
+| --- | --- |
 | `fget(f, i, j)` / `fget(f, i, j, k)` | read a cell (sees same-step writes) |
 | `fset(f, i, j, v)` / `fset(f, i, j, k, v)` | write a cell (also usable as a bare statement; yields `0.0`) |
 | `flap(f, i, j)` / `flap(f, i, j, k)` | discrete Laplacian (zero-flux, scaled by `1/dx²`) |
