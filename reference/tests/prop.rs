@@ -313,7 +313,8 @@ fn random_instruction(rng: &mut Rng, next: &mut u32) -> Instruction {
         | Opcode::Pow
         | Opcode::FieldDiffuse
         | Opcode::FieldWave
-        | Opcode::FieldPoisson => Instruction {
+        | Opcode::FieldPoisson
+        | Opcode::FindFreeSlot => Instruction {
             opcode,
             result_id: 0,
             result_type: None,
@@ -338,6 +339,7 @@ fn bulk_field_sweep_opcodes_round_trip() {
         (Opcode::FieldDiffuse, vec![1u32]),
         (Opcode::FieldWave, vec![1, 2, 3, 4, 5, 6, 7, 8]),
         (Opcode::FieldPoisson, vec![1, 2, 3, 4, 5, 6]),
+        (Opcode::FindFreeSlot, vec![1, 2, 3, 4, 5]),
     ];
     for (opcode, operands) in opcodes {
         let mut instructions: Vec<Instruction> = operands

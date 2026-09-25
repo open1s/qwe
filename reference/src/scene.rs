@@ -34,11 +34,19 @@ pub struct Entity {
     pub color: Option<u32>,
     /// Presentation-only render overrides (shape/size/opacity/glow/label).
     pub render: Option<crate::components::RenderStyle>,
+    /// RFC-0038: whether this entity participates in the world. Ordinary
+    /// entities are always active; pool slots start inactive and are toggled by
+    /// `spawn`/`despawn`. Inactive entities are skipped by user systems and
+    /// hidden in the render view; `active` is part of world state.
+    pub active: bool,
 }
 
 impl Entity {
     pub fn dynamic() -> Self {
-        Self::default()
+        Self {
+            active: true,
+            ..Self::default()
+        }
     }
 }
 

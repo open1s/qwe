@@ -177,6 +177,10 @@ pub fn snapshot_with(
     let mut entities = Vec::new();
     let mut channel_list = Vec::new();
     for (id, e) in &scene.entities {
+        // RFC-0038: inactive pool slots are not part of the render view.
+        if !e.active {
+            continue;
+        }
         let shape = match &e.collider {
             Some(c) => shape_of(c),
             None => Shape::Point,

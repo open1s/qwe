@@ -191,6 +191,8 @@ impl Simulation {
             } else {
                 bytes.push(0);
             }
+            // RFC-0038: the active flag is part of world state.
+            bytes.push(e.active as u8);
         }
         // Grid fields: the name + the canonical field bytes, in name order.
         for (name, f) in &self.scene.fields {
@@ -236,6 +238,18 @@ impl Simulation {
             for c in f.cells() {
                 out.extend_from_slice(&c.to_bits().to_le_bytes());
             }
+        }
+        // RFC-0038: inactive-slot list, appended (absent in older snapshots).
+        let inactive: Vec<u128> = self
+            .scene
+            .entities
+            .iter()
+            .filter(|(_, e)| !e.active)
+            .map(|(id, _)| id.0)
+            .collect();
+        out.extend_from_slice(&(inactive.len() as u64).to_le_bytes());
+        for id in &inactive {
+            out.extend_from_slice(&id.to_le_bytes());
         }
         out
     }
@@ -300,6 +314,18 @@ impl Simulation {
                 f.set_linear(idx, v);
             }
             scene.fields.insert(name, f);
+        }
+
+        // RFC-0038: the inactive-slot list is appended (absent in older
+        // snapshots, where every entity is active).
+        if cursor < bytes.len() {
+            let k = take_u64(bytes, &mut cursor)?;
+            for _ in 0..k {
+                let id = take_u128(bytes, &mut cursor)?;
+                if let Some(e) = scene.get_mut(EntityId(id)) {
+                    e.active = false;
+                }
+            }
         }
 
         let physics = PhysicsSystem::new(crate::physics::PhysicsConfig::default());

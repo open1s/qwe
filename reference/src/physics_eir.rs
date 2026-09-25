@@ -65,6 +65,12 @@ pub fn sim_time_id() -> ComponentTypeId {
     fixed_id(&ID, "pwe.time", "clock")
 }
 
+/// RFC-0038: canonical `ComponentTypeId` of the per-entity `active` flag.
+pub fn active_id() -> ComponentTypeId {
+    static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
+    fixed_id(&ID, "pwe.lang", "active")
+}
+
 /// Canonical `ComponentTypeId` for the hidden per-entity invariant verdict
 /// component: each `invariant` system writes its 0/1 check result here so the
 /// host can fail the step when an invariant is violated.
@@ -244,6 +250,8 @@ impl EirRuntime for SceneRuntime<'_> {
                 };
                 let slot = (target.offset / field::STATE_SLOT_BYTES) as usize;
                 Ok(st.values.get(slot).copied().map(f64::to_bits).unwrap_or(0))
+            } else if target.component == active_id() {
+                Ok(e.active as u64)
             } else {
                 Ok(0)
             }
@@ -640,6 +648,29 @@ impl SceneRuntime<'_> {
                 detail: 6,
                 byte_offset: 0,
             })
+    }
+
+    /// RFC-0038: the lowest-id inactive slot in `base..base+count`, or `0` when
+    /// the pool is full. Deterministic ascending scan; reads this step's pending
+    /// `active` writes first, then the scene, so two spawns in one step cannot
+    /// pick the same slot.
+    pub fn find_free_slot(&self, base: u128, count: u32) -> f64 {
+        for k in 0..count as u128 {
+            let id = base + k;
+            let pending = self.pending.get(&(id, active_id(), 0)).map(|v| *v != 0);
+            let active = match pending {
+                Some(a) => a,
+                None => self
+                    .scene
+                    .get(pwe_api::EntityId(id))
+                    .map(|e| e.active)
+                    .unwrap_or(false),
+            };
+            if !active {
+                return id as f64;
+            }
+        }
+        0.0
     }
 
     /// RFC-0037: the dense per-field overlays touched this step (for the
@@ -1673,6 +1704,8 @@ pub fn apply_writes(scene: &mut Scene, writes: &[crate::eir::WorldWrite]) -> Res
             if let Some(v) = st.values.get_mut(slot) {
                 *v = value;
             }
+        } else if w.component == active_id() {
+            e.active = value != 0.0;
         }
     }
     Ok(())
@@ -1733,6 +1766,49 @@ mod tests {
     use crate::math::Vec3;
     use crate::scene::Entity;
     use pwe_api::EntityId;
+
+    #[test]
+    fn pool_find_free_slot_scans_and_sees_pending() {
+        let mut scene = Scene::new(Vec3::new(0.0, 0.0, 0.0));
+        for id in 1..=3u128 {
+            scene.insert(EntityId(id), Entity::dynamic());
+        }
+        scene.get_mut(EntityId(2)).unwrap().active = false;
+        scene.get_mut(EntityId(3)).unwrap().active = false;
+        assert_eq!(SceneRuntime::new(&scene).find_free_slot(1, 3), 2.0);
+        // A pending `active` write this step hides the slot from a second spawn.
+        let mut rt = SceneRuntime::new(&scene);
+        rt.write_field(cr(2, active_id(), 0), 1.0f64.to_bits());
+        assert_eq!(rt.find_free_slot(1, 3), 3.0);
+        // `apply_writes` commits the flag.
+        apply_writes(
+            &mut scene,
+            &[crate::eir::WorldWrite {
+                entity: 2,
+                component: active_id(),
+                offset: 0,
+                value: 1.0f64.to_bits(),
+            }],
+        )
+        .unwrap();
+        assert!(scene.get(EntityId(2)).unwrap().active);
+        // A full pool yields 0.
+        for id in 1..=3u128 {
+            scene.get_mut(EntityId(id)).unwrap().active = true;
+        }
+        assert_eq!(SceneRuntime::new(&scene).find_free_slot(1, 3), 0.0);
+    }
+
+    #[test]
+    fn inactive_entities_are_not_presented() {
+        let mut scene = Scene::new(Vec3::new(0.0, 0.0, 0.0));
+        scene.insert(EntityId(1), Entity::dynamic());
+        let mut hidden = Entity::dynamic();
+        hidden.active = false;
+        scene.insert(EntityId(2), hidden);
+        let frame = crate::present::snapshot_with(&Default::default(), &[], &scene, None);
+        assert_eq!(frame.entities.len(), 1);
+    }
 
     #[test]
     fn composed_program_gravity_integrate_damping_is_deterministic_and_valid() {
