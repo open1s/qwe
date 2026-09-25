@@ -1,0 +1,24 @@
+# cloth.pwe — a mass-spring soft body (RFC-0040).
+#
+# `soft cloth { nx; ny; ... }` creates an nx×ny grid of dynamic particles joined
+# by structural, shear, and bend springs. `gravity` + `integrate` drive the
+# fall; the `soft` system relaxes the springs each step, so the sheet keeps its
+# spacing while sagging as a whole. The viewer draws the mesh edges as bonds.
+
+world {
+  gravity = (0, -9.81, 0)
+  title = "Soft cloth"
+  soft cloth {
+    nx = 8; ny = 8
+    spacing = 0.4
+    origin = (-1.4, 5.0, 0)
+    mass = 0.1
+    shape = sphere; size = 0.05
+  }
+}
+
+systems {
+  gravity   { gravity_y = -9.81; dt = 0.016 }
+  integrate { dt = 0.016 }
+  soft      { body = cloth; stiffness = 1.0; damping = 0.3; iterations = 6 }
+}

@@ -17,6 +17,21 @@ use crate::math::Vec3;
 use crate::wir::WirDocument;
 use pwe_api::{ComponentTypeId, EntityId, Hash256, Result};
 
+/// RFC-0040: a mass-spring soft body — an `nx × ny` grid of dynamic particles
+/// (all active), connected by structural/shear/bend spring constraints.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SoftDecl {
+    pub name: String,
+    pub nx: u32,
+    pub ny: u32,
+    pub spacing: f64,
+    pub origin: Vec3,
+    pub mass: f64,
+    /// Presentation shape/size for the particles.
+    pub shape: Option<String>,
+    pub size: Option<f64>,
+}
+
 /// RFC-0038: an entity pool — `count` contiguous slots sharing one declaration,
 /// all inactive at boot.
 #[derive(Clone, Debug, PartialEq)]
@@ -130,6 +145,8 @@ pub struct WorldModel {
     pub entities: Vec<EntityDecl>,
     /// RFC-0038: entity pools (fixed blocks of initially-inactive slots).
     pub pools: Vec<PoolDecl>,
+    /// RFC-0040: soft bodies (grids of dynamic mass-spring particles).
+    pub softs: Vec<SoftDecl>,
     pub channels: Vec<ChanDecl>,
     pub fields: Vec<FieldDecl>,
     /// User-defined custom shapes: name -> parts (multi-primitive, local offsets).
@@ -146,6 +163,7 @@ impl WorldModel {
             param_alias: std::collections::BTreeMap::new(),
             entities: Vec::new(),
             pools: Vec::new(),
+            softs: Vec::new(),
             channels: Vec::new(),
             fields: Vec::new(),
             shapes: std::collections::BTreeMap::new(),
@@ -183,7 +201,57 @@ impl WorldModel {
                 next_slot += 1;
             }
         }
+        // RFC-0040: soft-body particles follow the pools, all active.
+        for sd in &self.softs {
+            for j in 0..sd.ny {
+                for i in 0..sd.nx {
+                    let mut e = crate::scene::Entity::dynamic();
+                    e.transform = Some(crate::components::Transform {
+                        position: Vec3::new(
+                            sd.origin.x + i as f64 * sd.spacing,
+                            sd.origin.y + j as f64 * sd.spacing,
+                            sd.origin.z,
+                        ),
+                        rotation: Default::default(),
+                    });
+                    e.velocity = Some(crate::components::Velocity::default());
+                    e.rigid_body = Some(crate::components::RigidBody::dynamic(sd.mass));
+                    if let Some(shape) = &sd.shape {
+                        let mut r = crate::components::RenderStyle::default();
+                        let mut custom = false;
+                        match shape.as_str() {
+                            "sphere" => r.shape = Some(1),
+                            "box" => r.shape = Some(2),
+                            "capsule" => r.shape = Some(3),
+                            other => {
+                                r.shape_name = Some(other.to_string());
+                                custom = true;
+                            }
+                        }
+                        r.size = sd.size;
+                        if custom {
+                            // custom shape parts resolve elsewhere; keep the name
+                        }
+                        e.render = Some(r);
+                    }
+                    scene.insert(EntityId(next_slot), e);
+                    next_slot += 1;
+                }
+            }
+        }
         scene
+    }
+
+    /// RFC-0040: `(name, base id, nx, ny, spacing)` per soft body.
+    pub fn soft_ranges(&self) -> Vec<(String, u128, u32, u32, f64)> {
+        let pool_slots: u128 = self.pools.iter().map(|p| p.count as u128).sum();
+        let mut next = self.entities.len() as u128 + self.channels.len() as u128 + pool_slots + 1;
+        let mut out = Vec::new();
+        for sd in &self.softs {
+            out.push((sd.name.clone(), next, sd.nx, sd.ny, sd.spacing));
+            next += sd.nx as u128 * sd.ny as u128;
+        }
+        out
     }
 
     /// RFC-0038: `(name, base id, count)` for each pool, in declaration order,
@@ -194,6 +262,29 @@ impl WorldModel {
         for p in &self.pools {
             out.push((p.name.clone(), next, p.count));
             next += p.count as u128;
+        }
+        out
+    }
+
+    /// RFC-0040: the render bonds (structural + shear edges) of every soft body.
+    pub fn soft_bonds(&self) -> Vec<(u128, u128)> {
+        let mut out = Vec::new();
+        for (_, base, nx, ny, _) in self.soft_ranges() {
+            let idx = |i: u32, j: u32| base + (j * nx + i) as u128;
+            for j in 0..ny {
+                for i in 0..nx {
+                    if i + 1 < nx {
+                        out.push((idx(i, j), idx(i + 1, j)));
+                    }
+                    if j + 1 < ny {
+                        out.push((idx(i, j), idx(i, j + 1)));
+                    }
+                    if i + 1 < nx && j + 1 < ny {
+                        out.push((idx(i, j), idx(i + 1, j + 1)));
+                        out.push((idx(i + 1, j), idx(i, j + 1)));
+                    }
+                }
+            }
         }
         out
     }

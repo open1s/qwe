@@ -302,6 +302,14 @@ systems {
 `rack`/`pulley` 等需要转动或比例的关节会被明确拒绝。配合 `gravity` + `integrate`
 使用。示例：`cli/examples/chain.pwe`。
 
+### 3.6 软体（RFC-0040）
+
+`soft <name> { nx; ny; spacing; origin; mass; shape?; size? }` 在 world 中生成
+`nx × ny` 个动态粒子网格，粒子间以**结构**、**剪切**、**弯曲**距离弹簧相连；
+`soft { body = <name>; stiffness?; damping?; iterations? }` 系统按质量加权位置松弛
+求解，使薄片在整体形变时保持间距。可与 `gravity` + `integrate` 组合，网格边渲染为
+bond。示例：`cli/examples/cloth.pwe`。
+
 ## 4. 系统——行为
 
 ### 4.1 内建系统种类

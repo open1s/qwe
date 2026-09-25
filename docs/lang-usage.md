@@ -329,6 +329,7 @@ systems {
 | `spawn` | `on`, `pool`, `count?`, `every?`, `phase?` | Activate free pool slots per caller/step and copy the caller's state; `count` = slots per emission (batch), `every`/`phase` gate emission to `step % every == phase` (§3.4). |
 | `despawn` | `on`, `when` | Deactivate every pool slot where `when` holds (§3.4). |
 | `joint` | `on`, `other`, `type`, `length?`, `stiffness?`, `damping?`, `axis?`, `anchor?`, `limit?`, `iterations?` | Pairwise position-relaxation constraint (RFC-0039). `type` = `distance`/`spring`, `weld`/`hinge`/`revolute`/`ball`/`spherical`, or `prismatic`/`slider`. Rotational/ratio types (`cone`, `universal`, `gear`, `rack`, `pulley`) are rejected. |
+| `soft` | `body`, `stiffness?`, `damping?`, `iterations?` | Relax a mass-spring soft-body grid (RFC-0040). |
 
 **Joints (RFC-0039).** `joint` keeps a pairwise constraint by iterated position
 relaxation (mass-weighted; a `dynamic = false` side acts as an infinite-mass
@@ -338,6 +339,16 @@ anchor). `distance`/`spring` hold `|a − b| = length` (`spring` adds velocity
 `limit = (lo, hi)` on the along-axis separation. The engine is point-mass, so
 the rotational DOF of `hinge`/`ball` is simply unconstrained. `gravity` +
 `integrate` drive the motion. Example: `cli/examples/chain.pwe`.
+
+### 4.9 Soft bodies — `soft` (RFC-0040)
+
+A `soft <name> { nx; ny; spacing; origin; mass; shape?; size? }` world declaration
+creates an `nx × ny` grid of dynamic particles joined by **structural**, **shear**,
+and **bend** distance springs. A `soft { body = <name>; stiffness?; damping?;
+iterations? }` system relaxes those springs by mass-weighted position relaxation,
+so the sheet keeps its spacing while deforming. It composes with `gravity` +
+`integrate`, and the mesh edges are rendered as bonds. Example:
+`cli/examples/cloth.pwe`.
 
 Unknown system kind → detail code 49.
 

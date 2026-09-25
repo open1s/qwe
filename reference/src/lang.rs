@@ -392,7 +392,16 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
             // String-valued params (`chan`, `on`, `when`) keep the raw text.
             if matches!(
                 key.as_str(),
-                "chan" | "on" | "when" | "field" | "source" | "prev" | "pool" | "other" | "type"
+                "chan"
+                    | "on"
+                    | "when"
+                    | "field"
+                    | "source"
+                    | "prev"
+                    | "pool"
+                    | "other"
+                    | "type"
+                    | "body"
             ) {
                 decl.string_params.insert(key, text);
             } else if let Some(v) = parse_scalar_number(&text) {
@@ -1284,6 +1293,58 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 apply_entity_field(field, &mut decl)?;
                             }
                             model.entities.push(decl);
+                        }
+                        Rule::soft_stmt => {
+                            let mut inner = item.into_inner();
+                            let name = inner.next().unwrap().as_str().to_string();
+                            let mut sd = crate::dsl::SoftDecl {
+                                name,
+                                nx: 8,
+                                ny: 8,
+                                spacing: 1.0,
+                                origin: Vec3::ZERO,
+                                mass: 1.0,
+                                shape: None,
+                                size: None,
+                            };
+                            for p in inner {
+                                let mut it = p.into_inner();
+                                let Some(key) = it.next().map(|k| k.as_str().to_string()) else {
+                                    continue;
+                                };
+                                let Some(rhs) = it.next() else { continue };
+                                match rhs.as_rule() {
+                                    Rule::vecN => {
+                                        let v: Vec<f64> =
+                                            rhs.into_inner().map(parse_value).collect();
+                                        sd.origin = Vec3::new(
+                                            v.first().copied().unwrap_or(0.0),
+                                            v.get(1).copied().unwrap_or(0.0),
+                                            v.get(2).copied().unwrap_or(0.0),
+                                        );
+                                    }
+                                    Rule::ident => {
+                                        if key == "shape" {
+                                            sd.shape = Some(rhs.as_str().to_string());
+                                        }
+                                    }
+                                    Rule::expr => {
+                                        let text = rhs.as_str().trim();
+                                        if let Some(v) = parse_scalar_number(text) {
+                                            match key.as_str() {
+                                                "nx" => sd.nx = v as u32,
+                                                "ny" => sd.ny = v as u32,
+                                                "spacing" => sd.spacing = v,
+                                                "mass" => sd.mass = v,
+                                                "size" => sd.size = Some(v),
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            model.softs.push(sd);
                         }
                         Rule::pool_stmt => {
                             let mut inner = item.into_inner();
@@ -3763,6 +3824,144 @@ impl EirSystem for JointSystem {
     }
 }
 
+/// RFC-0040: a distance-spring pass between two soft particles (no guard; the
+/// particles are always dynamic).
+#[allow(clippy::too_many_arguments)]
+fn soft_pair(
+    out: &mut Vec<crate::eir::Instruction>,
+    next: &mut u32,
+    a: u128,
+    b: u128,
+    rest: f64,
+    stiff: u32,
+    damping: f64,
+    zero: u32,
+    one: u32,
+    eps: u32,
+) {
+    use crate::eir::Opcode;
+    use crate::physics_eir::{field, transform_id, velocity_id};
+    let inv_a = jt_inv_mass(out, next, a, zero, one, eps);
+    let inv_b = jt_inv_mass(out, next, b, zero, one, eps);
+    let total = nb_arith(out, next, Opcode::Add, inv_a, inv_b);
+    let ax = jt_read(out, next, a, transform_id(), field::POS_X);
+    let ay = jt_read(out, next, a, transform_id(), field::POS_Y);
+    let az = jt_read(out, next, a, transform_id(), field::POS_Z);
+    let bx = jt_read(out, next, b, transform_id(), field::POS_X);
+    let by = jt_read(out, next, b, transform_id(), field::POS_Y);
+    let bz = jt_read(out, next, b, transform_id(), field::POS_Z);
+    let dx = nb_arith(out, next, Opcode::Sub, ax, bx);
+    let dy = nb_arith(out, next, Opcode::Sub, ay, by);
+    let dz = nb_arith(out, next, Opcode::Sub, az, bz);
+    let r2 = {
+        let x2 = nb_arith(out, next, Opcode::Mul, dx, dx);
+        let y2 = nb_arith(out, next, Opcode::Mul, dy, dy);
+        let z2 = nb_arith(out, next, Opcode::Mul, dz, dz);
+        let sxy = nb_arith(out, next, Opcode::Add, x2, y2);
+        nb_arith(out, next, Opcode::Add, sxy, z2)
+    };
+    let r2e = nb_arith(out, next, Opcode::Add, r2, eps);
+    let r = nb_un(Opcode::Sqrt, out, next, r2e);
+    let rest_c = nb_const(out, next, rest);
+    let err0 = nb_arith(out, next, Opcode::Sub, r, rest_c);
+    let mut err = nb_arith(out, next, Opcode::Mul, err0, stiff);
+    if damping != 0.0 {
+        let damp = nb_const(out, next, damping);
+        let vax = jt_read(out, next, a, velocity_id(), field::VEL_X);
+        let vay = jt_read(out, next, a, velocity_id(), field::VEL_Y);
+        let vaz = jt_read(out, next, a, velocity_id(), field::VEL_Z);
+        let vbx = jt_read(out, next, b, velocity_id(), field::VEL_X);
+        let vby = jt_read(out, next, b, velocity_id(), field::VEL_Y);
+        let vbz = jt_read(out, next, b, velocity_id(), field::VEL_Z);
+        let dvx = nb_arith(out, next, Opcode::Sub, vax, vbx);
+        let dvy = nb_arith(out, next, Opcode::Sub, vay, vby);
+        let dvz = nb_arith(out, next, Opcode::Sub, vaz, vbz);
+        let t1 = nb_arith(out, next, Opcode::Mul, dvx, dx);
+        let t2 = nb_arith(out, next, Opcode::Mul, dvy, dy);
+        let t3 = nb_arith(out, next, Opcode::Mul, dvz, dz);
+        let s1 = nb_arith(out, next, Opcode::Add, t1, t2);
+        let s2 = nb_arith(out, next, Opcode::Add, s1, t3);
+        let relv = nb_arith(out, next, Opcode::Div, s2, r);
+        let dv = nb_arith(out, next, Opcode::Mul, damp, relv);
+        err = nb_arith(out, next, Opcode::Add, err, dv);
+    }
+    let den = nb_arith(out, next, Opcode::Mul, r, total);
+    let scale = nb_arith(out, next, Opcode::Div, err, den);
+    let ca = nb_arith(out, next, Opcode::Mul, scale, inv_a);
+    let cb = nb_arith(out, next, Opcode::Mul, scale, inv_b);
+    let nax = nb_sub_mul(out, next, ax, dx, ca);
+    let nay = nb_sub_mul(out, next, ay, dy, ca);
+    let naz = nb_sub_mul(out, next, az, dz, ca);
+    let nbx = nb_add_mul(out, next, bx, dx, cb);
+    let nby = nb_add_mul(out, next, by, dy, cb);
+    let nbz = nb_add_mul(out, next, bz, dz, cb);
+    jt_write(out, a, transform_id(), field::POS_X, nax);
+    jt_write(out, a, transform_id(), field::POS_Y, nay);
+    jt_write(out, a, transform_id(), field::POS_Z, naz);
+    jt_write(out, b, transform_id(), field::POS_X, nbx);
+    jt_write(out, b, transform_id(), field::POS_Y, nby);
+    jt_write(out, b, transform_id(), field::POS_Z, nbz);
+}
+
+/// RFC-0040: a mass-spring soft body. Lowers one function per particle, applying
+/// (per iteration) every constraint whose lower endpoint is that particle.
+pub struct SoftSystem {
+    pub base: u128,
+    pub count: u32,
+    /// `(lo index, hi index, rest length)` — the lower endpoint owns the pass.
+    pub constraints: Vec<(u32, u32, f64)>,
+    pub stiffness: f64,
+    pub damping: f64,
+    pub iterations: u32,
+}
+impl EirSystem for SoftSystem {
+    fn name(&self) -> &'static str {
+        "physics.soft"
+    }
+    fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
+        let ret = |out: &mut Vec<crate::eir::Instruction>| {
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Return,
+                0,
+                None,
+                vec![],
+                None,
+                None,
+            ));
+        };
+        if entity < self.base || entity >= self.base + self.count as u128 {
+            ret(out);
+            return;
+        }
+        let p = (entity - self.base) as u32;
+        let mut next = 1u32;
+        let zero = nb_const(out, &mut next, 0.0);
+        let one = nb_const(out, &mut next, 1.0);
+        let eps = nb_const(out, &mut next, 1e-12);
+        let stiff = nb_const(out, &mut next, self.stiffness);
+        for _ in 0..self.iterations.max(1) {
+            for &(lo, hi, rest) in &self.constraints {
+                if lo != p {
+                    continue;
+                }
+                soft_pair(
+                    out,
+                    &mut next,
+                    self.base + lo as u128,
+                    self.base + hi as u128,
+                    rest,
+                    stiff,
+                    self.damping,
+                    zero,
+                    one,
+                    eps,
+                );
+            }
+        }
+        ret(out);
+    }
+}
+
 pub struct SpawnSystem {
     pub on: u128,
     pub base: u128,
@@ -5257,6 +5456,7 @@ pub fn build_systems(
     param_names: &std::collections::BTreeSet<String>,
     field_info: &std::collections::BTreeMap<String, (u32, u32, u32, f64)>,
     dynamic: &[u128],
+    softs: &[(String, u128, u32, u32, f64)],
 ) -> Result<Vec<Box<dyn EirSystem>>> {
     // ChanSystem uses the first entity's named-state layout for its send value.
     let state_names = state_names_by_id
@@ -5804,6 +6004,74 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     param_names: param_names.clone(),
                 }));
             }
+            // RFC-0040: mass-spring soft bodies over an nx×ny particle grid.
+            "soft" => {
+                let name = s.string_params.get("body").ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        "soft requires `body = <name>`".to_string(),
+                    )
+                })?;
+                let (_, base, nx, ny, spacing) = softs
+                    .iter()
+                    .find(|(n, ..)| n == name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        error_at(
+                            Status::Invalid,
+                            78,
+                            s.byte_offset,
+                            format!("soft references unknown body '{name}'"),
+                        )
+                    })?;
+                let idx = |i: u32, j: u32| j * nx + i;
+                let mut constraints: Vec<(u32, u32, f64)> = Vec::new();
+                let diag = spacing * std::f64::consts::SQRT_2;
+                for j in 0..ny {
+                    for i in 0..nx {
+                        if i + 1 < nx {
+                            constraints.push((idx(i, j), idx(i + 1, j), spacing));
+                        }
+                        if j + 1 < ny {
+                            constraints.push((idx(i, j), idx(i, j + 1), spacing));
+                        }
+                        if i + 1 < nx && j + 1 < ny {
+                            constraints.push((idx(i, j), idx(i + 1, j + 1), diag));
+                            constraints.push((idx(i + 1, j), idx(i, j + 1), diag));
+                        }
+                        if i + 2 < nx {
+                            constraints.push((idx(i, j), idx(i + 2, j), 2.0 * spacing));
+                        }
+                        if j + 2 < ny {
+                            constraints.push((idx(i, j), idx(i, j + 2), 2.0 * spacing));
+                        }
+                    }
+                }
+                let stiffness = s.params.get("stiffness").copied().unwrap_or(1.0);
+                let damping = s.params.get("damping").copied().unwrap_or(0.0);
+                let iterations = match s.params.get("iterations").copied() {
+                    Some(v) if (1.0..=64.0).contains(&v) && v.fract() == 0.0 => v as u32,
+                    Some(_) => {
+                        return Err(error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            "soft `iterations` must be an integer in 1..=64".to_string(),
+                        ))
+                    }
+                    None => 4,
+                };
+                out.push(Box::new(SoftSystem {
+                    base,
+                    count: nx * ny,
+                    constraints,
+                    stiffness,
+                    damping,
+                    iterations,
+                }));
+            }
             // RFC-0039: pairwise constraint joints (position relaxation).
             "joint" => {
                 let a_name = s.string_params.get("on").ok_or_else(|| {
@@ -6324,6 +6592,9 @@ fn merge_modules(
             entity_seen.insert(p.name.clone(), who.clone());
             model.pools.push(p.clone());
         }
+        for sd in &m.parsed.model.softs {
+            model.softs.push(sd.clone());
+        }
         // User-defined custom shapes merge by name (later definitions win).
         for (name, parts) in &m.parsed.model.shapes {
             model.shapes.insert(name.clone(), parts.clone());
@@ -6717,6 +6988,14 @@ pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
             entities.push(base + k as u128);
         }
     }
+    // RFC-0040: soft-body particles are dynamic entities too.
+    let softs = parsed.model.soft_ranges();
+    for (name, base, nx, ny, _) in &softs {
+        for k in 0..(*nx * *ny) {
+            entity_ids.insert(format!("{name}#{k}"), base + k as u128);
+            entities.push(base + k as u128);
+        }
+    }
     // Bodies eligible for mutual `nbody`: dynamic bodies not explicitly
     // excluded (`nbody = false`, e.g. a Moon driven by a targeted update rule).
     let nbody_entities: Vec<u128> = entities
@@ -6811,6 +7090,7 @@ pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
         &param_names,
         &field_info,
         &entities,
+        &softs,
     )?;
     let pool_slots: std::collections::BTreeSet<u128> = pools
         .iter()
@@ -6917,6 +7197,8 @@ pub struct LangRuntime {
     /// Field names that are solver-internal (`wave`'s `prev` time-shift buffer)
     /// and are not presented as physical fields.
     hidden_fields: std::collections::BTreeSet<String>,
+    /// RFC-0040: soft-body render bonds (entity-id pairs).
+    soft_bonds: Vec<(u128, u128)>,
     /// Optional peer region: when set, `send` also routes to the peer's channel.
     peer_region: Option<pwe_api::RegionId>,
     /// Execution context for `time`/`random`/`emit` (seeded → reproducible).
@@ -7012,6 +7294,12 @@ impl LangRuntime {
                 entity_names.insert(base + k as u128, format!("{name}#{k}"));
             }
         }
+        // RFC-0040: soft particles are `<body>#<k>`.
+        for (name, base, nx, ny, _) in compiled.parsed.model.soft_ranges() {
+            for k in 0..(nx * ny) {
+                entity_names.insert(base + k as u128, format!("{name}#{k}"));
+            }
+        }
         let mut router = ChannelRouter::new(region);
         for &cid in &channel_ids {
             router.channel(ChannelAddr::new(region, ChannelId(cid as u64)), 1);
@@ -7026,6 +7314,7 @@ impl LangRuntime {
             .filter(|s| s.kind == "wave")
             .filter_map(|s| s.string_params.get("prev").cloned())
             .collect();
+        let soft_bonds = compiled.parsed.model.soft_bonds();
         Ok(Self {
             scene,
             program,
@@ -7033,6 +7322,7 @@ impl LangRuntime {
             clock: 0,
             sim_dt,
             hidden_fields,
+            soft_bonds,
             region,
             jit,
             jit_key,
@@ -7145,6 +7435,9 @@ impl LangRuntime {
             frame
                 .fields
                 .retain(|f| !self.hidden_fields.contains(&f.name));
+        }
+        if !self.soft_bonds.is_empty() {
+            frame.bonds = self.soft_bonds.clone();
         }
         frame
     }
@@ -9021,6 +9314,36 @@ mod tests {
                    entity b { position=(1,0,0) mass=1 } } \
                    systems { joint { on = a; other = b; type = cone } }";
         assert!(LangRuntime::compile(bad).is_err(), "cone must be rejected");
+    }
+
+    /// RFC-0040: a soft-body grid keeps its spacing and falls under gravity.
+    #[test]
+    fn soft_body_falls_and_keeps_spacing() {
+        let src = "world { gravity=(0,-9.81,0) \
+                   soft cloth { nx=4; ny=4; spacing=1.0; origin=(0,5,0); mass=0.1 } } \
+                   systems { gravity { gravity_y=-9.81; dt=0.01 } \
+                             integrate { dt=0.01 } \
+                             soft { body=cloth; stiffness=1.0; iterations=6 } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        let p = |rt: &LangRuntime, id: u128| {
+            rt.scene
+                .get(EntityId(id))
+                .unwrap()
+                .transform
+                .unwrap()
+                .position
+        };
+        rt.step_cross_n(1).unwrap();
+        let (a, b) = (p(&rt, 1), p(&rt, 2));
+        let d = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2) + (b.z - a.z).powi(2)).sqrt();
+        assert!((d - 1.0).abs() < 1e-6, "spacing preserved: {d}");
+        // The whole sheet falls under gravity (top row starts at y = 5+3 = 8).
+        rt.step_cross_n(50).unwrap();
+        assert!(p(&rt, 1).y < 8.0 - 0.5, "sheet fell: {}", p(&rt, 1).y);
+        // And it stays cohesive (spacing still ~1).
+        let (a, b) = (p(&rt, 1), p(&rt, 2));
+        let d = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2) + (b.z - a.z).powi(2)).sqrt();
+        assert!((d - 1.0).abs() < 0.05, "cohesive after falling: {d}");
     }
 
     #[test]
