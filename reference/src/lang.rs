@@ -3420,8 +3420,14 @@ impl EirSystem for WatchSystem {
 pub struct SpawnSystem {
     pub on: u128,
     pub base: u128,
+    /// Pool size (the runtime scan range).
     pub count: u32,
     pub limbs: [u32; 4],
+    /// Slots to activate per emission (batch), default 1.
+    pub per_step: u32,
+    /// When set, emit only on steps where `step % every == phase` (phase).
+    pub every: Option<u64>,
+    pub phase: u64,
 }
 impl EirSystem for SpawnSystem {
     fn name(&self) -> &'static str {
@@ -3443,25 +3449,78 @@ impl EirSystem for SpawnSystem {
             return;
         }
         let mut next_id = 1u32;
+        // Optional phase gate: emit only when `step % every == phase`.
+        let mut gate: Option<(u32, usize)> = None;
+        if let Some(n) = self.every {
+            let step_reg = next_id;
+            next_id += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Step,
+                step_reg,
+                Some(crate::eir::ValueType::F64),
+                vec![],
+                None,
+                None,
+            ));
+            let n_reg = const_reg(n as f64, &mut next_id, out);
+            let rem = binary(crate::eir::Opcode::Rem, step_reg, n_reg, &mut next_id, out);
+            let phase_reg = const_reg(self.phase as f64, &mut next_id, out);
+            let skip = next_id;
+            next_id += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Ne,
+                skip,
+                Some(crate::eir::ValueType::Bool),
+                vec![rem, phase_reg],
+                None,
+                None,
+            ));
+            let gi = out.len();
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::CondBr,
+                0,
+                None,
+                vec![skip, 0, 0],
+                None,
+                None,
+            ));
+            gate = Some((skip, gi));
+        }
+        // Fixed operands: pool base limbs + pool size; emitted `per_step` times.
         let mut operands = Vec::with_capacity(5);
         for limb in self.limbs {
             operands.push(const_u64_reg(limb as u64, &mut next_id, out));
         }
         operands.push(const_u64_reg(self.count as u64, &mut next_id, out));
-        let slot_reg = next_id;
-        out.push(crate::physics_eir::instr(
-            crate::eir::Opcode::SpawnInto,
-            slot_reg,
-            Some(crate::eir::ValueType::F64),
-            operands,
-            None,
-            Some(crate::physics_eir::cr(
-                entity,
-                crate::physics_eir::state_id(),
-                0,
-            )),
-        ));
-        ret(out);
+        for _ in 0..self.per_step.max(1) {
+            let slot_reg = next_id;
+            next_id += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::SpawnInto,
+                slot_reg,
+                Some(crate::eir::ValueType::F64),
+                operands.clone(),
+                None,
+                Some(crate::physics_eir::cr(
+                    entity,
+                    crate::physics_eir::state_id(),
+                    0,
+                )),
+            ));
+        }
+        match gate {
+            Some((skip, gi)) => {
+                // Body block ends in a terminator; the CondBr skips to a second
+                // Return (the same idiom the `update` gate uses).
+                ret(out);
+                let ret_idx = out.len();
+                ret(out);
+                if let Some(ins) = out.get_mut(gi) {
+                    ins.operands = vec![skip, ret_idx as u32, (gi + 1) as u32];
+                }
+            }
+            None => ret(out),
+        }
     }
 }
 
@@ -5296,11 +5355,39 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                 while entity_ids.contains_key(&format!("{pool}#{count}")) {
                     count += 1;
                 }
+                let per_step = match s.params.get("count").copied() {
+                    Some(v) if v >= 1.0 && v <= 1024.0 && v.fract() == 0.0 => v as u32,
+                    Some(_) => {
+                        return Err(error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            "spawn `count` must be an integer in 1..=1024".to_string(),
+                        ))
+                    }
+                    None => 1,
+                };
+                let every = parse_every(&s.params, s.byte_offset)?;
+                let phase = match s.params.get("phase").copied() {
+                    Some(v) if v.fract() == 0.0 && v >= 0.0 => v as u64,
+                    Some(_) => {
+                        return Err(error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            "spawn `phase` must be a non-negative integer".to_string(),
+                        ))
+                    }
+                    None => 0,
+                };
                 out.push(Box::new(SpawnSystem {
                     on: caller,
                     base,
                     count,
                     limbs: crate::eir::u128_limbs(base),
+                    per_step,
+                    every,
+                    phase,
                 }));
             }
             // RFC-0038: `despawn { on = <pool>; when = <expr> }` — deactivate
@@ -8348,6 +8435,42 @@ mod tests {
         let mut rt3 = LangRuntime::compile(src3).unwrap();
         rt3.step_cross().unwrap();
         assert!(!rt3.scene.get(EntityId(2)).unwrap().active);
+    }
+
+    /// RFC-0038: `spawn` batches (`count = n`) and phases (`every`/`phase`).
+    #[test]
+    fn pool_spawn_batch_and_phase() {
+        let count_active =
+            |rt: &LangRuntime| rt.scene.entities.values().filter(|e| e.active).count();
+        // Batch: three slots per step.
+        let batch = "world { gravity=(0,0,0) entity e { state = (x = 1.0) } \
+                     pool p[6] { state = (x = 0.0) } } \
+                     systems { spawn { on = e; pool = p; count = 3 } }";
+        let mut rt = LangRuntime::compile(batch).unwrap();
+        rt.step_cross().unwrap();
+        assert_eq!(count_active(&rt), 1 + 3);
+        rt.step_cross().unwrap();
+        assert_eq!(count_active(&rt), 1 + 6);
+        // Phased: emit only on even steps.
+        let phased = "world { gravity=(0,0,0) entity e { state = (x = 1.0) } \
+                      pool p[6] { state = (x = 0.0) } } \
+                      systems { spawn { on = e; pool = p; every = 2 } }";
+        let mut rt = LangRuntime::compile(phased).unwrap();
+        rt.step_cross().unwrap(); // step 0 -> emit
+        assert_eq!(count_active(&rt), 1 + 1);
+        rt.step_cross().unwrap(); // step 1 -> skip
+        assert_eq!(count_active(&rt), 1 + 1);
+        rt.step_cross().unwrap(); // step 2 -> emit
+        assert_eq!(count_active(&rt), 1 + 2);
+        // Phase offset: `every = 2; phase = 1` emits on odd steps.
+        let offset = "world { gravity=(0,0,0) entity e { state = (x = 1.0) } \
+                      pool p[6] { state = (x = 0.0) } } \
+                      systems { spawn { on = e; pool = p; every = 2; phase = 1 } }";
+        let mut rt = LangRuntime::compile(offset).unwrap();
+        rt.step_cross().unwrap(); // step 0 -> skip
+        assert_eq!(count_active(&rt), 1);
+        rt.step_cross().unwrap(); // step 1 -> emit
+        assert_eq!(count_active(&rt), 1 + 1);
     }
 
     #[test]

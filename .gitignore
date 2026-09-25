@@ -3,3 +3,4 @@
 /.zvec-grep/
 /graphify-out/
 **/*.rs.bk
+**/*.pweb

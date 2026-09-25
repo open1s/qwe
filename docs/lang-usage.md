@@ -297,8 +297,10 @@ systems {
 * All slots start inactive. Inactive slots are skipped by user systems (their
   per-entity functions begin with `active()` guard) and hidden from the render
   view; `despawn` still runs on them to clear the flag.
-* `spawn` activates the lowest-id free slot (`0` when full) and copies the
-  caller's state; `active()` reads the current entity's flag (0/1).
+* `spawn` activates the lowest-id free slots and copies the caller's state:
+  `count = n` emits up to `n` slots per step (batch), and `every = k` /
+  `phase = m` restrict emission to steps where `step % k == m` (phased).
+  `active()` reads the current entity's flag (0/1).
 * `active` is world state: it is hashed and snapshotted (old snapshots restore
   with every entity active). Everything is deterministic and byte-identical
   across the interpreter and JIT.
@@ -324,7 +326,7 @@ systems {
 | `diffuse` | `field`, `rate` | Explicit diffusion `T += rate·∇²T` (Jacobi sweep, exactly conservative). |
 | `poisson` | `field`, `source?`, `iters`, `scale?` | Gauss–Seidel relaxation of `∇²φ = ρ·scale`. |
 | `wave` | `field`, `prev`, `velocity`, `dt`, `damping?`, `absorb?`, `absorb_width?` | Second-order leapfrog wave equation (§4.5). |
-| `spawn` | `on`, `pool` | Activate one free pool slot per caller/step and copy the caller's state (§3.4). |
+| `spawn` | `on`, `pool`, `count?`, `every?`, `phase?` | Activate free pool slots per caller/step and copy the caller's state; `count` = slots per emission (batch), `every`/`phase` gate emission to `step % every == phase` (§3.4). |
 | `despawn` | `on`, `when` | Deactivate every pool slot where `when` holds (§3.4). |
 
 Unknown system kind → detail code 49.
