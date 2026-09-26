@@ -36,17 +36,17 @@ systems {
   # upper arm: centre at L1/2 along q1, oriented by q1
   update { on = link1; dt = 1.0
     let q1 = 1.1 * sin(6.283185307179586 * t / 40.0)
-    x = (0.5 * L1 * cos(q1) - x) + 0.0
-    y = (0.5 * L1 * sin(q1) - y) + 0.0
-    z = (0.0 - z) + 0.0
-    ang = (q1 - ang) + 0.0
+    x = 0.5 * L1 * cos(q1)
+    y = 0.5 * L1 * sin(q1)
+    z = 0.0
+    ang = q1
   }
   # elbow at the end of the upper arm
   update { on = elbow; dt = 1.0
     let q1 = 1.1 * sin(6.283185307179586 * t / 40.0)
-    x = (L1 * cos(q1) - x) + 0.0
-    y = (L1 * sin(q1) - y) + 0.0
-    z = (0.0 - z) + 0.0
+    x = L1 * cos(q1)
+    y = L1 * sin(q1)
+    z = 0.0
   }
   # forearm: centre between the elbow and the forward-kinematics tip
   update { on = link2; dt = 1.0
@@ -54,17 +54,17 @@ systems {
     let q2 = 0.9 * sin(6.283185307179586 * t / 40.0 + 1.5)
     let tipx = robotics.planar2_x(L1, L2, q1, q2)
     let tipy = robotics.planar2_y(L1, L2, q1, q2)
-    x = (0.5 * (L1 * cos(q1) + tipx) - x) + 0.0
-    y = (0.5 * (L1 * sin(q1) + tipy) - y) + 0.0
-    z = (0.0 - z) + 0.0
-    ang = ((q1 + q2) - ang) + 0.0
+    x = 0.5 * (L1 * cos(q1) + tipx)
+    y = 0.5 * (L1 * sin(q1) + tipy)
+    z = 0.0
+    ang = (q1 + q2)
   }
   # tool at the end effector (forward kinematics)
   update { on = tool; dt = 1.0
     let q1 = 1.1 * sin(6.283185307179586 * t / 40.0)
     let q2 = 0.9 * sin(6.283185307179586 * t / 40.0 + 1.5)
-    x = (robotics.planar2_x(L1, L2, q1, q2) - x) + 0.0
-    y = (robotics.planar2_y(L1, L2, q1, q2) - y) + 0.0
-    z = (0.0 - z) + 0.0
+    x = robotics.planar2_x(L1, L2, q1, q2)
+    y = robotics.planar2_y(L1, L2, q1, q2)
+    z = 0.0
   }
 }

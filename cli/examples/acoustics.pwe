@@ -24,25 +24,25 @@ systems {
     on = source
     dt = 0.5
     let _ = fset(p, 4.0, 16.0, fget(p, 4.0, 16.0) + if(t < 16.0, 0.05 * sin(6.283185307179586 * t / 4.0), 0.0))
-    y  = (60.0 * fget(p, 4.0, 16.0) - y) / 0.5 + 0.0
-    db = (acoustics.spl(max(abs(0.02 * fget(p, 4.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0
+    y = y + dt*(  (60.0 * fget(p, 4.0, 16.0) - y) / 0.5 + 0.0 )
+    db = db + dt*(  (acoustics.spl(max(abs(0.02 * fget(p, 4.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0 )
   }
   update {
     on = near
     dt = 0.5
-    y  = (60.0 * fget(p, 12.0, 16.0) - y) / 0.5 + 0.0
-    db = (acoustics.spl(max(abs(0.02 * fget(p, 12.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0
+    y = y + dt*(  (60.0 * fget(p, 12.0, 16.0) - y) / 0.5 + 0.0 )
+    db = db + dt*(  (acoustics.spl(max(abs(0.02 * fget(p, 12.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0 )
   }
   update {
     on = mid
     dt = 0.5
-    y  = (60.0 * fget(p, 20.0, 16.0) - y) / 0.5 + 0.0
-    db = (acoustics.spl(max(abs(0.02 * fget(p, 20.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0
+    y = y + dt*(  (60.0 * fget(p, 20.0, 16.0) - y) / 0.5 + 0.0 )
+    db = db + dt*(  (acoustics.spl(max(abs(0.02 * fget(p, 20.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0 )
   }
   update {
     on = far
     dt = 0.5
-    y  = (60.0 * fget(p, 28.0, 16.0) - y) / 0.5 + 0.0
-    db = (acoustics.spl(max(abs(0.02 * fget(p, 28.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0
+    y = y + dt*(  (60.0 * fget(p, 28.0, 16.0) - y) / 0.5 + 0.0 )
+    db = db + dt*(  (acoustics.spl(max(abs(0.02 * fget(p, 28.0, 16.0)), 1.0e-9)) - db) / 0.5 + 0.0 )
   }
 }

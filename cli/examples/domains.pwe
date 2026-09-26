@@ -18,11 +18,9 @@ systems {
     on = probe
     dt = 0.1
     # damped spring back to the origin
-    vx = forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0) + 0.0
-    x = vx + 0.0
-    # radiative cooling toward a 20 °C ambient (element: carbon)
-    temp = thermal.radiative_cooling(temp, 293.15, 0.9, 1.0, 1.0, 700.0) + 0.0
-    # electric potential of the probe's charge at its own position
-    potential = em.potential(chemistry.atomic_mass(6.0), x) + 0.0
+    vx = vx + dt*(  forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0) + 0.0 )
+    x = x + dt*(  vx + 0.0 )  # radiative cooling toward a 20 °C ambient (element: carbon)
+    temp = temp + dt*(  thermal.radiative_cooling(temp, 293.15, 0.9, 1.0, 1.0, 700.0) + 0.0 )  # electric potential of the probe's charge at its own position
+    potential = potential + dt*(  em.potential(chemistry.atomic_mass(6.0), x) + 0.0 )
   }
 }

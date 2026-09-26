@@ -26,6 +26,6 @@ world {
 
 systems {
   spawn   { on = emitter; pool = p }
-  update  { on = p; dt = 0.1 x = 0.0 + vx }
+  update  { on = p; dt = 0.1 x = x + dt*(  0.0 + vx ) }
   despawn { on = p; when = x > 6.0 }
 }

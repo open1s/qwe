@@ -265,10 +265,10 @@ systems {
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX - x) + 0.0
-    y = (hy - y) + 0.0
-    z = (0.0 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX
+    y = hy
+    z = 0.0
+    ang = 0.0
   }
   update { on = torso; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -276,90 +276,90 @@ systems {
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
     let lean = 0.05
-    x = (bodyX - x) + 0.0
-    y = (hy+0.29 - y) + 0.0
-    z = (0.0 - z) + 0.0
-    ang = (lean - ang) + 0.0
+    x = bodyX
+    y = hy+0.29
+    z = 0.0
+    ang = lean
   }
   update { on = head; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 - x) + 0.0
-    y = (hy + 0.58 + 0.16 - y) + 0.0
-    z = (0.0 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX + 0.03
+    y = hy + 0.58 + 0.16
+    z = 0.0
+    ang = 0.0
   }
   update { on = neck; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.02 - x) + 0.0
-    y = (hy + 0.58 - 0.02 - y) + 0.0
-    z = (0.0 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX + 0.02
+    y = hy + 0.58 - 0.02
+    z = 0.0
+    ang = 0.0
   }
   update { on = eyeL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.130 - x) + 0.0
-    y = (hy + 0.58 + 0.16 + 0.03 - y) + 0.0
-    z = (0.058 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX + 0.03 + 0.130
+    y = hy + 0.58 + 0.16 + 0.03
+    z = 0.058
+    ang = 0.0
   }
   update { on = browL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.142 - x) + 0.0
-    y = (hy + 0.58 + 0.16 + 0.078 - y) + 0.0
-    z = (0.058 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX + 0.03 + 0.142
+    y = hy + 0.58 + 0.16 + 0.078
+    z = 0.058
+    ang = 0.0
   }
   update { on = eyeR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.130 - x) + 0.0
-    y = (hy + 0.58 + 0.16 + 0.03 - y) + 0.0
-    z = (-0.058 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX + 0.03 + 0.130
+    y = hy + 0.58 + 0.16 + 0.03
+    z = -0.058
+    ang = 0.0
   }
   update { on = browR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.142 - x) + 0.0
-    y = (hy + 0.58 + 0.16 + 0.078 - y) + 0.0
-    z = (-0.058 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX + 0.03 + 0.142
+    y = hy + 0.58 + 0.16 + 0.078
+    z = -0.058
+    ang = 0.0
   }
   update { on = nose; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.160 - x) + 0.0
-    y = (hy + 0.58 + 0.16 - 0.010 - y) + 0.0
-    z = (0.0 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX + 0.03 + 0.160
+    y = hy + 0.58 + 0.16 - 0.010
+    z = 0.0
+    ang = 0.0
   }
   update { on = mouth; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
     let bodyX = 1.6 * sin(6.283185307179586 * t / 90.0)
     let bob = 0.035 * cos(2.0 * ph)
     let hy = 1.05 + bob
-    x = (bodyX + 0.03 + 0.148 - x) + 0.0
-    y = (hy + 0.58 + 0.16 - 0.058 - y) + 0.0
-    z = (0.0 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX + 0.03 + 0.148
+    y = hy + 0.58 + 0.16 - 0.058
+    z = 0.0
+    ang = 0.0
   }
   update { on = shoulderL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -376,10 +376,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (bodyX - x) + 0.0
-    y = (sy - y) + 0.0
-    z = (0.19 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX
+    y = sy
+    z = 0.19
+    ang = 0.0
   }
   update { on = upperarmL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -396,10 +396,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (bodyX + 0.5 * 0.4 * sin(ss) - x) + 0.0
-    y = (sy - 0.5 * 0.4 * cos(ss) - y) + 0.0
-    z = (0.19 - z) + 0.0
-    ang = (ss - ang) + 0.0
+    x = bodyX + 0.5 * 0.4 * sin(ss)
+    y = sy - 0.5 * 0.4 * cos(ss)
+    z = 0.19
+    ang = ss
   }
   update { on = elbowL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -416,10 +416,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (ex - x) + 0.0
-    y = (ey - y) + 0.0
-    z = (0.19 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = ex
+    y = ey
+    z = 0.19
+    ang = 0.0
   }
   update { on = forearmL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -436,10 +436,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (ex + 0.5 * 0.34 * sin(sa) - x) + 0.0
-    y = (ey - 0.5 * 0.34 * cos(sa) - y) + 0.0
-    z = (0.19 - z) + 0.0
-    ang = (sa - ang) + 0.0
+    x = ex + 0.5 * 0.34 * sin(sa)
+    y = ey - 0.5 * 0.34 * cos(sa)
+    z = 0.19
+    ang = sa
   }
   update { on = wristL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -456,10 +456,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (wx - x) + 0.0
-    y = (wy - y) + 0.0
-    z = (0.19 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = wx
+    y = wy
+    z = 0.19
+    ang = 0.0
   }
   update { on = palmL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -476,10 +476,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (wx + 0.5 * 0.09 * sin(sr) - x) + 0.0
-    y = (wy - 0.5 * 0.09 * cos(sr) - y) + 0.0
-    z = (0.19 - z) + 0.0
-    ang = (sr - ang) + 0.0
+    x = wx + 0.5 * 0.09 * sin(sr)
+    y = wy - 0.5 * 0.09 * cos(sr)
+    z = 0.19
+    ang = sr
   }
   update { on = fL0a; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -497,10 +497,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (px + 0.5 * 0.06 * sin(a1) - x) + 0.0
-    y = (py - 0.5 * 0.06 * cos(a1) - y) + 0.0
-    z = (0.19 + (-0.042) - z) + 0.0
-    ang = (a1 - ang) + 0.0
+    x = px + 0.5 * 0.06 * sin(a1)
+    y = py - 0.5 * 0.06 * cos(a1)
+    z = 0.19 + (-0.042)
+    ang = a1
   }
   update { on = fL0j; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -518,10 +518,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx - x) + 0.0
-    y = (jy - y) + 0.0
-    z = (0.19 + (-0.042) - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = jx
+    y = jy
+    z = 0.19 + (-0.042)
+    ang = 0.0
   }
   update { on = fL0b; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -539,10 +539,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx + 0.5 * 0.05 * sin(a2) - x) + 0.0
-    y = (jy - 0.5 * 0.05 * cos(a2) - y) + 0.0
-    z = (0.19 + (-0.042) - z) + 0.0
-    ang = (a2 - ang) + 0.0
+    x = jx + 0.5 * 0.05 * sin(a2)
+    y = jy - 0.5 * 0.05 * cos(a2)
+    z = 0.19 + (-0.042)
+    ang = a2
   }
   update { on = fL1a; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -560,10 +560,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (px + 0.5 * 0.06 * sin(a1) - x) + 0.0
-    y = (py - 0.5 * 0.06 * cos(a1) - y) + 0.0
-    z = (0.19 + (-0.014) - z) + 0.0
-    ang = (a1 - ang) + 0.0
+    x = px + 0.5 * 0.06 * sin(a1)
+    y = py - 0.5 * 0.06 * cos(a1)
+    z = 0.19 + (-0.014)
+    ang = a1
   }
   update { on = fL1j; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -581,10 +581,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx - x) + 0.0
-    y = (jy - y) + 0.0
-    z = (0.19 + (-0.014) - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = jx
+    y = jy
+    z = 0.19 + (-0.014)
+    ang = 0.0
   }
   update { on = fL1b; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -602,10 +602,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx + 0.5 * 0.05 * sin(a2) - x) + 0.0
-    y = (jy - 0.5 * 0.05 * cos(a2) - y) + 0.0
-    z = (0.19 + (-0.014) - z) + 0.0
-    ang = (a2 - ang) + 0.0
+    x = jx + 0.5 * 0.05 * sin(a2)
+    y = jy - 0.5 * 0.05 * cos(a2)
+    z = 0.19 + (-0.014)
+    ang = a2
   }
   update { on = fL2a; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -623,10 +623,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (px + 0.5 * 0.06 * sin(a1) - x) + 0.0
-    y = (py - 0.5 * 0.06 * cos(a1) - y) + 0.0
-    z = (0.19 + (0.014) - z) + 0.0
-    ang = (a1 - ang) + 0.0
+    x = px + 0.5 * 0.06 * sin(a1)
+    y = py - 0.5 * 0.06 * cos(a1)
+    z = 0.19 + (0.014)
+    ang = a1
   }
   update { on = fL2j; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -644,10 +644,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx - x) + 0.0
-    y = (jy - y) + 0.0
-    z = (0.19 + (0.014) - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = jx
+    y = jy
+    z = 0.19 + (0.014)
+    ang = 0.0
   }
   update { on = fL2b; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -665,10 +665,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx + 0.5 * 0.05 * sin(a2) - x) + 0.0
-    y = (jy - 0.5 * 0.05 * cos(a2) - y) + 0.0
-    z = (0.19 + (0.014) - z) + 0.0
-    ang = (a2 - ang) + 0.0
+    x = jx + 0.5 * 0.05 * sin(a2)
+    y = jy - 0.5 * 0.05 * cos(a2)
+    z = 0.19 + (0.014)
+    ang = a2
   }
   update { on = fL3a; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -686,10 +686,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (px + 0.5 * 0.06 * sin(a1) - x) + 0.0
-    y = (py - 0.5 * 0.06 * cos(a1) - y) + 0.0
-    z = (0.19 + (0.042) - z) + 0.0
-    ang = (a1 - ang) + 0.0
+    x = px + 0.5 * 0.06 * sin(a1)
+    y = py - 0.5 * 0.06 * cos(a1)
+    z = 0.19 + (0.042)
+    ang = a1
   }
   update { on = fL3j; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -707,10 +707,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx - x) + 0.0
-    y = (jy - y) + 0.0
-    z = (0.19 + (0.042) - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = jx
+    y = jy
+    z = 0.19 + (0.042)
+    ang = 0.0
   }
   update { on = fL3b; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -728,10 +728,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx + 0.5 * 0.05 * sin(a2) - x) + 0.0
-    y = (jy - 0.5 * 0.05 * cos(a2) - y) + 0.0
-    z = (0.19 + (0.042) - z) + 0.0
-    ang = (a2 - ang) + 0.0
+    x = jx + 0.5 * 0.05 * sin(a2)
+    y = jy - 0.5 * 0.05 * cos(a2)
+    z = 0.19 + (0.042)
+    ang = a2
   }
   update { on = thumbLa; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -747,10 +747,10 @@ systems {
     let tb = sr + 0.9 + 0.4
     let jx = wx + (0.09 + 0.06) * sin(sr)
     let jy = wy - (0.09 + 0.06) * cos(sr)
-    x = (wx + (0.09 + 0.5 * 0.06) * sin(sr) + 0.01 - x) + 0.0
-    y = (wy - (0.09 + 0.5 * 0.06) * cos(sr) - y) + 0.0
-    z = (0.19 + 0.062 - z) + 0.0
-    ang = (ta - ang) + 0.0
+    x = wx + (0.09 + 0.5 * 0.06) * sin(sr) + 0.01
+    y = wy - (0.09 + 0.5 * 0.06) * cos(sr)
+    z = 0.19 + 0.062
+    ang = ta
   }
   update { on = thumbLb; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -766,10 +766,10 @@ systems {
     let tb = sr + 0.9 + 0.4
     let jx = wx + (0.09 + 0.06) * sin(sr)
     let jy = wy - (0.09 + 0.06) * cos(sr)
-    x = (jx + 0.5 * 0.05 * sin(tb) - x) + 0.0
-    y = (jy - 0.5 * 0.05 * cos(tb) - y) + 0.0
-    z = (0.19 + 0.070 - z) + 0.0
-    ang = (tb - ang) + 0.0
+    x = jx + 0.5 * 0.05 * sin(tb)
+    y = jy - 0.5 * 0.05 * cos(tb)
+    z = 0.19 + 0.070
+    ang = tb
   }
   update { on = hipL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -782,10 +782,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (bodyX - x) + 0.0
-    y = (hy - y) + 0.0
-    z = (0.11 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX
+    y = hy
+    z = 0.11
+    ang = 0.0
   }
   update { on = thighL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -798,10 +798,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (bodyX + 0.5 * 0.5 * sin(hh) - x) + 0.0
-    y = (hy - 0.5 * 0.5 * cos(hh) - y) + 0.0
-    z = (0.11 - z) + 0.0
-    ang = (hh - ang) + 0.0
+    x = bodyX + 0.5 * 0.5 * sin(hh)
+    y = hy - 0.5 * 0.5 * cos(hh)
+    z = 0.11
+    ang = hh
   }
   update { on = kneeL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -814,10 +814,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (kx - x) + 0.0
-    y = (ky - y) + 0.0
-    z = (0.11 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = kx
+    y = ky
+    z = 0.11
+    ang = 0.0
   }
   update { on = shinL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -830,10 +830,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (kx + 0.5 * 0.5 * sin(kk) - x) + 0.0
-    y = (ky - 0.5 * 0.5 * cos(kk) - y) + 0.0
-    z = (0.11 - z) + 0.0
-    ang = (kk - ang) + 0.0
+    x = kx + 0.5 * 0.5 * sin(kk)
+    y = ky - 0.5 * 0.5 * cos(kk)
+    z = 0.11
+    ang = kk
   }
   update { on = footL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -846,10 +846,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (ax + 0.07 - x) + 0.0
-    y = (ay - 0.03 - y) + 0.0
-    z = (0.11 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = ax + 0.07
+    y = ay - 0.03
+    z = 0.11
+    ang = 0.0
   }
   update { on = toeL; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -862,10 +862,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (ax + 0.235 - x) + 0.0
-    y = (ay - 0.03 - y) + 0.0
-    z = (0.11 - z) + 0.0
-    ang = (1.5707963267948966 - ang) + 0.0
+    x = ax + 0.235
+    y = ay - 0.03
+    z = 0.11
+    ang = 1.5707963267948966
   }
   update { on = shoulderR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -882,10 +882,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (bodyX - x) + 0.0
-    y = (sy - y) + 0.0
-    z = (0.0 - 0.19 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX
+    y = sy
+    z = 0.0 - 0.19
+    ang = 0.0
   }
   update { on = upperarmR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -902,10 +902,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (bodyX + 0.5 * 0.4 * sin(ss) - x) + 0.0
-    y = (sy - 0.5 * 0.4 * cos(ss) - y) + 0.0
-    z = (0.0 - 0.19 - z) + 0.0
-    ang = (ss - ang) + 0.0
+    x = bodyX + 0.5 * 0.4 * sin(ss)
+    y = sy - 0.5 * 0.4 * cos(ss)
+    z = 0.0 - 0.19
+    ang = ss
   }
   update { on = elbowR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -922,10 +922,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (ex - x) + 0.0
-    y = (ey - y) + 0.0
-    z = (0.0 - 0.19 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = ex
+    y = ey
+    z = 0.0 - 0.19
+    ang = 0.0
   }
   update { on = forearmR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -942,10 +942,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (ex + 0.5 * 0.34 * sin(sa) - x) + 0.0
-    y = (ey - 0.5 * 0.34 * cos(sa) - y) + 0.0
-    z = (0.0 - 0.19 - z) + 0.0
-    ang = (sa - ang) + 0.0
+    x = ex + 0.5 * 0.34 * sin(sa)
+    y = ey - 0.5 * 0.34 * cos(sa)
+    z = 0.0 - 0.19
+    ang = sa
   }
   update { on = wristR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -962,10 +962,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (wx - x) + 0.0
-    y = (wy - y) + 0.0
-    z = (0.0 - 0.19 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = wx
+    y = wy
+    z = 0.0 - 0.19
+    ang = 0.0
   }
   update { on = palmR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -982,10 +982,10 @@ systems {
     let wy = hy + 0.52 - 0.4 * cos(ss) - 0.34 * cos(sa)
     let px = wx + 0.09 * sin(sr)
     let py = wy - 0.09 * cos(sr)
-    x = (wx + 0.5 * 0.09 * sin(sr) - x) + 0.0
-    y = (wy - 0.5 * 0.09 * cos(sr) - y) + 0.0
-    z = (0.0 - 0.19 - z) + 0.0
-    ang = (sr - ang) + 0.0
+    x = wx + 0.5 * 0.09 * sin(sr)
+    y = wy - 0.5 * 0.09 * cos(sr)
+    z = 0.0 - 0.19
+    ang = sr
   }
   update { on = fR0a; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1003,10 +1003,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (px + 0.5 * 0.06 * sin(a1) - x) + 0.0
-    y = (py - 0.5 * 0.06 * cos(a1) - y) + 0.0
-    z = (0.0 - 0.19 + (-0.042) - z) + 0.0
-    ang = (a1 - ang) + 0.0
+    x = px + 0.5 * 0.06 * sin(a1)
+    y = py - 0.5 * 0.06 * cos(a1)
+    z = 0.0 - 0.19 + (-0.042)
+    ang = a1
   }
   update { on = fR0j; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1024,10 +1024,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx - x) + 0.0
-    y = (jy - y) + 0.0
-    z = (0.0 - 0.19 + (-0.042) - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = jx
+    y = jy
+    z = 0.0 - 0.19 + (-0.042)
+    ang = 0.0
   }
   update { on = fR0b; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1045,10 +1045,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx + 0.5 * 0.05 * sin(a2) - x) + 0.0
-    y = (jy - 0.5 * 0.05 * cos(a2) - y) + 0.0
-    z = (0.0 - 0.19 + (-0.042) - z) + 0.0
-    ang = (a2 - ang) + 0.0
+    x = jx + 0.5 * 0.05 * sin(a2)
+    y = jy - 0.5 * 0.05 * cos(a2)
+    z = 0.0 - 0.19 + (-0.042)
+    ang = a2
   }
   update { on = fR1a; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1066,10 +1066,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (px + 0.5 * 0.06 * sin(a1) - x) + 0.0
-    y = (py - 0.5 * 0.06 * cos(a1) - y) + 0.0
-    z = (0.0 - 0.19 + (-0.014) - z) + 0.0
-    ang = (a1 - ang) + 0.0
+    x = px + 0.5 * 0.06 * sin(a1)
+    y = py - 0.5 * 0.06 * cos(a1)
+    z = 0.0 - 0.19 + (-0.014)
+    ang = a1
   }
   update { on = fR1j; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1087,10 +1087,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx - x) + 0.0
-    y = (jy - y) + 0.0
-    z = (0.0 - 0.19 + (-0.014) - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = jx
+    y = jy
+    z = 0.0 - 0.19 + (-0.014)
+    ang = 0.0
   }
   update { on = fR1b; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1108,10 +1108,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx + 0.5 * 0.05 * sin(a2) - x) + 0.0
-    y = (jy - 0.5 * 0.05 * cos(a2) - y) + 0.0
-    z = (0.0 - 0.19 + (-0.014) - z) + 0.0
-    ang = (a2 - ang) + 0.0
+    x = jx + 0.5 * 0.05 * sin(a2)
+    y = jy - 0.5 * 0.05 * cos(a2)
+    z = 0.0 - 0.19 + (-0.014)
+    ang = a2
   }
   update { on = fR2a; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1129,10 +1129,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (px + 0.5 * 0.06 * sin(a1) - x) + 0.0
-    y = (py - 0.5 * 0.06 * cos(a1) - y) + 0.0
-    z = (0.0 - 0.19 + (0.014) - z) + 0.0
-    ang = (a1 - ang) + 0.0
+    x = px + 0.5 * 0.06 * sin(a1)
+    y = py - 0.5 * 0.06 * cos(a1)
+    z = 0.0 - 0.19 + (0.014)
+    ang = a1
   }
   update { on = fR2j; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1150,10 +1150,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx - x) + 0.0
-    y = (jy - y) + 0.0
-    z = (0.0 - 0.19 + (0.014) - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = jx
+    y = jy
+    z = 0.0 - 0.19 + (0.014)
+    ang = 0.0
   }
   update { on = fR2b; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1171,10 +1171,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx + 0.5 * 0.05 * sin(a2) - x) + 0.0
-    y = (jy - 0.5 * 0.05 * cos(a2) - y) + 0.0
-    z = (0.0 - 0.19 + (0.014) - z) + 0.0
-    ang = (a2 - ang) + 0.0
+    x = jx + 0.5 * 0.05 * sin(a2)
+    y = jy - 0.5 * 0.05 * cos(a2)
+    z = 0.0 - 0.19 + (0.014)
+    ang = a2
   }
   update { on = fR3a; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1192,10 +1192,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (px + 0.5 * 0.06 * sin(a1) - x) + 0.0
-    y = (py - 0.5 * 0.06 * cos(a1) - y) + 0.0
-    z = (0.0 - 0.19 + (0.042) - z) + 0.0
-    ang = (a1 - ang) + 0.0
+    x = px + 0.5 * 0.06 * sin(a1)
+    y = py - 0.5 * 0.06 * cos(a1)
+    z = 0.0 - 0.19 + (0.042)
+    ang = a1
   }
   update { on = fR3j; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1213,10 +1213,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx - x) + 0.0
-    y = (jy - y) + 0.0
-    z = (0.0 - 0.19 + (0.042) - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = jx
+    y = jy
+    z = 0.0 - 0.19 + (0.042)
+    ang = 0.0
   }
   update { on = fR3b; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1234,10 +1234,10 @@ systems {
     let a2 = sr + 0.35 + 0.5
     let jx = px + 0.06 * sin(a1)
     let jy = py - 0.06 * cos(a1)
-    x = (jx + 0.5 * 0.05 * sin(a2) - x) + 0.0
-    y = (jy - 0.5 * 0.05 * cos(a2) - y) + 0.0
-    z = (0.0 - 0.19 + (0.042) - z) + 0.0
-    ang = (a2 - ang) + 0.0
+    x = jx + 0.5 * 0.05 * sin(a2)
+    y = jy - 0.5 * 0.05 * cos(a2)
+    z = 0.0 - 0.19 + (0.042)
+    ang = a2
   }
   update { on = thumbRa; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1253,10 +1253,10 @@ systems {
     let tb = sr + 0.9 + 0.4
     let jx = wx + (0.09 + 0.06) * sin(sr)
     let jy = wy - (0.09 + 0.06) * cos(sr)
-    x = (wx + (0.09 + 0.5 * 0.06) * sin(sr) + 0.01 - x) + 0.0
-    y = (wy - (0.09 + 0.5 * 0.06) * cos(sr) - y) + 0.0
-    z = (0.0 - 0.19 + 0.062 - z) + 0.0
-    ang = (ta - ang) + 0.0
+    x = wx + (0.09 + 0.5 * 0.06) * sin(sr) + 0.01
+    y = wy - (0.09 + 0.5 * 0.06) * cos(sr)
+    z = 0.0 - 0.19 + 0.062
+    ang = ta
   }
   update { on = thumbRb; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1272,10 +1272,10 @@ systems {
     let tb = sr + 0.9 + 0.4
     let jx = wx + (0.09 + 0.06) * sin(sr)
     let jy = wy - (0.09 + 0.06) * cos(sr)
-    x = (jx + 0.5 * 0.05 * sin(tb) - x) + 0.0
-    y = (jy - 0.5 * 0.05 * cos(tb) - y) + 0.0
-    z = (0.0 - 0.19 + 0.070 - z) + 0.0
-    ang = (tb - ang) + 0.0
+    x = jx + 0.5 * 0.05 * sin(tb)
+    y = jy - 0.5 * 0.05 * cos(tb)
+    z = 0.0 - 0.19 + 0.070
+    ang = tb
   }
   update { on = hipR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1288,10 +1288,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (bodyX - x) + 0.0
-    y = (hy - y) + 0.0
-    z = (0.0 - 0.11 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = bodyX
+    y = hy
+    z = 0.0 - 0.11
+    ang = 0.0
   }
   update { on = thighR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1304,10 +1304,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (bodyX + 0.5 * 0.5 * sin(hh) - x) + 0.0
-    y = (hy - 0.5 * 0.5 * cos(hh) - y) + 0.0
-    z = (0.0 - 0.11 - z) + 0.0
-    ang = (hh - ang) + 0.0
+    x = bodyX + 0.5 * 0.5 * sin(hh)
+    y = hy - 0.5 * 0.5 * cos(hh)
+    z = 0.0 - 0.11
+    ang = hh
   }
   update { on = kneeR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1320,10 +1320,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (kx - x) + 0.0
-    y = (ky - y) + 0.0
-    z = (0.0 - 0.11 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = kx
+    y = ky
+    z = 0.0 - 0.11
+    ang = 0.0
   }
   update { on = shinR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1336,10 +1336,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (kx + 0.5 * 0.5 * sin(kk) - x) + 0.0
-    y = (ky - 0.5 * 0.5 * cos(kk) - y) + 0.0
-    z = (0.0 - 0.11 - z) + 0.0
-    ang = (kk - ang) + 0.0
+    x = kx + 0.5 * 0.5 * sin(kk)
+    y = ky - 0.5 * 0.5 * cos(kk)
+    z = 0.0 - 0.11
+    ang = kk
   }
   update { on = footR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1352,10 +1352,10 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (ax + 0.07 - x) + 0.0
-    y = (ay - 0.03 - y) + 0.0
-    z = (0.0 - 0.11 - z) + 0.0
-    ang = (0.0 - ang) + 0.0
+    x = ax + 0.07
+    y = ay - 0.03
+    z = 0.0 - 0.11
+    ang = 0.0
   }
   update { on = toeR; dt = 1.0
     let ph = 6.283185307179586 * t / 30.0
@@ -1368,9 +1368,9 @@ systems {
     let ky = hy - 0.5 * cos(hh)
     let ax = bodyX + 0.5 * sin(hh) + 0.5 * sin(kk)
     let ay = hy - 0.5 * cos(hh) - 0.5 * cos(kk)
-    x = (ax + 0.235 - x) + 0.0
-    y = (ay - 0.03 - y) + 0.0
-    z = (0.0 - 0.11 - z) + 0.0
-    ang = (1.5707963267948966 - ang) + 0.0
+    x = ax + 0.235
+    y = ay - 0.03
+    z = 0.0 - 0.11
+    ang = 1.5707963267948966
   }
 }

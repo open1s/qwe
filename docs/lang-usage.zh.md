@@ -132,8 +132,8 @@ systems {
   update { on = m; dt = 0.01
     let k = 12.0       # 弹簧常数
     let c = 0.4        # 阻尼
-    vx = (0.0 - k*x - c*vx) + 0.0   # vx' = -k·x - c·vx
-    x  = vx                          # x'  = vx
+    vx = vx + dt*(0.0 - k*x - c*vx)  # vx' = -k·x - c·vx
+    x  = x + dt*(vx)                  # x'  = vx
   }
 }
 ```
@@ -141,14 +141,16 @@ systems {
 运行：`pwe run osc.pweb --steps 200` → `state = [0.7226, -1.1813]`。质量块来回摆动，
 能量缓慢衰减（阻尼），最终趋于 0。
 
-**最关键的一条规则**：`slot = expr` 表示 **`slot += dt · expr`** —— 它是*积分*，
-不是赋值。因此：
+**最关键的一条规则**：`slot = expr` 就是普通的**赋值** —— 每步该槽取这个值。
+要*积分*导数，用 `dt` 把步长写出来：
 
-* `vx = (0 - k*x - c*vx) + 0.0` ⇒ `vx += dt·(−k·x − c·vx)`（加速度）。
-* `x = vx` ⇒ `x += dt·vx`（速度）。
+* `vx = vx + dt*(0.0 - k*x - c*vx)` ⇒ `vx += dt·(−k·x − c·vx)`（加速度）。
+* `x = x + dt*(vx)` ⇒ `x += dt·vx`（速度）。
 
-**赋值 vs 积分**：要把某槽*设为*某值，用**赋值惯用法** `slot = (target - slot)`
-（令 `dt = 1` 即为精确写入）。当你从其他量计算位置时会用到。
+`deriv slot = rate` 是 `slot += dt·rate` 的简写（`integrate`、`+=` 同义）；
+而 `deriv(E)` 算子即增量 `dt·E`，故 `x = x + deriv(vx)` 与 `x = x + dt*(vx)` 等价。
+
+**赋值 vs 积分**：既然 `=` 是赋值，写常量就是 `slot = target`，无需任何惯用法。
 
 **一个立刻要记住的坑**：`let` 的名字不能是 `t`、`pi`、`e`、`sN`（detail 67）。
 
@@ -168,8 +170,8 @@ world {
 }
 systems {
   update { on = m; dt = 0.01
-    vx = (0.0 - k*x - c*vx) + 0.0
-    x  = vx
+    vx = vx + dt*(0.0 - k*x - c*vx)
+    x  = x + dt*(vx)
   }
 }
 ```
@@ -193,8 +195,8 @@ world { gravity = (0, 0, 0)
   entity b { state = (x = -1.0, vx = 0.0) }
 }
 systems {
-  update { on = a; dt = 0.01 vx = (0.0 - 8.0*(x - @b.x)) + 0.0   x = vx }
-  update { on = b; dt = 0.01 vx = (0.0 - 8.0*(x - @a.x)) + 0.0   x = vx }
+  update { on = a; dt = 0.01 vx = vx + dt*(0.0 - 8.0*(x - @b.x))   x = x + dt*(vx) }
+  update { on = b; dt = 0.01 vx = vx + dt*(0.0 - 8.0*(x - @a.x))   x = x + dt*(vx) }
 }
 ```
 
@@ -267,10 +269,10 @@ world { gravity = (0, 0, 0)
 systems {
   spawn  { on = emitter; pool = p; count = 2; every = 1 }   # 每步 2 个
   update { on = p; dt = 0.1
-    vx = 0.0 + 2.0*(neighbor_mean(0, 0.5) - x) + 0.0         # 简易内聚
-    vy = 0.0 - 9.81*0.1 + 0.0                                # 重力
-    x = vx
-    y = vy
+    vx = vx + dt*(2.0*(neighbor_mean(0, 0.5) - x))         # 简易内聚
+    vy = vy + dt*(0.0 - 9.81*0.1)                                # 重力
+    x = x + dt*(vx)
+    y = y + dt*(vy)
   }
   despawn { on = p; when = y < -10.0 }                       # 回收
 }
@@ -330,7 +332,7 @@ world { gravity = (0, 0, 0) entity e { state = (x = 0.0) } }
 systems {
   update { on = e; dt = 0.1
     let fired = at(0.5)     # 时间窗 [t, t+dt) 覆盖 0.5 的那一步为 1.0
-    x = fired + 0.0         # 用赋值惯用法 (fired - x) 可设为精确值
+    x = x + dt*(fired)      # 把触发积分进 x
     emit(1.0, x)            # 追加事件（kind=1, payload=x）
   }
 }
@@ -390,7 +392,7 @@ entity ball { position = (0, 5, 0) sphere = 0.3; color = 0xFF6B4A; opacity = 1.0
 
 ```pwe
 funcs { accel(k, x) { 0.0 - k * x } }
-systems { update { on = m; dt = 0.01 vx = accel(k, x) + 0.0   x = vx } }
+systems { update { on = m; dt = 0.01 vx = vx + dt*(accel(k, x))   x = x + dt*(vx) } }
 ```
 
 函数接收参数、返回标量；可调用其他函数与内建，但**无法访问世界**（无实体、无
@@ -407,7 +409,7 @@ funcs { twice(v) { 2.0 * v } }
 # main.pwe
 import "pkg/util"                      # 在 cli/examples/ 中应写 "../../std/…"
 world { gravity = (0,0,0) entity e { state = (x=0.0) } }
-systems { update { on = e; dt = 0.1 x = util.twice(1.0) - x + 0.0 } }
+systems { update { on = e; dt = 0.1 x = util.twice(1.0) } }
 ```
 
 **单位**可选，但能在编译期抓错：
@@ -415,7 +417,7 @@ systems { update { on = e; dt = 0.1 x = util.twice(1.0) - x + 0.0 } }
 ```pwe
 params { k = 12.0 [1/s^2] }
 entity m { state = (x = 1.0 [m], vx = 0.0 [m/s]) }
-update { on = m; dt = 0.01 [s] vx = accel(k, x) + 0.0 }
+update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 ```
 
 ## 常见错误（现象 → 原因 → 修法）
@@ -424,7 +426,7 @@ update { on = m; dt = 0.01 [s] vx = accel(k, x) + 0.0 }
 | --- | --- | --- |
 | 物体完全不动 | 状态型物体却用了 `gravity`/`integrate`（或反之） | 只选一种模型（§0.6） |
 | 规则“没效果” | 缺 `on =`（作用于每个物体）或左侧不是有效槽 | 加 `on = <实体\|池>`；核对槽/字段名 |
-| 数值总是异常增长 | `slot = expr` 是**积分** | 要赋值写 `slot = (target - slot)` |
+| 数值总是不变 | `slot = expr` 是**赋值** | 要积分写 `slot = slot + dt*(rate)`（或 `deriv slot = rate`） |
 | `update` 作用到错误物体 | 没写 `on =` → 作用于**每个**动态物体 | 加 `on = <实体\|池>` |
 | 一步内运动怪 | 系统顺序 / 读取时机 | 顺序：力 → 积分 → 约束；读取在步开始 |
 | `nbody` 没反应 | 质量不在 `state[6]`（或物体是分量型） | `state = (px,py,pz,vx,vy,vz,m)` |
@@ -620,8 +622,8 @@ world {
 }
 systems {
   update { on = a; dt = 0.1
-    pos.x = vel.x          # 点分左侧：pos.x += dt·vel.x
-    vel.y = 0.0 - 9.81 + 0.0
+    pos.x = pos.x + dt*(vel.x)   # 点分左侧：pos.x += dt·vel.x
+    vel.y = vel.y + dt*(0.0 - 9.81)
   }
 }
 ```
@@ -637,7 +639,7 @@ systems {
 # 第 3 部分 —— 语义与坑点
 
 * **时间是显式的**：每条规则的表达式都乘以 `dt`；`t` 每步前进 `dt`。
-* **`slot = expr` 是积分**（`slot += dt·expr`）。赋值用 `slot = (target - slot)`。
+* **`slot = expr` 是赋值**。积分用 `slot = slot + dt*(rate)` 或 `deriv slot = rate`（即 `slot += dt·rate`）。
 * **系统参数按名称识别**（针对该系统种类）；其它任何 `name = <表达式>`（含 `name = 1.0`）都是规则。
 * **读取**：同一系统函数内，所有读取在（子）步开始处采样一次（规则同时）；跨系统时，
   后跑的系统能看到先跑系统的写入——故顺序重要。场读取能看到同一步写入。
@@ -765,8 +767,8 @@ error 48: system 'update' is missing required parameter 'dt'
 import "std/forces"
 import "std/thermal"
 update { on = body; dt = 0.1
-    vx   = forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0) + 0.0
-    temp = thermal.newton_cooling(temp, 293.15, 0.05) + 0.0
+    vx   = vx + dt*(forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0))
+    temp = temp + dt*(thermal.newton_cooling(temp, 293.15, 0.05))
 }
 ```
 

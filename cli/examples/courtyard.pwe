@@ -93,15 +93,15 @@ systems {
     let phase = pn - floor(pn)
     let bob = 0.02 * sin(4.0 * pi * phase)
     let yaw = atan2(nvx, nvz)
-    x = speed * nvx
-    z = speed * nvz
-    y = (hh + bob - y)
-    vx = nvx - vx
-    vz = nvz - vz
-    dx = (wx - dx)
-    dz = (wz - dz)
-    ry = (yaw - ry)
-    rx = (0.12 - rx)
+    x = x + dt*(  speed * nvx )
+    z = z + dt*(  speed * nvz )
+    y = hh + bob
+    vx = vx + dt*(  nvx - vx )
+    vz = vz + dt*(  nvz - vz )
+    dx = wx
+    dz = wz
+    ry = yaw
+    rx = 0.12
   }
   update { on = p2; dt = 1.0
     let speed = 0.048
@@ -125,15 +125,15 @@ systems {
     let phase = pn - floor(pn)
     let bob = 0.02 * sin(4.0 * pi * phase)
     let yaw = atan2(nvx, nvz)
-    x = speed * nvx
-    z = speed * nvz
-    y = (hh + bob - y)
-    vx = nvx - vx
-    vz = nvz - vz
-    dx = (wx - dx)
-    dz = (wz - dz)
-    ry = (yaw - ry)
-    rx = (0.12 - rx)
+    x = x + dt*(  speed * nvx )
+    z = z + dt*(  speed * nvz )
+    y = hh + bob
+    vx = vx + dt*(  nvx - vx )
+    vz = vz + dt*(  nvz - vz )
+    dx = wx
+    dz = wz
+    ry = yaw
+    rx = 0.12
   }
   update { on = p3; dt = 1.0
     let speed = 0.056
@@ -157,15 +157,15 @@ systems {
     let phase = pn - floor(pn)
     let bob = 0.02 * sin(4.0 * pi * phase)
     let yaw = atan2(nvx, nvz)
-    x = speed * nvx
-    z = speed * nvz
-    y = (hh + bob - y)
-    vx = nvx - vx
-    vz = nvz - vz
-    dx = (wx - dx)
-    dz = (wz - dz)
-    ry = (yaw - ry)
-    rx = (0.12 - rx)
+    x = x + dt*(  speed * nvx )
+    z = z + dt*(  speed * nvz )
+    y = hh + bob
+    vx = vx + dt*(  nvx - vx )
+    vz = vz + dt*(  nvz - vz )
+    dx = wx
+    dz = wz
+    ry = yaw
+    rx = 0.12
   }
   update { on = p1_lleg; dt = 1.0
     let hx = @p1.vx
@@ -176,10 +176,10 @@ systems {
     let tx = @p1.x + hx*sw + (-hz)*0.09
     let tz = @p1.z + hz*sw + hx*0.09
     let ty = @p1.y + 0.3
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p1.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p1.ry
   }
   update { on = p1_rleg; dt = 1.0
     let hx = @p1.vx
@@ -190,10 +190,10 @@ systems {
     let tx = @p1.x + hx*sw + (-hz)*-0.09
     let tz = @p1.z + hz*sw + hx*-0.09
     let ty = @p1.y + 0.3
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p1.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p1.ry
   }
   update { on = p1_larm; dt = 1.0
     let hx = @p1.vx
@@ -204,10 +204,10 @@ systems {
     let tx = @p1.x + hx*sw + (-hz)*0.17
     let tz = @p1.z + hz*sw + hx*0.17
     let ty = @p1.y + 0.78
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p1.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p1.ry
   }
   update { on = p1_rarm; dt = 1.0
     let hx = @p1.vx
@@ -218,10 +218,10 @@ systems {
     let tx = @p1.x + hx*sw + (-hz)*-0.17
     let tz = @p1.z + hz*sw + hx*-0.17
     let ty = @p1.y + 0.78
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p1.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p1.ry
   }
   update { on = p2_lleg; dt = 1.0
     let hx = @p2.vx
@@ -232,10 +232,10 @@ systems {
     let tx = @p2.x + hx*sw + (-hz)*0.09
     let tz = @p2.z + hz*sw + hx*0.09
     let ty = @p2.y + 0.3
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p2.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p2.ry
   }
   update { on = p2_rleg; dt = 1.0
     let hx = @p2.vx
@@ -246,10 +246,10 @@ systems {
     let tx = @p2.x + hx*sw + (-hz)*-0.09
     let tz = @p2.z + hz*sw + hx*-0.09
     let ty = @p2.y + 0.3
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p2.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p2.ry
   }
   update { on = p2_larm; dt = 1.0
     let hx = @p2.vx
@@ -260,10 +260,10 @@ systems {
     let tx = @p2.x + hx*sw + (-hz)*0.17
     let tz = @p2.z + hz*sw + hx*0.17
     let ty = @p2.y + 0.78
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p2.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p2.ry
   }
   update { on = p2_rarm; dt = 1.0
     let hx = @p2.vx
@@ -274,10 +274,10 @@ systems {
     let tx = @p2.x + hx*sw + (-hz)*-0.17
     let tz = @p2.z + hz*sw + hx*-0.17
     let ty = @p2.y + 0.78
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p2.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p2.ry
   }
   update { on = p3_lleg; dt = 1.0
     let hx = @p3.vx
@@ -288,10 +288,10 @@ systems {
     let tx = @p3.x + hx*sw + (-hz)*0.09
     let tz = @p3.z + hz*sw + hx*0.09
     let ty = @p3.y + 0.3
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p3.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p3.ry
   }
   update { on = p3_rleg; dt = 1.0
     let hx = @p3.vx
@@ -302,10 +302,10 @@ systems {
     let tx = @p3.x + hx*sw + (-hz)*-0.09
     let tz = @p3.z + hz*sw + hx*-0.09
     let ty = @p3.y + 0.3
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p3.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p3.ry
   }
   update { on = p3_larm; dt = 1.0
     let hx = @p3.vx
@@ -316,10 +316,10 @@ systems {
     let tx = @p3.x + hx*sw + (-hz)*0.17
     let tz = @p3.z + hz*sw + hx*0.17
     let ty = @p3.y + 0.78
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p3.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p3.ry
   }
   update { on = p3_rarm; dt = 1.0
     let hx = @p3.vx
@@ -330,9 +330,9 @@ systems {
     let tx = @p3.x + hx*sw + (-hz)*-0.17
     let tz = @p3.z + hz*sw + hx*-0.17
     let ty = @p3.y + 0.78
-    x = (tx - x)
-    z = (tz - z)
-    y = (ty - y)
-    ry = (@p3.ry - ry)
+    x = tx
+    z = tz
+    y = ty
+    ry = @p3.ry
   }
 }

@@ -39,6 +39,6 @@ systems {
 
     # Assign (not integrate) the centre temperature into the probe's state:
     # center += dt·(−center + T) = T.
-    center = 0.0 - center + fget(temperature, 8.0, 8.0)
+    center = center + dt*(  0.0 - center + fget(temperature, 8.0, 8.0) )
   }
 }

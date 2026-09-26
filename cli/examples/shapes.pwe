@@ -37,5 +37,5 @@ world {
   entity gem   { state = (x =  3.0, y = 1.0, z = 0.0) shape = gem;   color = 0xFF6B4A; glow = 0.6; size = 0.9 }
 }
 systems {
-  update { on = drone; dt = 1.0 x = (0.0 - x) + 0.0 y = (1.0 - y) + 0.0 z = (0.0 - z) + 0.0 }
+  update { on = drone; dt = 1.0 x = 0.0 y = 1.0 z = 0.0 }
 }

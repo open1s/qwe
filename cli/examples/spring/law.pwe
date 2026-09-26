@@ -4,9 +4,9 @@ world { }
 
 systems {
   update { on = osc; dt = 0.02 [s]
-    vx = 0.0 - k * x - damping * vx
-    x = vx
-    beat = if(periodic(1.0), 1.0, 0.0)
-    kick = if(at(5.0), 1.0, 0.0)
+    vx = vx + dt*(  0.0 - k * x - damping * vx )
+    x = x + dt*(  vx )
+    beat = beat + dt*(  if(periodic(1.0), 1.0, 0.0) )
+    kick = kick + dt*(  if(at(5.0), 1.0, 0.0) )
   }
 }

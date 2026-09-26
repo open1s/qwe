@@ -41,9 +41,9 @@ systems {
     let dxn = nearest_dx()
     let dyn = nearest_dy()
     let inv = 1.0 / (1.0 + dxn * dxn + dyn * dyn)
-    vx = 1.5 * (if(n > 0.0, cx, 0.0) - x) + 0.8 * (if(n > 0.0, ax, 0.0) - vx) - 6.0 * dxn * inv - 0.05 * x - 0.5 * vx
-    vy = 1.5 * (if(n > 0.0, cy, 0.0) - y) + 0.8 * (if(n > 0.0, ay, 0.0) - vy) - 6.0 * dyn * inv - 0.05 * y - 0.5 * vy
-    x = vx
-    y = vy
+    vx = vx + dt*(  1.5 * (if(n > 0.0, cx, 0.0) - x) + 0.8 * (if(n > 0.0, ax, 0.0) - vx) - 6.0 * dxn * inv - 0.05 * x - 0.5 * vx )
+    vy = vy + dt*(  1.5 * (if(n > 0.0, cy, 0.0) - y) + 0.8 * (if(n > 0.0, ay, 0.0) - vy) - 6.0 * dyn * inv - 0.05 * y - 0.5 * vy )
+    x = x + dt*(  vx )
+    y = y + dt*(  vy )
   }
 }

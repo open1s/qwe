@@ -243,8 +243,10 @@ pub struct SystemDecl {
     pub params: std::collections::BTreeMap<String, f64>,
     /// Vector-valued params (e.g. `linear` rows `row0 = (a, b, c)`).
     pub vec_params: std::collections::BTreeMap<String, Vec<f64>>,
-    /// Scalar expression rules (the nonlinear `update` system): slot → expr text.
+    /// ODE derivative rules (`deriv slot = rate`): integrated as slot += dt·rate.
     pub update: std::collections::BTreeMap<String, String>,
+    /// Assignment rules (`slot = expr`): written each step.
+    pub assigns: std::collections::BTreeMap<String, String>,
     /// `let name = expr` local bindings in the `update` system, in order.
     pub update_stmts: Vec<UpdateStmt>,
     /// Ident-valued params (e.g. `chan = ping`).
@@ -398,25 +400,37 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
             .push(UpdateStmt::Let("_".to_string(), text));
         return Ok(());
     }
-    // Dotted LHS (`pos.x = expr`): a struct-field rule (resolved per entity).
+    if first.as_rule() == Rule::ode_stmt || first.as_rule() == Rule::add_stmt {
+        let is_ode = first.as_rule() == Rule::ode_stmt;
+        let mut it = first.into_inner();
+        if is_ode {
+            let _ = it.next();
+        }
+        let lhs = it.next().unwrap();
+        let key = lhs.as_str().trim().to_string();
+        let expr = it.next().unwrap();
+        if expr.as_rule() != Rule::expr {
+            return Err(error(Status::Invalid, 55));
+        }
+        decl.update.insert(key, expr.as_str().trim().to_string());
+        return Ok(());
+    }
     if first.as_rule() == Rule::dot_lhs {
         let key = first.as_str().trim().to_string();
         let rhs = inner.next().unwrap();
         if rhs.as_rule() != Rule::expr {
             return Err(error(Status::Invalid, 55));
         }
-        decl.update.insert(key, rhs.as_str().trim().to_string());
+        decl.assigns.insert(key, rhs.as_str().trim().to_string());
         return Ok(());
     }
-    // Dynamic slot LHS: `s[expr] = expr` writes the State slot at a runtime
-    // index; the raw LHS text is resolved per-entity during lowering.
     if first.as_rule() == Rule::slot_lhs {
-        let key = first.as_str().to_string();
+        let key = first.as_str().trim().to_string();
         let rhs = inner.next().unwrap();
         if rhs.as_rule() != Rule::expr {
             return Err(error(Status::Invalid, 55));
         }
-        decl.update.insert(key, rhs.as_str().trim().to_string());
+        decl.assigns.insert(key, rhs.as_str().trim().to_string());
         return Ok(());
     }
     let key = first.as_str().trim().to_string();
@@ -447,11 +461,10 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
                 if numeric_param_keys(&decl.kind).contains(&key.as_str()) {
                     decl.params.insert(key, v);
                 } else {
-                    // `name = <number>` with an unrecognised name is a rule.
-                    decl.update.insert(key, text);
+                    decl.assigns.insert(key, text);
                 }
             } else {
-                decl.update.insert(key, text);
+                decl.assigns.insert(key, text);
             }
         }
         Rule::ident => {
@@ -881,6 +894,17 @@ fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
     let mut args = Vec::new();
     for a in it {
         args.push(build_expr(a)?);
+    }
+    // `deriv(E)` is an internal operator: the integration increment `dt * E`.
+    if name == "deriv" {
+        if args.len() != 1 {
+            return Err(error(Status::Invalid, 59));
+        }
+        let inner = args.pop().unwrap();
+        return Ok(Expr::Mul(
+            Box::new(Expr::Name("dt".to_string())),
+            Box::new(inner),
+        ));
     }
     let static_name = match name.as_str() {
         "sin" => "sin",
@@ -1491,6 +1515,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         params: std::collections::BTreeMap::new(),
                         vec_params: std::collections::BTreeMap::new(),
                         update: std::collections::BTreeMap::new(),
+                        assigns: std::collections::BTreeMap::new(),
                         update_stmts: Vec::new(),
                         param_units: std::collections::BTreeMap::new(),
                         namespace: String::new(),
@@ -1596,9 +1621,12 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
 pub struct UpdateSystem {
     /// Slot rules, with raw LHS (`sN` or a named slot) resolved per-entity.
     pub rules: Vec<(String, Expr)>,
-    /// Dynamic slot rules `s[idx] = expr`: the State slot at a runtime index,
-    /// written via `ReadSlotDyn`/`WriteSlotDyn`.
+    /// Dynamic ODE rules `s[idx] += dt·expr`.
     pub dyn_rules: Vec<(Expr, Expr)>,
+    /// Assignment rules (`slot = expr`).
+    pub assigns: Vec<(String, Expr)>,
+    /// Dynamic assignments `s[idx] = expr`.
+    pub dyn_assigns: Vec<(Expr, Expr)>,
     /// `let name = expr` local bindings, computed sequentially before the rules.
     pub lets: Vec<LetStmt>,
     /// Fallback slot count (max positional `sN` index + 1) when no named layout.
@@ -1712,9 +1740,17 @@ impl EirSystem for UpdateSystem {
         for (idx_expr, _) in &self.dyn_rules {
             expr_slot_span(idx_expr, &sn, &mut let_max, &mut let_any);
         }
-        // A rule RHS may read an own slot that no rule writes (e.g. `x = vx`
-        // reads `vx`); cover those reads too, or they would lower to register 0.
         for (_, expr) in &self.rules {
+            expr_slot_span(expr, &sn, &mut let_max, &mut let_any);
+        }
+        for (lhs, expr) in &self.assigns {
+            if let Some(idx) = numeric_slot(lhs).or_else(|| sn.get(lhs).copied()) {
+                slots = slots.max(idx + 1);
+            }
+            expr_slot_span(expr, &sn, &mut let_max, &mut let_any);
+        }
+        for (idx_expr, expr) in &self.dyn_assigns {
+            expr_slot_span(idx_expr, &sn, &mut let_max, &mut let_any);
             expr_slot_span(expr, &sn, &mut let_max, &mut let_any);
         }
         if let_any {
@@ -1727,6 +1763,16 @@ impl EirSystem for UpdateSystem {
         let mut prop_refs: std::collections::BTreeSet<(String, PropKind)> = Default::default();
         let mut named_refs: std::collections::BTreeSet<(String, usize)> = Default::default();
         for (_, expr) in &self.rules {
+            collect_refs(
+                expr,
+                &mut refs,
+                &mut prop_refs,
+                &mut named_refs,
+                &self.entity_map,
+                &self.state_names_by_id,
+            );
+        }
+        for (_, expr) in &self.assigns {
             collect_refs(
                 expr,
                 &mut refs,
@@ -1831,6 +1877,17 @@ impl EirSystem for UpdateSystem {
             // The results feed the slot rules below.
             let mut locals: std::collections::BTreeMap<String, u32> = Default::default();
             let mut next_id = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+            let dt_reg = next_id;
+            next_id += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Const,
+                dt_reg,
+                Some(crate::eir::ValueType::F64),
+                vec![],
+                Some(crate::eir::Immediate::F64(dt_sub)),
+                None,
+            ));
+            locals.insert("dt".to_string(), dt_reg);
             let parts = LowerParts {
                 slot_regs: &slot_regs,
                 ref_regs: &ref_regs,
@@ -1973,6 +2030,90 @@ impl EirSystem for UpdateSystem {
                     0,
                     None,
                     vec![ri, new],
+                    None,
+                    Some(crate::physics_eir::cr(
+                        entity,
+                        crate::physics_eir::state_id(),
+                        0,
+                    )),
+                ));
+            }
+            for (lhs, expr) in &self.assigns {
+                let idx = match numeric_slot(lhs).or_else(|| sn.get(lhs).copied()) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                if idx >= slots {
+                    continue;
+                }
+                let val = lower_expr(expr, &ctx, &mut next_id, out);
+                let val = match gate_reg {
+                    Some(g) => {
+                        let v = next_id;
+                        next_id += 1;
+                        out.push(crate::physics_eir::instr(
+                            crate::eir::Opcode::Select,
+                            v,
+                            Some(crate::eir::ValueType::F64),
+                            vec![g, val, slot_regs[idx]],
+                            None,
+                            None,
+                        ));
+                        v
+                    }
+                    None => val,
+                };
+                out.push(crate::physics_eir::instr(
+                    crate::eir::Opcode::WriteView,
+                    0,
+                    None,
+                    vec![val],
+                    None,
+                    Some(crate::physics_eir::cr(
+                        entity,
+                        crate::physics_eir::state_id(),
+                        crate::physics_eir::field::state_slot(idx),
+                    )),
+                ));
+            }
+            for (idx_expr, expr) in &self.dyn_assigns {
+                let ri = lower_expr(idx_expr, &ctx, &mut next_id, out);
+                let val = lower_expr(expr, &ctx, &mut next_id, out);
+                let val = match gate_reg {
+                    Some(g) => {
+                        let cur = next_id;
+                        next_id += 1;
+                        out.push(crate::physics_eir::instr(
+                            crate::eir::Opcode::ReadSlotDyn,
+                            cur,
+                            Some(crate::eir::ValueType::F64),
+                            vec![ri],
+                            None,
+                            Some(crate::physics_eir::cr(
+                                entity,
+                                crate::physics_eir::state_id(),
+                                0,
+                            )),
+                        ));
+                        let v = next_id;
+                        next_id += 1;
+                        out.push(crate::physics_eir::instr(
+                            crate::eir::Opcode::Select,
+                            v,
+                            Some(crate::eir::ValueType::F64),
+                            vec![g, val, cur],
+                            None,
+                            None,
+                        ));
+                        v
+                    }
+                    None => val,
+                };
+                out.push(crate::physics_eir::instr(
+                    crate::eir::Opcode::WriteSlotDyn,
+                    0,
+                    None,
+                    vec![ri, val],
                     None,
                     Some(crate::physics_eir::cr(
                         entity,
@@ -2287,6 +2428,17 @@ impl EirSystem for Rk4System {
                 // unroll with break/continue gating per stage.
                 let mut locals: std::collections::BTreeMap<String, u32> = Default::default();
                 let mut next_id = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+                let dt_reg = next_id;
+                next_id += 1;
+                out.push(crate::physics_eir::instr(
+                    crate::eir::Opcode::Const,
+                    dt_reg,
+                    Some(crate::eir::ValueType::F64),
+                    vec![],
+                    Some(crate::eir::Immediate::F64(self.dt)),
+                    None,
+                ));
+                locals.insert("dt".to_string(), dt_reg);
                 let parts = LowerParts {
                     slot_regs: &work,
                     ref_regs: &ref_regs,
@@ -5685,7 +5837,9 @@ pub fn build_systems(
                 };
                 match op {
                     ChanOp::Send => {
-                        let value = if let Some(t) = s.update.get("value") {
+                        let value = if let Some(t) =
+                            s.assigns.get("value").or_else(|| s.update.get("value"))
+                        {
                             parse_expr_str(t)?
                         } else {
                             Expr::Const(param(&s.params, "value", s.byte_offset, &s.kind)?)
@@ -5751,14 +5905,29 @@ pub fn build_systems(
                         rules.push((key.clone(), expr));
                     }
                 }
-                if rules.is_empty() && dyn_rules.is_empty() {
+                let mut assigns: Vec<(String, Expr)> = Vec::new();
+                let mut dyn_assigns: Vec<(Expr, Expr)> = Vec::new();
+                for (key, text) in &s.assigns {
+                    if key.starts_with('s') && key.contains('[') {
+                        let inner = key
+                            .trim_start_matches('s')
+                            .trim_start_matches('[')
+                            .trim_end_matches(']');
+                        dyn_assigns.push((parse_expr_str(inner)?, parse_expr_str(text)?));
+                    } else {
+                        assigns.push((key.clone(), parse_expr_str(text)?));
+                    }
+                }
+                if rules.is_empty()
+                    && dyn_rules.is_empty()
+                    && assigns.is_empty()
+                    && dyn_assigns.is_empty()
+                {
                     return Err(error_at(
                         Status::Invalid,
                         55,
                         s.byte_offset,
-                        "update system has no slot rules (a pure-number RHS such as `s0 = 1.0` \
-becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
-                            .to_string(),
+                        "update system has no rules; add `slot = <expr>`".to_string(),
                     ));
                 }
                 // `let name = expr` local bindings, in order.
@@ -5778,6 +5947,8 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                 out.push(Box::new(UpdateSystem {
                     rules,
                     dyn_rules,
+                    assigns,
+                    dyn_assigns,
                     lets,
                     slots_hint: 0,
                     dt: param(&s.params, "dt", s.byte_offset, &s.kind)?,
@@ -5853,14 +6024,19 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                 }));
             }
             "invariant" => {
-                let expr_text = s.update.get("expr").cloned().ok_or_else(|| {
-                    error_at(
-                        Status::Invalid,
-                        48,
-                        s.byte_offset,
-                        "invariant is missing required parameter 'expr'",
-                    )
-                })?;
+                let expr_text = s
+                    .assigns
+                    .get("expr")
+                    .or_else(|| s.update.get("expr"))
+                    .cloned()
+                    .ok_or_else(|| {
+                        error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            "invariant is missing required parameter 'expr'",
+                        )
+                    })?;
                 let expr = parse_expr_str(&expr_text)?;
                 let lets = to_let_stmts(&s.update_stmts)?;
                 let only = match s.string_params.get("on") {
@@ -5888,14 +6064,19 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                 }));
             }
             "watch" => {
-                let expr_text = s.update.get("expr").cloned().ok_or_else(|| {
-                    error_at(
-                        Status::Invalid,
-                        48,
-                        s.byte_offset,
-                        "watch is missing required parameter 'expr'".to_string(),
-                    )
-                })?;
+                let expr_text = s
+                    .assigns
+                    .get("expr")
+                    .or_else(|| s.update.get("expr"))
+                    .cloned()
+                    .ok_or_else(|| {
+                        error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            "watch is missing required parameter 'expr'".to_string(),
+                        )
+                    })?;
                 let expr = parse_expr_str(&expr_text)?;
                 let mem = param(&s.params, "mem", s.byte_offset, &s.kind)? as usize;
                 let into = param(&s.params, "into", s.byte_offset, &s.kind)? as usize;
@@ -7084,7 +7265,7 @@ fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
                 }
             }
             if matches!(sys.kind.as_str(), "invariant" | "watch") {
-                if let Some(text) = sys.update.get("expr") {
+                if let Some(text) = sys.assigns.get("expr").or_else(|| sys.update.get("expr")) {
                     if let Ok(e) = parse_expr_str(text) {
                         env.of_expr(&e)?;
                     }
@@ -7128,9 +7309,10 @@ fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
                 params: &parsed.model.param_units,
                 locals: Default::default(),
             };
+            env.locals.insert("dt".to_string(), Some(dt_dim));
             env.of_lets(&lets)?;
             let rhs = env.of_expr(&expr)?;
-            // `slot += dt · expr` with dt in seconds.
+            // `deriv slot = expr` integrates as `slot += dt · expr`.
             let scaled: MaybeDim = rhs.map(|d| d.times(dt_dim));
             if unify(lhs, scaled).is_err() {
                 let lhs_name = match lhs {
@@ -7148,6 +7330,53 @@ fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
                     format!(
                         "rule `{text}` is not dimensionally consistent: `{lhs_name}` expected, \
 right-hand side (`dt·expr`) has `{rhs_name}`"
+                    ),
+                ));
+            }
+        }
+        // Assignment rules (`slot = expr`) are checked without the implicit
+        // `dt` scaling that derivative rules carry.
+        for (key, text) in &sys.assigns {
+            let idx = if key.starts_with('s') && key.contains('[') {
+                continue;
+            } else if let Some(i) = numeric_slot(key) {
+                i
+            } else {
+                match name_to_slot.get(key) {
+                    Some(i) => *i,
+                    None => continue,
+                }
+            };
+            let lhs = slot_dims.get(idx).copied().flatten();
+            let expr = match parse_expr_str(text) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let mut env = DimEnv {
+                slot_dims: &slot_dims,
+                name_to_slot: &name_to_slot,
+                params: &parsed.model.param_units,
+                locals: Default::default(),
+            };
+            env.locals.insert("dt".to_string(), Some(dt_dim));
+            env.of_lets(&lets)?;
+            let rhs = env.of_expr(&expr)?;
+            if unify(lhs, rhs).is_err() {
+                let lhs_name = match lhs {
+                    Some(d) => d.name(),
+                    None => "1".to_string(),
+                };
+                let rhs_name = match rhs {
+                    Some(d) => d.name(),
+                    None => "1".to_string(),
+                };
+                return Err(error_at(
+                    Status::Invalid,
+                    77,
+                    sys.byte_offset,
+                    format!(
+                        "rule `{text}` is not dimensionally consistent: `{lhs_name}` expected, \
+right-hand side has `{rhs_name}`"
                     ),
                 ));
             }
@@ -7547,7 +7776,12 @@ impl LangRuntime {
                 .systems
                 .iter()
                 .filter(|s| s.kind == "invariant")
-                .filter_map(|s| s.update.get("expr").cloned())
+                .filter_map(|s| {
+                    s.assigns
+                        .get("expr")
+                        .or_else(|| s.update.get("expr"))
+                        .cloned()
+                })
                 .collect(),
         })
     }
@@ -8122,7 +8356,7 @@ mod tests {
     /// preceding scalar parameter's value (`dt = 0.0005\n # note`).
     #[test]
     fn comment_in_update_does_not_swallow_scalar_param() {
-        let src = "world { gravity=(0,0,0) entity reactor { state=(0,0,0,na=2.0,water=100.0,naoh=0.0,temp=300.0,h2=0.0); color=0xffb347 } }\n systems { update { on = reactor; dt = 0.0005\n # kinetics\n let k = 3.0 * exp(-900.0 / temp)\n na = -k * na * water\n temp = 260.0 * k * na * water\n } }";
+        let src = "world { gravity=(0,0,0) entity reactor { state=(0,0,0,na=2.0,water=100.0,naoh=0.0,temp=300.0,h2=0.0); color=0xffb347 } }\n systems { update { on = reactor; dt = 0.0005\n # kinetics\n let k = 3.0 * exp(-900.0 / temp)\n na = na + dt*(  -k * na * water\n ) temp = temp + dt*(  260.0 * k * na * water\n ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(10).unwrap();
         let st = rt
@@ -8397,7 +8631,7 @@ mod tests {
             world { gravity = (0,0,0) entity pop { state = (0.5, 0) } }
             systems {
                 update { dt = 0.01
-                    s0 = 1 * s0 * (1 - s0) }
+                    s0 = s0 + dt*(  1 * s0 * (1 - s0) ) }
             }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8435,8 +8669,8 @@ mod tests {
             world { gravity = (0,0,0) entity sys { state = (1, 0.5) } }
             systems {
                 update { dt = 0.001
-                    s0 = 2 * s0 - 1 * s0 * s1
-                    s1 = 1 * s0 * s1 - 1 * s1 }
+                    s0 = s0 + dt*(  2 * s0 - 1 * s0 * s1 )
+                    s1 = s1 + dt*(  1 * s0 * s1 - 1 * s1 ) }
             }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8459,9 +8693,9 @@ mod tests {
         let src = r#"
             world { gravity = (0,0,0) entity a { state = (0, 0, 0) } }
             systems { update { dt = 1
-                s0 = exp(1) - 2.718281828459045   # exp(1) = e ≈ 0 drift
-                s1 = sin(0)                        # 0
-                s2 = cos(0) - 1                    # 0
+                s0 = s0 + dt*(  exp(1) - 2.718281828459045 )  # exp(1) = e ≈ 0 drift
+                s1 = s1 + dt*(  sin(0) )  # 0
+                s2 = s2 + dt*(  cos(0) - 1 )  # 0
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8658,8 +8892,8 @@ mod tests {
                 entity earth { state = (5, 0) }                  # x = 5, vx = 0
             }
             systems { update { dt = 0.001
-                s0 = s1                                                      # x' = vx
-                s1 = -1 * (s0 - @sun.s0) / ((s0 - @sun.s0)*(s0 - @sun.s0)*sqrt((s0 - @sun.s0)*(s0 - @sun.s0)))
+                s0 = s0 + dt*(  s1 )  # x' = vx
+                s1 = s1 + dt*(  -1 * (s0 - @sun.s0) / ((s0 - @sun.s0)*(s0 - @sun.s0)*sqrt((s0 - @sun.s0)*(s0 - @sun.s0))) )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8693,8 +8927,8 @@ mod tests {
         let src = r#"
             world { gravity = (0,0,0) entity osc { state = (0, 0) } }
             systems { update { dt = 0.001
-                s0 = s1
-                s1 = -1 * s0 + 0.6 * sin(0.37 * t) }
+                s0 = s0 + dt*(  s1 )
+                s1 = s1 + dt*(  -1 * s0 + 0.6 * sin(0.37 * t) ) }
             }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8737,7 +8971,7 @@ mod tests {
         let src = r#"
             world { gravity = (0,0,0) entity a { state = (10, 0) } }
             systems { update { dt = 1
-                s0 = -0.1 * s0 } }
+                s0 = s0 + dt*(  -0.1 * s0 ) } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(10).unwrap();
@@ -8761,9 +8995,9 @@ mod tests {
         let src = r#"
             world { gravity = (0,0,0) entity c { state = (0, 0, 0) } }
             systems { update { dt = 1
-                s0 = if(s0 < 10, 1, 0)      # s0 += 1 while < 10  -> saturates at 10
-                s1 = min(0.5, 10 - s0)      # bounded increment
-                s2 = max(-1, s0 - 10)       # 0 once s0 = 10
+                s0 = s0 + dt*(  if(s0 < 10, 1, 0) )  # s0 += 1 while < 10  -> saturates at 10
+                s1 = s1 + dt*(  min(0.5, 10 - s0) )  # bounded increment
+                s2 = s2 + dt*(  max(-1, s0 - 10) )  # 0 once s0 = 10
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8788,8 +9022,8 @@ mod tests {
         let src = r#"
             world { gravity = (0,0,0) entity pend { state = (0.5, 0) } }
             systems { update { dt = 0.001
-                s0 = s1                       # θ' = ω
-                s1 = -9.81 * sin(s0)          # ω' = −(g/L)·sin(θ)
+                s0 = s0 + dt*(  s1 )  # θ' = ω
+                s1 = s1 + dt*(  -9.81 * sin(s0) )  # ω' = −(g/L)·sin(θ)
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8818,8 +9052,8 @@ mod tests {
         let src = r#"
             world { gravity = (0,0,0) entity walker { state = (0, 0) } }
             systems { update { dt = 1
-                s0 = s0 + random()          # stochastic walk
-                s1 = emit(7, s0)            # emit an ordered event each step
+                s0 = s0 + dt*(  s0 + random() )  # stochastic walk
+                s1 = s1 + dt*(  emit(7, s0) )  # emit an ordered event each step
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8858,8 +9092,8 @@ mod tests {
                 grow(v)   { s0 * (1 - s0) }
             }
             systems { update { dt = 0.01
-                s0 = clamp(grow(s0) + s0, 0.9)
-                s1 = s0 * 2
+                s0 = s0 + dt*(  clamp(grow(s0) + s0, 0.9) )
+                s1 = s1 + dt*(  s0 * 2 )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8889,8 +9123,8 @@ mod tests {
         let src = r#"
             world { gravity = (0,0,0) entity bob { state = (x = 0.5, y = 0.1) } }
             systems { update { dt = 0.01
-                x = abs(sign(@self.x)) + floor(@self.x)   # = 1 + 0 = 1
-                y = hypot(3, 4) + @self.x                  # = 5 + x
+                x = x + dt*(  abs(sign(@self.x)) + floor(@self.x) )  # = 1 + 0 = 1
+                y = y + dt*(  hypot(3, 4) + @self.x )  # = 5 + x
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8924,8 +9158,8 @@ mod tests {
                 entity probe { state = (0, 0) }
             }
             systems { update { dt = 0.01
-                s0 = @heavy.mass                       # 9
-                s1 = @heavy.position.x + @heavy.velocity.y   # 3 + 2 = 5
+                s0 = s0 + dt*(  @heavy.mass )  # 9
+                s1 = s1 + dt*(  @heavy.position.x + @heavy.velocity.y )  # 3 + 2 = 5
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8955,9 +9189,9 @@ mod tests {
                 let dy = @target.ty - @self.y
                 let dist = hypot(dx, dy)
                 let gain = min(dist * 0.1, 1.0)
-                x = dx * gain
-                y = dy * gain
-                s2 = dist
+                x = x + dt*(  dx * gain )
+                y = y + dt*(  dy * gain )
+                s2 = s2 + dt*(  dist )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -8988,8 +9222,8 @@ mod tests {
         let src = r#"
             world { gravity = (0,0,0) entity e { state = (1, 0) } }
             systems { update { dt = 0.01
-                s0 = print(s0 + 1)
-                s1 = s0 * 2
+                s0 = s0 + dt*(  print(s0 + 1) )
+                s1 = s1 + dt*(  s0 * 2 )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -9017,9 +9251,9 @@ mod tests {
             world { gravity = (0,0,0) entity a { state = (s0=0.5, 0,0,0,0,0,1.0,0) } }
             systems { update { on = a; dt = 1.0
                 let warm = s0 > 0.0
-                s1 = warm and (s0 < 1.0)
-                s2 = (s0 > 2.0) or (s0 > 0.1)
-                s3 = not (s0 > 0.0)
+                s1 = s1 + dt*(  warm and (s0 < 1.0) )
+                s2 = s2 + dt*(  (s0 > 2.0) or (s0 > 0.1) )
+                s3 = s3 + dt*(  not (s0 > 0.0) )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -9036,7 +9270,7 @@ mod tests {
         for name in ["t", "pi", "e", "s0"] {
             let src = format!(
                 "world {{ gravity=(0,0,0) entity a {{ state=(0,0,0,0,0,0,1,0); color=0x112233 }} }} \
-                 systems {{ update {{ on = a; dt = 1.0 let {name} = 1.0 s5 = {name} }} }}"
+                 systems {{ update {{ on = a; dt = 1.0 let {name} = 1.0 s5 = s5 + dt*( {name} ) }} }}"
             );
             match LangRuntime::compile(&src) {
                 Ok(_) => panic!("let {name} should be rejected"),
@@ -9054,7 +9288,7 @@ mod tests {
             systems { update { on = n; dt = 1.0
                 let g = s1
                 repeat 8 { let g = (g + s0 / g) * 0.5 }
-                s1 = g - s1
+                s1 = s1 + dt*(  g - s1 )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -9075,7 +9309,7 @@ mod tests {
             systems { update { on = n; dt = 1.0
                 let acc = s1
                 for i in 1..6 { let acc = acc + i }
-                s1 = acc - s1
+                s1 = s1 + dt*(  acc - s1 )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -9095,7 +9329,7 @@ mod tests {
                     let g = (g + s0 / g) * 0.5
                     break if (abs(g * g - s0) < 1e-12)
                 }
-                s1 = g - s1
+                s1 = s1 + dt*(  g - s1 )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -9117,7 +9351,7 @@ mod tests {
             systems { update { on = n; dt = 1.0
                 let v = s1
                 repeat 100 until (v < 4.0) { let v = v * 0.5 }
-                s1 = v - s1
+                s1 = s1 + dt*(  v - s1 )
             } }
         "#;
         let mut rt = LangRuntime::compile(until_src).unwrap();
@@ -9130,7 +9364,7 @@ mod tests {
             systems { update { on = n; dt = 1.0
                 let v = s1
                 repeat 100 while (v < 32.0) { let v = v * 2.0 }
-                s1 = v - s1
+                s1 = s1 + dt*(  v - s1 )
             } }
         "#;
         let mut rt = LangRuntime::compile(while_src).unwrap();
@@ -9151,7 +9385,7 @@ mod tests {
                     continue if (a > 2.0)
                     let a = a * 2.0
                 }
-                s1 = a - s1
+                s1 = s1 + dt*(  a - s1 )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -9174,7 +9408,7 @@ mod tests {
                     }
                     let a = a + 10.0
                 }
-                s1 = a - s1
+                s1 = s1 + dt*(  a - s1 )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -9191,7 +9425,7 @@ mod tests {
             systems { rk4 { on = n; dt = 0.01
                 let g = s1
                 repeat 8 { let g = (g + s0 / g) * 0.5 }
-                s1 = s0 - s1 * s1
+                deriv s1 =  s0 - s1 * s1
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -9227,7 +9461,7 @@ mod tests {
         let src = r#"
             world { gravity = (0,0,0) entity n { state = (s0=1e-3, s1=0.0, 0,0,0,0,1.0,0) } }
             systems { update { on = n; dt = 1.0
-                s1 = s0 * 1e2
+                s1 = s1 + dt*(  s0 * 1e2 )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -9249,7 +9483,7 @@ mod tests {
                     return abs(d)
                 }
             }
-            systems { update { on = n; dt = 1.0  s2 = norm(2.0, 1.0) } }
+            systems { update { on = n; dt = 1.0  s2 = s2 + dt*(  norm(2.0, 1.0) ) } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
@@ -9279,8 +9513,8 @@ mod tests {
                 }
             }
             systems { update { on = n; dt = 1.0
-                s1 = newton(2.0) - s1
-                s1 = newtonb(2.0) - s1
+                s1 = s1 + dt*(  newton(2.0) - s1 )
+                s1 = s1 + dt*(  newtonb(2.0) - s1 )
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -9299,7 +9533,7 @@ mod tests {
     fn function_body_requires_return() {
         let src = "world { gravity=(0,0,0) entity a { state=(0,0,0,0,0,0,1,0); color=0x112233 } } \
                    funcs { f(a) { let d = s0 * 2.0 } } \
-                   systems { update { on = a; dt = 1.0 s0 = f(1.0) } }";
+                   systems { update { on = a; dt = 1.0 s0 = s0 + dt*(  f(1.0) ) } }";
         match LangRuntime::compile(src) {
             Ok(_) => panic!("statement body without return should be rejected"),
             // The grammar requires `return`; the program-level parse fails.
@@ -9309,7 +9543,7 @@ mod tests {
         let src2 =
             "world { gravity=(0,0,0) entity a { state=(0,0,0,0,0,0,1,0); color=0x112233 } } \
                     funcs { f(a) { s0 * 2.0 } } \
-                    systems { update { on = a; dt = 1.0 s0 = f(1.0) } }";
+                    systems { update { on = a; dt = 1.0 s0 = s0 + dt*(  f(1.0) ) } }";
         LangRuntime::compile(src2).unwrap();
     }
 
@@ -9317,7 +9551,7 @@ mod tests {
     #[test]
     fn invariant_holds_when_expression_truthy() {
         let src = "world { gravity=(0,0,0) entity chem { state=(a=1.0,b=0.0) } } \
-                   systems { update { on = chem; dt = 0.01 a = 0.0 * a; b = 0.0 * b } \
+                   systems { update { on = chem; dt = 0.01 a = a + dt*(  0.0 * a ) b = b + dt*(  0.0 * b ) } \
                    invariant { on = chem; expr = (a + b) == 1.0 } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(5).unwrap();
@@ -9331,7 +9565,7 @@ mod tests {
     #[test]
     fn invariant_violation_fails_step_and_preserves_scene() {
         let src = "world { gravity=(0,0,0) entity chem { state=(a=1.0,b=0.0) } } \
-                   systems { update { on = chem; dt = 0.01 a = 0.0 - 1.0 } \
+                   systems { update { on = chem; dt = 0.01 a = a + dt*(  0.0 - 1.0 ) } \
                    invariant { on = chem; expr = (a + b) == 1.0 } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         match rt.step_cross() {
@@ -9350,7 +9584,7 @@ mod tests {
     #[test]
     fn invariant_catches_nan_state() {
         let src = "world { gravity=(0,0,0) entity chem { state=(a=0.0) } } \
-                   systems { update { on = chem; dt = 0.01 a = sqrt(0.0 - 1.0) } \
+                   systems { update { on = chem; dt = 0.01 a = a + dt*(  sqrt(0.0 - 1.0) ) } \
                    invariant { on = chem; expr = a == a } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         // The post-update check sees the NaN the step itself produced.
@@ -9369,7 +9603,7 @@ mod tests {
                    entity c { state=(x=5.0,y=0.0,z=0.0) } } \
                    systems { update { on = a; dt = 0.01 \
                      let n = neighbor_count(2.0); let d = nearest_dist() \
-                     s3 = n; s4 = d } }";
+                     s3 = s3 + dt*(  n ) s4 = s4 + dt*(  d ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
@@ -9388,13 +9622,13 @@ mod tests {
         let ok = "world { gravity=(0,0,0) params { k = 4.0 [1/s^2] } \
                   entity e { state = (x = 1.0 [m], vx = 0.0 [m/s]) } } \
                   systems { update { on = e; dt = 0.1 [s] \
-                    vx = 0.0 - k * x \n x = vx } }";
+                    vx = vx + dt*(  0.0 - k * x \n ) x = x + dt*(  vx ) } }";
         LangRuntime::compile(ok).unwrap();
 
         let bad = "world { gravity=(0,0,0) params { k = 4.0 [1/s^2] } \
                    entity e { state = (x = 1.0 [m], vx = 0.0 [m/s]) } } \
                    systems { update { on = e; dt = 0.1 [s] \
-                     x = 0.0 - k * x \n vx = vx } }";
+                     x = x + dt*(  0.0 - k * x \n ) vx = vx + dt*(  vx ) } }";
         match LangRuntime::compile(bad) {
             Ok(_) => panic!("dimension mismatch must be rejected"),
             Err(e) => assert_eq!(e.detail, 77),
@@ -9402,7 +9636,7 @@ mod tests {
 
         // Unannotated model: never errors.
         let free = "world { gravity=(0,0,0) entity e { state=(x=1.0) } } \
-                    systems { update { on = e; dt = 0.1; x = 0.0 - x } }";
+                    systems { update { on = e; dt = 0.1; x = x + dt*(  0.0 - x ) } }";
         LangRuntime::compile(free).unwrap();
     }
 
@@ -9411,7 +9645,7 @@ mod tests {
     #[test]
     fn units_cover_when_and_invariant() {
         let bad_when = "world { gravity=(0,0,0) entity e { state=(x=1.0 [m]) } } \
-                        systems { update { on = e; dt = 0.1 when = x x = 0.0 - x } }";
+                        systems { update { on = e; dt = 0.1 when = x x = x + dt*(  0.0 - x ) } }";
         match LangRuntime::compile(bad_when) {
             Ok(_) => panic!("a dimensioned `when` gate must be rejected"),
             Err(e) => assert_eq!(e.detail, 77),
@@ -9426,7 +9660,7 @@ mod tests {
         // A dimensionless gate over a dimensioned model is fine.
         let ok = "world { gravity=(0,0,0) \
                   entity e { state=(x=1.0 [m], vx=0.5 [m/s], gate=0.0) } } \
-                  systems { update { on = e; dt = 0.1 [s] when = gate > 0.0 x = vx } }";
+                  systems { update { on = e; dt = 0.1 [s] when = gate > 0.0 x = x + dt*(  vx ) } }";
         LangRuntime::compile(ok).unwrap();
     }
 
@@ -9436,8 +9670,8 @@ mod tests {
     fn scheduled_events_fire_exactly_once() {
         let src = "world { gravity=(0,0,0) entity e { state=(x=0.0, fires=0.0) } } \
                    systems { update { on = e; dt = 0.5 \
-                     x = 0.0 + 1.0 \
-                     fires = if(at(1.0), 1.0, 0.0) + if(periodic(1.0), 1.0, 0.0) } }";
+                     x = x + dt*(  0.0 + 1.0 )
+                     fires = fires + dt*(  if(at(1.0), 1.0, 0.0) + if(periodic(1.0), 1.0, 0.0) ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         // 6 steps at dt=0.5 -> t = 0, 0.5, 1.0, 1.5, 2.0, 2.5.
         rt.step_cross_n(6).unwrap();
@@ -9471,7 +9705,7 @@ mod tests {
         std::fs::write(
             dir.join("physics.pwe"),
             "world { params { G = 2.0 } }\nfuncs { thrust(m) { m * 0.5 } }\n\
-             systems { update { on = body; dt = 0.1 vx = 0.0 - G * x } }\n",
+             systems { update { on = body; dt = 0.1 vx = vx + dt*(  0.0 - G * x ) } }\n",
         )
         .unwrap();
         // Qualified access (`physics.G`, `physics.thrust`) + package entity.
@@ -9479,7 +9713,7 @@ mod tests {
             dir.join("main.pwe"),
             "world { gravity=(0,0,0)\n import \"shapes\"\n import \"physics\" }\n\
              systems { update { on = body; dt = 0.1 \
-               vx = 0.0 - physics.G * x + 0.0 * physics.thrust(2.0) } }\n",
+               vx = vx + dt*(  0.0 - physics.G * x + 0.0 * physics.thrust(2.0) ) } }\n",
         )
         .unwrap();
         let rt = LangRuntime::compile_file(&dir.join("main.pwe")).unwrap();
@@ -9490,7 +9724,7 @@ mod tests {
             dir.join("from.pwe"),
             "from \"physics\" import thrust\n\
              world { gravity=(0,0,0)\n import \"shapes\" }\n\
-             systems { update { on = body; dt = 0.1 vx = 0.0 - 0.0 * x + 0.0 * thrust(3.0) } }\n",
+             systems { update { on = body; dt = 0.1 vx = vx + dt*(  0.0 - 0.0 * x + 0.0 * thrust(3.0) ) } }\n",
         )
         .unwrap();
         LangRuntime::compile_file(&dir.join("from.pwe")).unwrap();
@@ -9788,7 +10022,7 @@ mod tests {
     #[test]
     fn bare_number_rhs_is_a_rule_not_a_parameter() {
         let src = "world { gravity=(0,0,0) entity m { state = (x = 0.0) } } \
-                   systems { update { on = m; dt = 1.0 x = 1.0 } }";
+                   systems { update { on = m; dt = 1.0 x = x + dt*(  1.0 ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(3).unwrap();
         let x = rt
@@ -9816,8 +10050,8 @@ mod tests {
           entity c { state = (pos = (x = 7.0, y = 8.0)) } \
           entity probe { state = (d = 0.0) } } \
           systems { \
-            update { on = a; dt = 1.0 pos.x = vel.x  vel.x = 0.0 + 1.0 } \
-            update { on = probe; dt = 1.0 d = (@a.pos.x - d) } }";
+            update { on = a; dt = 1.0 pos.x = pos.x + dt*(  vel.x )  vel.x = vel.x + dt*(  0.0 + 1.0 ) } \
+            update { on = probe; dt = 1.0 d = @a.pos.x } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(3).unwrap();
         let a = rt
@@ -9862,7 +10096,7 @@ mod tests {
     #[test]
     fn unresolved_bare_name_reads_zero() {
         let src = "world { gravity=(0,0,0) entity e { state=(x=0.0) } } \
-                   systems { update { on = e; dt = 0.5 x = 3.0 + zzz } }";
+                   systems { update { on = e; dt = 0.5 x = x + dt*(  3.0 + zzz ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
@@ -9907,7 +10141,7 @@ mod tests {
                   systems { diffuse { field = heat; rate = 0.1 } \
                     update { on = e; dt = 1.0 \
                       let _ = fset(heat, 2.0, 2.0, 2.0, fget(heat, 2.0, 2.0, 2.0) + 1.0) \
-                      x = 0.0 + 1.0 } }";
+                      x = x + dt*(  0.0 + 1.0 ) } }";
         let mut rt = LangRuntime::compile(d3).unwrap();
         rt.step_cross_n(12).unwrap();
         let f = rt.scene.fields.get("heat").unwrap();
@@ -9922,7 +10156,7 @@ mod tests {
                    field rho { width=5; height=5; depth=5; dx=1.0 } entity e { state=(x=0.0) } } \
                    systems { poisson { field = phi; source = rho; iters = 20 } \
                      update { on = e; dt = 1.0 \
-                       let _ = fset(rho, 2.0, 2.0, 2.0, 1.0) x = 0.0 + 1.0 } }";
+                       let _ = fset(rho, 2.0, 2.0, 2.0, 1.0) x = x + dt*(  0.0 + 1.0 ) } }";
         let mut rt = LangRuntime::compile(poi).unwrap();
         rt.step_cross_n(2).unwrap();
         let f = rt.scene.fields.get("phi").unwrap();
@@ -9992,8 +10226,8 @@ mod tests {
     fn named_slots_starting_with_s_resolve() {
         let src = "world { gravity=(0,0,0) entity e { state=(speed=0.0, s0x=0.0) } } \
                    systems { update { on = e; dt = 1.0
-                     speed = 4.0 + 0.0
-                     s0x = 9.0 + 0.0 } }";
+                     speed = speed + dt*(  4.0 + 0.0 )
+                     s0x = s0x + dt*(  9.0 + 0.0 ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
@@ -10010,7 +10244,7 @@ mod tests {
                    systems { diffuse { field = heat; rate = 0.2 } \
                      update { on = e; dt = 1.0 \
                        let _ = fset(heat, 4.0, 4.0, fget(heat, 4.0, 4.0) + 1.0) \
-                       x = 0.0 + 1.0 } }";
+                       x = x + dt*(  0.0 + 1.0 ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(10).unwrap();
         let total = rt.scene.fields.get("heat").unwrap().total();
@@ -10023,7 +10257,7 @@ mod tests {
                    field rho { width=6; height=6; dx=1.0 } entity e { state=(x=0.0) } } \
                    systems { poisson { field = phi; source = rho; iters = 40 } \
                      update { on = e; dt = 1.0 \
-                       let _ = fset(rho, 3.0, 3.0, 1.0) x = 0.0 + 1.0 } }";
+                       let _ = fset(rho, 3.0, 3.0, 1.0) x = x + dt*(  0.0 + 1.0 ) } }";
         let mut rt = LangRuntime::compile(poi).unwrap();
         rt.step_cross_n(3).unwrap();
         let f = rt.scene.fields.get("phi").unwrap();
@@ -10049,14 +10283,14 @@ mod tests {
         std::fs::write(
             dir.join("a.pwe"),
             "import \"x\" as alpha\nworld { }\nimport \"b\"\n\
-             systems { update { on = e; dt = 1.0 s0 = alpha.fx(0.0) + b.g(0.0) } }\n",
+             systems { update { on = e; dt = 1.0 s0 = s0 + dt*(  alpha.fx(0.0) + b.g(0.0) ) } }\n",
         )
         .unwrap();
         std::fs::write(
             dir.join("b.pwe"),
             "import \"a\"\nimport \"x\"\nworld { }\n\
              funcs { g(v) { v + 100.0 } }\n\
-             systems { update { on = e; dt = 1.0 s1 = x.fx(0.0) } }\n",
+             systems { update { on = e; dt = 1.0 s1 = s1 + dt*(  x.fx(0.0) ) } }\n",
         )
         .unwrap();
         std::fs::write(
@@ -10094,7 +10328,7 @@ mod tests {
     fn model_params_read_and_override() {
         let src =
             "world { gravity=(0,0,0) params { G = 10.0 } entity e { state=(x=1.0,vx=0.0) } } \
-                   systems { update { on = e; dt = 0.1; vx = 0.0 - G * x; x = vx } }";
+                   systems { update { on = e; dt = 0.1; vx = vx + dt*(  0.0 - G * x ) x = x + dt*(  vx ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         assert_eq!(rt.scene.params.get("G").copied(), Some(10.0));
         rt.step_cross_n(5).unwrap();
@@ -10134,7 +10368,7 @@ mod tests {
                      let n = neighbor_count(3.0) \
                      let mx = neighbor_mean(0.0, 3.0) \
                      let mv = neighbor_mean(3.0, 3.0) \
-                     s6 = n; s7 = mx; s8 = mv; s9 = nearest_dx(); s10 = nearest_dy() } }";
+                     s6 = s6 + dt*(  n ) s7 = s7 + dt*(  mx ) s8 = s8 + dt*(  mv ) s9 = s9 + dt*(  nearest_dx() ) s10 = s10 + dt*(  nearest_dy() ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let v = &rt
@@ -10154,7 +10388,7 @@ mod tests {
         // Alone: aggregate and offset are 0.
         let lone = "world { gravity=(0,0,0) entity only { state=(0.0,0.0,0.0) } } \
                     systems { update { on = only; dt = 1.0 \
-                      s3 = neighbor_mean(0.0, 5.0); s4 = nearest_dx() } }";
+                      s3 = s3 + dt*(  neighbor_mean(0.0, 5.0) ) s4 = s4 + dt*(  nearest_dx() ) } }";
         let mut rt = LangRuntime::compile(lone).unwrap();
         rt.step_cross_n(1).unwrap();
         let v = &rt
@@ -10176,7 +10410,7 @@ mod tests {
     fn spatial_query_rejected_in_function_body() {
         let src = "world { gravity=(0,0,0) entity a { state=(x=0.0) } } \
                    funcs { f() { neighbor_count(2.0) } } \
-                   systems { update { on = a; dt = 0.01 s3 = f() } }";
+                   systems { update { on = a; dt = 0.01 s3 = s3 + dt*(  f() ) } }";
         match LangRuntime::compile(src) {
             Ok(_) => panic!("query in a function body should be rejected"),
             Err(e) => assert_eq!(e.detail, 70),
@@ -10188,7 +10422,7 @@ mod tests {
     #[test]
     fn multiple_invariants_coexist() {
         let src = "world { gravity=(0,0,0) entity chem { state=(a=1.0,b=0.0) } } \
-                   systems { update { on = chem; dt = 0.01 a = 0.0 * a; b = 0.0 * b } \
+                   systems { update { on = chem; dt = 0.01 a = a + dt*(  0.0 * a ) b = b + dt*(  0.0 * b ) } \
                    invariant { on = chem; expr = (a + b) == 1.0 } \
                    invariant { on = chem; expr = a >= 0.0 } }";
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -10199,7 +10433,7 @@ mod tests {
     #[test]
     fn noise_is_seeded_and_reproducible() {
         let src = "world { gravity=(0,0,0) entity e { state=(s0=0.0) } } \
-                   systems { update { on = e; dt = 1.0 let n = noise() s1 = n } }";
+                   systems { update { on = e; dt = 1.0 let n = noise() s1 = s1 + dt*(  n ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let v = rt
@@ -10232,7 +10466,7 @@ mod tests {
                      let l = vlen(3.0, 4.0, 0.0) \
                      let d = vdot(1.0, 0.0, 0.0, 0.0, 1.0, 0.0) \
                      let dist = vdist(0.0,0.0,0.0, 3.0,4.0,0.0) \
-                     s1 = l; s2 = d; s3 = dist } }";
+                     s1 = s1 + dt*(  l ) s2 = s2 + dt*(  d ) s3 = s3 + dt*(  dist ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
@@ -10246,8 +10480,8 @@ mod tests {
     #[test]
     fn when_gates_rule_writes_by_mode() {
         let src = "world { gravity=(0,0,0) entity m { state=(mode=1.0,x=0.0) } } \
-                   systems { update { on = m; dt = 1.0 when = mode == 0.0 x = 0.0 + 1.0 } \
-                   update { on = m; dt = 1.0 when = mode == 1.0 mode = 0.0 - 2.0 * mode } }";
+                   systems { update { on = m; dt = 1.0 when = mode == 0.0 x = x + dt*(  0.0 + 1.0 ) } \
+                   update { on = m; dt = 1.0 when = mode == 1.0 mode = mode + dt*(  0.0 - 2.0 * mode ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
@@ -10262,7 +10496,7 @@ mod tests {
         let mk = |sub: usize| {
             format!(
                 "world {{ gravity=(0,0,0) entity o {{ state=(x=1.0) }} }} \
-                 systems {{ update {{ on = o; dt = 0.5; substeps = {sub}; x = 0.0 - x }} }}"
+                 systems {{ update {{ on = o; dt = 0.5; substeps = {sub}; x = x + dt*( 0.0 - x ) }} }}"
             )
         };
         let analytic = (-1.0f64).exp();
@@ -10299,7 +10533,7 @@ mod tests {
         let mk = |sub: usize| {
             format!(
                 "world {{ gravity=(0,0,0) entity o {{ state=(x=1.0) }} }} \
-                 systems {{ rk4 {{ on = o; dt = 0.5; substeps = {sub}; x = 0.0 - x }} }}"
+                 systems {{ rk4 {{ on = o; dt = 0.5; substeps = {sub}; deriv x = 0.0 - x }} }}"
             )
         };
         let analytic = (-1.0f64).exp();
@@ -10329,9 +10563,9 @@ mod tests {
                    entity e { state=(s0=0.0,s1=0.0,s2=0.0) } } \
                    systems { update { on = e; dt = 1.0 \
                      fset(heat, 1.0, 2.0, 0.0 + 7.0) \
-                     s0 = fget(heat, 1.0, 2.0) \
-                     s1 = flap(heat, 1.0, 2.0) \
-                     s2 = fget(heat, 3.0, 3.0) } }";
+                     s0 = s0 + dt*(  fget(heat, 1.0, 2.0) )
+                     s1 = s1 + dt*(  flap(heat, 1.0, 2.0) )
+                     s2 = s2 + dt*(  fget(heat, 3.0, 3.0) ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
@@ -10359,8 +10593,8 @@ mod tests {
     fn vecn_state_reserves_named_slots() {
         let src = "world { gravity=(0,0,0) entity e { state = (vec3 pos, mass = 1.0) } } \
                    systems { update { on = e; dt = 1.0 \
-                     s0 = 0.0 + 5.0 \
-                     s5 = @self.state.pos.1 } }";
+                     s0 = s0 + dt*(  0.0 + 5.0 )
+                     s5 = s5 + dt*(  @self.state.pos.1 ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
@@ -10389,7 +10623,7 @@ mod tests {
     #[test]
     fn modulo_operator_computes_remainder() {
         let src = "world { gravity=(0,0,0) entity e { state=(0,0) } } \
-                   systems { update { on = e; dt = 1.0 s0 = 255.0 % 16.0; s1 = 7.0 % 3.0 } }";
+                   systems { update { on = e; dt = 1.0 s0 = s0 + dt*(  255.0 % 16.0 ) s1 = s1 + dt*(  7.0 % 3.0 ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
@@ -10403,7 +10637,7 @@ mod tests {
     fn out_of_range_field_access_is_an_error() {
         let src = "world { gravity=(0,0,0) field g { width=4; height=4; dx=1.0 } \
                    entity e { state=(0) } } \
-                   systems { update { on = e; dt = 1.0 s0 = fget(g, 2.0, 9.0) } }";
+                   systems { update { on = e; dt = 1.0 s0 = s0 + dt*(  fget(g, 2.0, 9.0) ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         match rt.step_cross() {
             Ok(_) => panic!("out-of-range field access should fail the step"),
@@ -10418,8 +10652,8 @@ mod tests {
         let src = "world { gravity=(0,0,0) entity e { state=(s0=0.0,s1=0.0) } } \
                    systems { update { on = e; dt = 1.0 \
                      emit(7.0, 42.0) \
-                     s0 = last_event(7.0) \
-                     s1 = last_event(9.0) } }";
+                     s0 = s0 + dt*(  last_event(7.0) )
+                     s1 = s1 + dt*(  last_event(9.0) ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
@@ -10443,7 +10677,7 @@ mod tests {
     #[test]
     fn every_runs_only_on_matching_steps() {
         let src = "world { gravity=(0,0,0) entity e { state=(x=0.0) } } \
-                   systems { update { on = e; dt = 1.0 every = 3 x = 0.0 + 1.0 } }";
+                   systems { update { on = e; dt = 1.0 every = 3 x = x + dt*(  0.0 + 1.0 ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(4).unwrap();
         let x = rt
@@ -10462,7 +10696,7 @@ mod tests {
     #[test]
     fn watch_flags_zero_crossing() {
         let src = "world { gravity=(0,0,0) entity e { state=(x=-1.0,m=-1.0,f=0.0) } } \
-                   systems { update { on = e; dt = 0.1 x = 0.0 + 6.0 } \
+                   systems { update { on = e; dt = 0.1 x = x + dt*(  0.0 + 6.0 ) } \
                    watch { on = e; expr = x; mem = 1; into = 2 } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         let flag = |rt: &LangRuntime| {
@@ -10489,8 +10723,8 @@ mod tests {
         let src = "world { gravity=(0,0,0) entity e { state=(s0=10.0,s1=20.0,s2=0.0,s3=0.0) } } \
                    systems { update { on = e; dt = 1.0 \
                      let i = 0.0 + 1.0 \
-                     s[i] = 0.0 + 100.0 \
-                     s2 = s[0.0 + 1.0] } }";
+                     s[i] = s[i] + dt*(  0.0 + 100.0 )
+                     s2 = s2 + dt*(  s[0.0 + 1.0] ) } }";
         let mut rt = LangRuntime::compile(src).unwrap();
         rt.step_cross_n(1).unwrap();
         let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
@@ -10504,7 +10738,7 @@ mod tests {
     #[test]
     fn dynamic_lhs_rejected_in_rk4() {
         let src = "world { gravity=(0,0,0) entity e { state=(s0=1.0) } } \
-                   systems { rk4 { on = e; dt = 0.1 s[0.0] = 0.0 + 1.0 } }";
+                   systems { rk4 { on = e; dt = 0.1 deriv s[0.0] =  0.0 + 1.0 } }";
         match LangRuntime::compile(src) {
             Ok(_) => panic!("dynamic LHS in rk4 should be rejected"),
             Err(e) => assert_eq!(e.detail, 73),

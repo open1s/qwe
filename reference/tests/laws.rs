@@ -24,7 +24,7 @@ fn newton_law_of_cooling_matches_analytic() {
     let mut rt = compile(
         r#"
         world { gravity = (0,0,0) entity body { state = (90, 0) } }
-        systems { update { dt = 0.01; s0 = -0.1 * (s0 - 20) } }
+        systems { update { dt = 0.01; s0 = s0 + dt*(  -0.1 * (s0 - 20) ) } }
         "#,
     );
     rt.step_cross_n(100).unwrap();
@@ -39,7 +39,7 @@ fn radioactive_decay_matches_analytic() {
     let mut rt = compile(
         r#"
         world { gravity = (0,0,0) entity n { state = (100, 0) } }
-        systems { update { dt = 1; s0 = -0.05 * s0 } }
+        systems { update { dt = 1; s0 = s0 + dt*(  -0.05 * s0 ) } }
         "#,
     );
     rt.step_cross_n(20).unwrap();
@@ -54,7 +54,7 @@ fn exponential_growth_matches_analytic() {
     let mut rt = compile(
         r#"
         world { gravity = (0,0,0) entity n { state = (1, 0) } }
-        systems { update { dt = 0.001; s0 = 0.5 * s0 } }
+        systems { update { dt = 0.001; s0 = s0 + dt*(  0.5 * s0 ) } }
         "#,
     );
     rt.step_cross_n(1000).unwrap();
@@ -69,7 +69,7 @@ fn logistic_growth_matches_analytic() {
     let mut rt = compile(
         r#"
         world { gravity = (0,0,0) entity pop { state = (0.5, 0) } }
-        systems { update { dt = 0.01; s0 = 1 * s0 * (1 - s0) } }
+        systems { update { dt = 0.01; s0 = s0 + dt*(  1 * s0 * (1 - s0) ) } }
         "#,
     );
     rt.step_cross_n(100).unwrap(); // t = 1.0
@@ -101,7 +101,7 @@ fn harmonic_oscillator_conserves_energy() {
     let mut rt = compile(
         r#"
         world { gravity = (0,0,0) entity m { state = (1, 0) } }
-        systems { update { dt = 0.0005; s0 = s1; s1 = -10 * s0 } }
+        systems { update { dt = 0.0005; s0 = s0 + dt*(  s1 ) s1 = s1 + dt*(  -10 * s0 ) } }
         "#,
     );
     rt.step_cross_n(2000).unwrap();
@@ -117,7 +117,7 @@ fn rk4_harmonic_oscillator_conserves_energy() {
     let mut rt = compile(
         r#"
         world { gravity = (0,0,0) entity m { state = (1, 0) } }
-        systems { rk4 { dt = 0.05; s0 = s1; s1 = -10 * s0 } }
+        systems { rk4 { dt = 0.05; deriv s0 =  s1 deriv s1 =  -10 * s0 } }
         "#,
     );
     rt.step_cross_n(2000).unwrap();
@@ -137,9 +137,9 @@ fn reversible_reaction_reaches_equilibrium() {
         r#"
         world { gravity = (0,0,0) entity r { state = (1, 1, 0) } }
         systems { update { dt = 0.01
-            s0 = -s0*s1 + 0.5*s2
-            s1 = -s0*s1 + 0.5*s2
-            s2 =  s0*s1 - 0.5*s2 } }
+            s0 = s0 + dt*(  -s0*s1 + 0.5*s2 )
+            s1 = s1 + dt*(  -s0*s1 + 0.5*s2 )
+            s2 = s2 + dt*(   s0*s1 - 0.5*s2 ) } }
         "#,
     );
     rt.step_cross_n(2000).unwrap();
@@ -326,7 +326,7 @@ fn update_on_targets_specific_entity() {
             entity a { state = (1, 0, 0, 0, 0, 0, 1, 0) }   # evolves
             entity b { state = (1, 0, 0, 0, 0, 0, 1, 0) }   # untouched
         }
-        systems { update { on = a; dt = 1; s0 = -0.5 * s0 } }
+        systems { update { on = a; dt = 1; s0 = s0 + dt*(  -0.5 * s0 ) } }
         "#,
     );
     rt.step_cross_n(4).unwrap();
@@ -384,11 +384,11 @@ fn water_sodium_reaction_conserves_stoichiometry() {
             entity reactor { state = (0, 0, 0, na = 2.0, water = 100.0, naoh = 0.0, temp = 300.0, h2 = 0.0) } }
         systems { update { on = reactor; dt = 0.0005
             let k = 3.0 * exp(-900.0 / temp)
-            na    = -k * na * water
-            water = -k * na * water
-            naoh  =  k * na * water
-            h2    = 0.5 * k * na * water
-            temp  = 260.0 * k * na * water
+            na = na + dt*(  -k * na * water )
+            water = water + dt*(  -k * na * water )
+            naoh = naoh + dt*(   k * na * water )
+            h2 = h2 + dt*(  0.5 * k * na * water )
+            temp = temp + dt*(  260.0 * k * na * water )
         } }
         "#,
     );

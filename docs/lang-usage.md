@@ -140,8 +140,8 @@ systems {
   update { on = m; dt = 0.01
     let k = 12.0       # spring constant
     let c = 0.4        # damping
-    vx = (0.0 - k*x - c*vx) + 0.0   # vx' = -k·x - c·vx
-    x  = vx                          # x'  = vx
+    vx = vx + dt*(0.0 - k*x - c*vx)  # vx' = -k·x - c·vx
+    x  = x + dt*(vx)                  # x'  = vx
   }
 }
 ```
@@ -149,15 +149,19 @@ systems {
 Run: `pwe run osc.pweb --steps 200` → `state = [0.7226, -1.1813]`. The mass swings
 and slowly loses energy (damped), converging to 0.
 
-**The crucial rule.** `slot = expr` means **`slot += dt · expr`** — it
-*integrates*, it does not assign. So:
+**The crucial rule.** `slot = expr` is a plain **assignment**: each step the
+slot takes that value. To *integrate* a derivative, make the step explicit with
+`dt`:
 
-* `vx = (0 - k*x - c*vx) + 0.0` ⇒ `vx += dt·(−k·x − c·vx)` (acceleration).
-* `x = vx` ⇒ `x += dt·vx` (velocity).
+* `vx = vx + dt*(0.0 - k*x - c*vx)` ⇒ `vx += dt·(−k·x − c·vx)` (acceleration).
+* `x = x + dt*(vx)` ⇒ `x += dt·vx` (velocity).
 
-**Assign vs integrate.** To *set* a slot to a value use the **assign idiom**:
-`slot = (target - slot)` (with `dt = 1` this is an exact write). You'll use this
-for positions computed from other quantities.
+`deriv slot = rate` is shorthand for `slot += dt·rate` (`integrate` and `+=` are
+synonyms), and the `deriv(E)` operator is the increment `dt·E`, so
+`x = x + deriv(vx)` is the same as `x = x + dt*(vx)`.
+
+**Assign vs integrate.** Since `=` assigns, a constant write is just
+`slot = target` — no idiom needed.
 
 **One gotcha, right away:** `let` names may not be `t`, `pi`, `e`, or `sN`
 (detail 67). (A rule `x = 1.0` is fine — see below.)
@@ -179,8 +183,8 @@ world {
 }
 systems {
   update { on = m; dt = 0.01
-    vx = (0.0 - k*x - c*vx) + 0.0
-    x  = vx
+    vx = vx + dt*(0.0 - k*x - c*vx)
+    x  = x + dt*(vx)
   }
 }
 ```
@@ -206,8 +210,8 @@ world { gravity = (0, 0, 0)
   entity b { state = (x = -1.0, vx = 0.0) }
 }
 systems {
-  update { on = a; dt = 0.01 vx = (0.0 - 8.0*(x - @b.x)) + 0.0   x = vx }
-  update { on = b; dt = 0.01 vx = (0.0 - 8.0*(x - @a.x)) + 0.0   x = vx }
+  update { on = a; dt = 0.01 vx = vx + dt*(0.0 - 8.0*(x - @b.x))   x = x + dt*(vx) }
+  update { on = b; dt = 0.01 vx = vx + dt*(0.0 - 8.0*(x - @a.x))   x = x + dt*(vx) }
 }
 ```
 
@@ -281,10 +285,10 @@ world { gravity = (0, 0, 0)
 systems {
   spawn  { on = emitter; pool = p; count = 2; every = 1 }   # 2 slots/step
   update { on = p; dt = 0.1
-    vx = 0.0 + 2.0*(neighbor_mean(0, 0.5) - x) + 0.0         # simple cohesion
-    vy = 0.0 - 9.81*0.1 + 0.0                                # gravity
-    x = vx
-    y = vy
+    vx = vx + dt*(2.0*(neighbor_mean(0, 0.5) - x))         # simple cohesion
+    vy = vy + dt*(0.0 - 9.81*0.1)                                # gravity
+    x = x + dt*(vx)
+    y = y + dt*(vy)
   }
   despawn { on = p; when = y < -10.0 }                       # recycle
 }
@@ -346,7 +350,7 @@ world { gravity = (0, 0, 0) entity e { state = (x = 0.0) } }
 systems {
   update { on = e; dt = 0.1
     let fired = at(0.5)     # 1.0 in the one step whose [t, t+dt) contains 0.5
-    x = fired + 0.0         # ... integrate it into x (assign idiom: (fired - x))
+    x = x + dt*(fired)      # integrate the trigger into x
     emit(1.0, x)            # append an event (kind=1, payload=x)
   }
 }
@@ -408,7 +412,7 @@ Pure helper functions live in `funcs`:
 
 ```pwe
 funcs { accel(k, x) { 0.0 - k * x } }
-systems { update { on = m; dt = 0.01 vx = accel(k, x) + 0.0   x = vx } }
+systems { update { on = m; dt = 0.01 vx = vx + dt*(accel(k, x))   x = x + dt*(vx) } }
 ```
 
 Functions take arguments and return a scalar; they may call other functions and
@@ -427,7 +431,7 @@ funcs { twice(v) { 2.0 * v } }
 # main.pwe
 import "pkg/util"                      # from cli/examples/ you'd write "../../std/…"
 world { gravity = (0,0,0) entity e { state = (x=0.0) } }
-systems { update { on = e; dt = 0.1 x = util.twice(1.0) - x + 0.0 } }
+systems { update { on = e; dt = 0.1 x = util.twice(1.0) } }
 ```
 
 **Units** are optional but catch mistakes at compile time:
@@ -435,7 +439,7 @@ systems { update { on = e; dt = 0.1 x = util.twice(1.0) - x + 0.0 } }
 ```pwe
 params { k = 12.0 [1/s^2] }
 entity m { state = (x = 1.0 [m], vx = 0.0 [m/s]) }
-update { on = m; dt = 0.01 [s] vx = accel(k, x) + 0.0 }
+update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 ```
 
 ## Common mistakes (symptom → cause → fix)
@@ -444,7 +448,7 @@ update { on = m; dt = 0.01 [s] vx = accel(k, x) + 0.0 }
 | --- | --- | --- |
 | My body never moves | it's a state body but you used `gravity`/`integrate` (or vice-versa) | pick one model (§0.6) |
 | A rule "does nothing" | `on =` missing (runs on every body) or the LHS names no slot | add `on = <entity\|pool>`; check the slot/field name |
-| Value keeps growing unexpectedly | `slot = expr` **integrates** | to assign, write `slot = (target - slot)` |
+| Value stays constant unexpectedly | `slot = expr` **assigns** | to integrate, write `slot = slot + dt*(rate)` (or `deriv slot = rate`) |
 | `update` runs on the wrong bodies | no `on =` → it runs on **every** dynamic body | add `on = <entity\|pool>` |
 | Objects move oddly across a step | system order / read timing | order: forces → integrate → constraints; reads are start-of-step |
 | `nbody` does nothing | mass not in `state[6]` (or body is component-only) | `state = (px,py,pz,vx,vy,vz,m)` |
@@ -646,8 +650,8 @@ world {
 }
 systems {
   update { on = a; dt = 0.1
-    pos.x = vel.x          # dotted LHS: pos.x += dt·vel.x
-    vel.y = 0.0 - 9.81 + 0.0
+    pos.x = pos.x + dt*(vel.x)   # dotted LHS: pos.x += dt·vel.x
+    vel.y = vel.y + dt*(0.0 - 9.81)
   }
 }
 ```
@@ -666,8 +670,8 @@ systems {
 
 * **Time is explicit**: every rule's expression is multiplied by `dt`; `t`
   advances by `dt` each step.
-* **`slot = expr` integrates** (`slot += dt·expr`). Assign with
-  `slot = (target - slot)`.
+* **`slot = expr` assigns**. Integrate with `slot = slot + dt*(rate)` or
+  `deriv slot = rate` (i.e. `slot += dt·rate`).
 * **System parameters are recognised by name** per kind; any other
   `name = <expr>` (including `name = 1.0`) is a rule.
 * **Reads**: within one system's function, all reads are sampled once at the
@@ -801,8 +805,8 @@ Pure-function modules; constants are overridable params. Full signatures in
 import "std/forces"
 import "std/thermal"
 update { on = body; dt = 0.1
-    vx   = forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0) + 0.0
-    temp = thermal.newton_cooling(temp, 293.15, 0.05) + 0.0
+    vx   = vx + dt*(forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0))
+    temp = temp + dt*(thermal.newton_cooling(temp, 293.15, 0.05))
 }
 ```
 

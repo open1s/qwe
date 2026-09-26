@@ -121,7 +121,17 @@ system = _{ send_system | recv_system | generic_system }
 send_system = { "send" ~ "{" ~ param* ~ "}" }
 recv_system = { "recv" ~ "{" ~ param* ~ "}" }
 generic_system = { ident ~ "{" ~ param* ~ "}" }
-param = { (let_stmt | repeat_stmt | for_stmt | dot_lhs ~ "=" ~ expr | slot_lhs ~ "=" ~ expr | call | ident ~ "=" ~ (vecN | expr | ident) ~ unit_expr?) ~ ";"? }
+// A rule line: `let`/loops, an ODE rule (`deriv`/`integrate slot = rate` or
+// `slot += rate`), an assignment rule (`slot = expr`), a bare call, or a
+// system parameter (`ident = value|vecN|ident`).
+param = { (let_stmt | repeat_stmt | for_stmt | ode_stmt | add_stmt
+         | slot_lhs ~ "=" ~ expr | dot_lhs ~ "=" ~ expr | call
+         | ident ~ "=" ~ (vecN | expr | ident) ~ unit_expr?) ~ ";"? }
+// ODE rule: the RHS is the derivative/rate (integrated as slot += dt·rate).
+ode_kw = @{ ("deriv" | "integrate") ~ !(ASCII_ALPHANUMERIC | "_") }
+ode_stmt = { ode_kw ~ (dot_lhs | slot_lhs | ident) ~ "=" ~ expr }
+// Sugar for an ODE rule: `slot += rate`.
+add_stmt = { (dot_lhs | slot_lhs | ident) ~ "+=" ~ expr }
 // Dynamic slot LHS: `s[i] = expr` writes the State slot at a runtime index.
 slot_lhs = { "s" ~ "[" ~ expr ~ "]" }
 // Dotted rule LHS for struct fields: `pos.x = expr`.
@@ -177,7 +187,7 @@ call = { func_name ~ "(" ~ expr? ~ ("," ~ expr)* ~ ")" }
 // random emit) are special-cased in lowering, everything else resolves to a
 // user-defined function from the `funcs` section.
 func_name = @{ ident ~ ("." ~ ident)* }
-slot = @{ "s" ~ ASCII_DIGIT+ }
+slot = @{ "s" ~ ASCII_DIGIT+ ~ !(ASCII_ALPHANUMERIC | "_") }
 entity_ref = { "@" ~ ident ~ "." ~ ( slot | prop_path ) }
 prop_path = { ident ~ ("." ~ (ident | ASCII_DIGIT+))* }
 state_name = @{ ident }

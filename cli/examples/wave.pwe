@@ -21,9 +21,9 @@ systems {
       let _ = fset(u, i, 0, fget(u, i, 0) + sv)
       let _ = fset(um, i, 0, fget(um, i, 0) + sv)
     }
-    x = (fget(u, 30, 0) - x) / 0.5 + 0.0
-    y = 0.0 + 0.0
-    z = 0.0 + 0.0
+    x = x + dt*(  (fget(u, 30, 0) - x) / 0.5 + 0.0 )
+    y = y + dt*(  0.0 + 0.0 )
+    z = z + dt*(  0.0 + 0.0 )
   }
   # lossless leapfrog (c·dt/dx = 0.5); zero-flux ends reflect the standing wave
   wave { field = u; prev = um; velocity = 1.0; dt = 0.5 }
