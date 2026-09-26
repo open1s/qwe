@@ -1401,13 +1401,24 @@ function addBonds(frame){
     scene.add(m);decals.push(m);
   }
 }
-let alive=true;
-addEventListener('pagehide',()=>{alive=false;});
-addEventListener('beforeunload',()=>{alive=false;});
+let alive=true, inflight=null;
+// On teardown, stop polling, abort any in-flight request, and release the WebGL
+// context promptly — otherwise the browser can take a long time to close the
+// tab while it drains the GPU/context.
+function teardown(){
+  alive=false;
+  try{ if(inflight) inflight.abort(); }catch(e){}
+  try{ renderer.setAnimationLoop(null); }catch(e){}
+  try{ renderer.dispose(); renderer.forceContextLoss(); }catch(e){}
+}
+addEventListener('pagehide',teardown);
+addEventListener('beforeunload',teardown);
 async function poll(){
   if(!alive) return;
-  try{const r=await fetch('/state',{cache:'no-store'});const f=await r.json();apply(f);conn.style.display='none';}
-  catch(e){conn.style.display='block';conn.textContent='waiting for runtime…';}
+  const ac=new AbortController(); inflight=ac;
+  try{const r=await fetch('/state',{cache:'no-store',signal:ac.signal});const f=await r.json();apply(f);conn.style.display='none';}
+  catch(e){ if(e&&e.name==='AbortError') return; conn.style.display='block';conn.textContent='waiting for runtime…'; }
+  inflight=null;
   if(alive) setTimeout(poll,60);
 }
 document.getElementById('rst').onclick=()=>{fetch('/reset').catch(()=>{});};
@@ -1615,6 +1626,11 @@ mod tests {
         let page = live_viewer_html();
         assert!(page.contains("PWE live 3D viewport"));
         assert!(page.contains("fetch('/state'"));
+        // RFC-0041: closing the tab must release the WebGL context promptly and
+        // abort the in-flight poll (otherwise the close can stall).
+        assert!(page.contains("forceContextLoss"));
+        assert!(page.contains("AbortController"));
+        assert!(page.contains("pagehide"));
         assert!(page.contains("OrbitControls"));
     }
 

@@ -453,11 +453,17 @@ fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
             return 1;
         }
         step += 1;
-        let mut g = live.write().unwrap();
-        g.step = step;
-        g.frame = rt.present_frame(Some(cam));
-        g.info = info_lines(&rt, model, step);
-        drop(g);
+        // Build the frame and the info text outside the lock, then swap them in:
+        // holding the write lock during a heavy frame would block a `/state`
+        // reader (and delay a closing tab waiting on its last request).
+        let frame = rt.present_frame(Some(cam));
+        let info = info_lines(&rt, model, step);
+        {
+            let mut g = live.write().unwrap();
+            g.step = step;
+            g.frame = frame;
+            g.info = info;
+        }
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
 }
