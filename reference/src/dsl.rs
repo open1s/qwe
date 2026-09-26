@@ -17,6 +17,17 @@ use crate::math::Vec3;
 use crate::wir::WirDocument;
 use pwe_api::{ComponentTypeId, EntityId, Hash256, Result};
 
+/// A field of a `struct` type: a scalar default or a nested struct type.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StructFieldType {
+    Scalar(f64),
+    Struct(String),
+}
+
+/// RFC-0042: user-defined composite types (`struct`) flattened to dotted state
+/// slots. `structs[name] = [(field, type/default), …]`, in declaration order.
+pub type StructDef = Vec<(String, StructFieldType)>;
+
 /// RFC-0040: a mass-spring soft body — an `nx × ny` grid of dynamic particles
 /// (all active), connected by structural/shear/bend spring constraints.
 #[derive(Clone, Debug, PartialEq)]
@@ -153,6 +164,8 @@ pub struct WorldModel {
     pub pools: Vec<PoolDecl>,
     /// RFC-0040: soft bodies (grids of dynamic mass-spring particles).
     pub softs: Vec<SoftDecl>,
+    /// RFC-0042: user-defined `struct` record types.
+    pub structs: std::collections::BTreeMap<String, StructDef>,
     pub channels: Vec<ChanDecl>,
     pub fields: Vec<FieldDecl>,
     /// User-defined custom shapes: name -> parts (multi-primitive, local offsets).
@@ -170,6 +183,7 @@ impl WorldModel {
             entities: Vec::new(),
             pools: Vec::new(),
             softs: Vec::new(),
+            structs: std::collections::BTreeMap::new(),
             channels: Vec::new(),
             fields: Vec::new(),
             shapes: std::collections::BTreeMap::new(),

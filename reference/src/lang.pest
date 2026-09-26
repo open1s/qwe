@@ -24,7 +24,7 @@ param_list = { ident ~ ("," ~ ident)* }
 
 // -- world model -------------------------------------------------------------
 world_section = { "world" ~ "{" ~ world_item* ~ "}" }
-world_item = _{ gravity_stmt | chan_stmt | entity_stmt | pool_stmt | soft_stmt | field_stmt | params_stmt | title_stmt | shape_stmt }
+world_item = _{ gravity_stmt | chan_stmt | struct_stmt | entity_stmt | pool_stmt | soft_stmt | field_stmt | params_stmt | title_stmt | shape_stmt }
 gravity_stmt = { "gravity" ~ "=" ~ vec3 }
 // A human-readable title for the run (shown by `pwe present`).
 title_stmt = { "title" ~ "=" ~ string }
@@ -40,6 +40,10 @@ unit_name = @{ "mol" | "kg" | "cd" | "K" | "A" | "s" | "m" }
 unit_exp = @{ "-"? ~ ASCII_DIGIT+ }
 unit_op = @{ "*" | "/" }
 chan_stmt = { "chan" ~ ident ~ "{" ~ "value" ~ "=" ~ value ~ ";"? ~ "}" }
+// `struct Name { field = <default>; field = <other-struct>; … }` — a named
+// record flattened to dotted state slots (`pos.x`, `pos.y`, …).
+struct_stmt = { "struct" ~ ident ~ "{" ~ struct_field* ~ "}" }
+struct_field = { ident ~ "=" ~ (value | ident) ~ ";"? }
 entity_stmt = { "entity" ~ ident ~ "{" ~ entity_field* ~ "}" }
 // RFC-0038: `pool name[N] { <entity fields> }` — N initially-inactive slots.
 pool_stmt = { "pool" ~ ident ~ "[" ~ number ~ "]" ~ "{" ~ entity_field* ~ "}" }
@@ -50,11 +54,14 @@ field_stmt = { "field" ~ ident ~ "{" ~ param* ~ "}" }
 
 position_field = { "position" ~ "=" ~ vec3 ~ ";"? }
 velocity_field = { "velocity" ~ "=" ~ vec3 ~ ";"? }
-state_field = { "state" ~ "=" ~ (vecN | named_state) ~ ";"? }
+state_field = { "state" ~ "=" ~ (type_ref | vecN | named_state) ~ ";"? }
 named_state = { "(" ~ state_item ~ ("," ~ state_item)* ~ ")" }
 // `vec3 pos` declares N consecutive slots with a named vector element: `pos`
 // reads the first component, `@self.state.pos.1` reads component 1.
-state_item = { ("vec" ~ ASCII_DIGIT+ ~ ident) | (ident ~ "=" ~ value ~ unit_expr?) | (value ~ unit_expr?) }
+state_item = { ("vec" ~ ASCII_DIGIT+ ~ ident) | (ident ~ "=" ~ state_rhs) | (value ~ unit_expr?) }
+state_rhs = _{ named_state | type_ref | value ~ unit_expr? }
+// A reference to a declared `struct` type used as a state layout.
+type_ref = @{ ident }
 mass_field = { "mass" ~ "=" ~ value ~ ";"? }
 dynamic_field = { "dynamic" ~ "=" ~ boolean ~ ";"? }
 nbody_field = { "nbody" ~ "=" ~ boolean ~ ";"? }
@@ -114,9 +121,11 @@ system = _{ send_system | recv_system | generic_system }
 send_system = { "send" ~ "{" ~ param* ~ "}" }
 recv_system = { "recv" ~ "{" ~ param* ~ "}" }
 generic_system = { ident ~ "{" ~ param* ~ "}" }
-param = { (let_stmt | repeat_stmt | for_stmt | slot_lhs ~ "=" ~ expr | call | ident ~ "=" ~ (vecN | expr | ident) ~ unit_expr?) ~ ";"? }
+param = { (let_stmt | repeat_stmt | for_stmt | dot_lhs ~ "=" ~ expr | slot_lhs ~ "=" ~ expr | call | ident ~ "=" ~ (vecN | expr | ident) ~ unit_expr?) ~ ";"? }
 // Dynamic slot LHS: `s[i] = expr` writes the State slot at a runtime index.
 slot_lhs = { "s" ~ "[" ~ expr ~ "]" }
+// Dotted rule LHS for struct fields: `pos.x = expr`.
+dot_lhs = { ident ~ ("." ~ (ident | ASCII_DIGIT+))+ }
 // `let name = expr` binds a reusable local in an `update` rule.
 let_stmt = { "let" ~ ident ~ "=" ~ expr }
 // `repeat n { let … }` unrolls at lowering time (bounded) with per-loop

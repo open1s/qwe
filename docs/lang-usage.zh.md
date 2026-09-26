@@ -150,11 +150,10 @@ systems {
 **赋值 vs 积分**：要把某槽*设为*某值，用**赋值惯用法** `slot = (target - slot)`
 （令 `dt = 1` 即为精确写入）。当你从其他量计算位置时会用到。
 
-**两个立刻要记住的坑：**
+**一个立刻要记住的坑**：`let` 的名字不能是 `t`、`pi`、`e`、`sN`（detail 67）。
 
-* 规则右侧必须是**表达式**。上面的 `+ 0.0` 不是装饰：**裸数字**（`x = 1.0`）会被
-  解析为**系统参数**而非规则；要写常量就写成表达式（`0.0 + 1.0`）。
-* `let` 的名字不能是 `t`、`pi`、`e`、`sN`（detail 67）。
+**参数 vs 规则**：数值参数按**名称**（针对该系统种类）识别——`update { dt = 0.01 }`
+设的是 `dt`，而 `update { x = 1.0 }` 是槽 `x` 的规则（不再需要旧的 `0.0 + 1.0` 花招）。
 
 练习：增大 `k`（更快）；增大 `c`（更快衰减）；给 `vx` 加驱动项 `+ 3.0*sin(2.0*t)`
 做成受迫振子。
@@ -424,7 +423,7 @@ update { on = m; dt = 0.01 [s] vx = accel(k, x) + 0.0 }
 | 现象 | 原因 | 修法 |
 | --- | --- | --- |
 | 物体完全不动 | 状态型物体却用了 `gravity`/`integrate`（或反之） | 只选一种模型（§0.6） |
-| 规则“没效果” | 右侧是裸数字 → 被当作**参数** | 写成表达式：`x = 0.0 + 1.0` |
+| 规则“没效果” | 缺 `on =`（作用于每个物体）或左侧不是有效槽 | 加 `on = <实体\|池>`；核对槽/字段名 |
 | 数值总是异常增长 | `slot = expr` 是**积分** | 要赋值写 `slot = (target - slot)` |
 | `update` 作用到错误物体 | 没写 `on =` → 作用于**每个**动态物体 | 加 `on = <实体\|池>` |
 | 一步内运动怪 | 系统顺序 / 读取时机 | 顺序：力 → 积分 → 约束；读取在步开始 |
@@ -473,7 +472,8 @@ update { on = m; dt = 0.01 [s] vx = accel(k, x) + 0.0 }
 
 * 段 `world` `funcs` `systems`
 * world `gravity` `title` `params` `chan` `value` `entity` `field` `pool` `soft`
-  `width` `height` `depth` `dx` `nx` `ny` `nz` `spacing` `origin` `shape` `part`
+  `struct` `width` `height` `depth` `dx` `nx` `ny` `nz` `spacing` `origin` `shape`
+  `part`
 * 实体 `position` `velocity` `state` `vec` `mass` `dynamic` `nbody` `parent`
   `restitution` `friction` `box` `sphere` `hull` `rotation` `camera` `color`
   `size` `opacity` `glow` `label` `orient` `vector`
@@ -498,6 +498,7 @@ update { on = m; dt = 0.01 [s] vx = accel(k, x) + 0.0 }
 | `chan <name> { value = v }` | 通道实体（`state[0]`）。 |
 | `entity <name> { … }` | 一个物体。 |
 | `shape <name> { part … }` | 自定义渲染形状。 |
+| `struct <name> { field = <默认值> … }` | 具名记录类型（§2.11）。 |
 | `field <name> { width; height; dx; depth? }` | 标量网格。 |
 | `pool <name>[N] { … }` | N 个未激活槽，用于动态实体。 |
 | `soft <name> { nx; ny; nz?; spacing; origin; mass }` | 质量-弹簧网格。 |
@@ -511,7 +512,7 @@ update { on = m; dt = 0.01 [s] vx = accel(k, x) + 0.0 }
 | 字段 | 含义 |
 | --- | --- |
 | `position` / `velocity = (x,y,z)` | 初始变换 / 速度。 |
-| `state = (…)` | 状态槽：位置式 `(v0,…)`、命名 `(x=0,…)`、`vec3 pos`（N 槽）。最多 16。 |
+| `state = (…)` | 状态槽：位置式 `(v0,…)`、命名 `(x=0,…)`、`vec3 pos`（槽 `pos.0…`）、`struct` 类型，或嵌套记录 `(p = (x=0,…))`。最多 16。 |
 | `mass` | 质量（nbody、视觉尺寸；joint/soft 必需）。 |
 | `dynamic = false` | 静态。 |
 | `nbody = false` | 排除出 `nbody`。 |
@@ -604,13 +605,40 @@ asin acos atan`；2 元：`pow atan2 hypot min max`；`if(c,a,b)`；`random()`�
   （`break if (…)`），降级期展开（≤10000 条语句）。循环体仅含 `let`、嵌套循环、
   `break`/`continue`。
 
+## 2.11 结构体类型（记录）
+
+`struct` 给一组字段命名；在 `state = …` 中使用它会把这些字段铺成**点分标量槽**：
+
+```pwe
+world {
+  struct Vec3 { x = 0.0; y = 0.0; z = 0.0 }
+  struct Body { pos = Vec3; vel = Vec3; mass = 1.0 }
+
+  entity a { state = Body }                               # 槽 pos.x … mass
+  entity b { state = (p = Vec3, hp = 10.0) }              # 嵌入 + 一个标量
+  entity c { state = (pos = (x = 7.0, y = 8.0, z = 9.0)) }# 内联记录
+}
+systems {
+  update { on = a; dt = 0.1
+    pos.x = vel.x          # 点分左侧：pos.x += dt·vel.x
+    vel.y = 0.0 - 9.81 + 0.0
+  }
+}
+```
+
+* 字段可为标量（带默认值）或其它结构体（可嵌套）。
+* 自身字段用 `pos.x`；其它实体用 `@a.pos.x`；规则与 `funcs` 中皆可。
+* `struct` 是编译期糖、铺成平坦槽——零成本、确定性、属于世界状态。未知类型与
+  引用环报错（detail 80）。
+* `vecN name` 是内建简写：`vec3 pos` → `pos.0`、`pos.1`、`pos.2`（`pos` 是 `pos.0` 的别名）。
+
 ---
 
 # 第 3 部分 —— 语义与坑点
 
 * **时间是显式的**：每条规则的表达式都乘以 `dt`；`t` 每步前进 `dt`。
 * **`slot = expr` 是积分**（`slot += dt·expr`）。赋值用 `slot = (target - slot)`。
-* **裸数字右侧是参数**，不是规则。
+* **系统参数按名称识别**（针对该系统种类）；其它任何 `name = <表达式>`（含 `name = 1.0`）都是规则。
 * **读取**：同一系统函数内，所有读取在（子）步开始处采样一次（规则同时）；跨系统时，
   后跑的系统能看到先跑系统的写入——故顺序重要。场读取能看到同一步写入。
 * **确定性**：`random()`/`noise()` 有种子、空间扫描按 id 排序、解释器 ≡ JIT
@@ -706,6 +734,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 77 | 量纲不一致。 |
 | 78 | 未知池名（`spawn`/`despawn`）。 |
 | 79 | 未知形状 / 形状引用环。 |
+| 80 | 未知结构体类型 / 结构体环 / 状态过大。 |
 
 **调试流程**：缩减到一个实体 + 一个系统；核对模型（§0.6）；核对积分/赋值陷阱；加
 `invariant`；`run … --steps N` 读打印状态。
@@ -763,6 +792,7 @@ update { on = body; dt = 0.1
 | `cloth.pwe`、`jelly.pwe` | 软体（薄片、3D 凝胶）。 |
 | `particles.pwe` | 池 + `spawn`/`despawn`。 |
 | `courtyard.pwe` | 网格地面 + 转身/前倾行人（`orient`）。 |
+| `structs.pwe` | `struct` 记录类型（`pos.x`、`@a.pos.y`）。 |
 
 ---
 

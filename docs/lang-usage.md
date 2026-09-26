@@ -159,12 +159,12 @@ and slowly loses energy (damped), converging to 0.
 `slot = (target - slot)` (with `dt = 1` this is an exact write). You'll use this
 for positions computed from other quantities.
 
-**Two gotchas, right away:**
+**One gotcha, right away:** `let` names may not be `t`, `pi`, `e`, or `sN`
+(detail 67). (A rule `x = 1.0` is fine — see below.)
 
-* A rule's right-hand side must be an **expression**. The `+ 0.0` above is not
-  cosmetic: a *bare number* (`x = 1.0`) is read as a **system parameter**, not a
-  rule. Make it an expression (`0.0 + 1.0`) if you want a constant.
-* `let` names may not be `t`, `pi`, `e`, or `sN` (detail 67).
+**Parameters vs rules.** A numeric parameter is recognised **by name** for the
+system kind: `update { dt = 0.01 }` sets `dt`, while `update { x = 1.0 }` is a
+rule for the slot `x` (no need for the old `0.0 + 1.0` trick).
 
 Exercises: raise `k` (faster); raise `c` (dies out sooner); add a driving term
 `+ 3.0*sin(2.0*t)` to `vx` for a driven oscillator.
@@ -443,7 +443,7 @@ update { on = m; dt = 0.01 [s] vx = accel(k, x) + 0.0 }
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | My body never moves | it's a state body but you used `gravity`/`integrate` (or vice-versa) | pick one model (§0.6) |
-| A rule "does nothing" | RHS was a bare number → parsed as a **parameter** | make it an expression: `x = 0.0 + 1.0` |
+| A rule "does nothing" | `on =` missing (runs on every body) or the LHS names no slot | add `on = <entity\|pool>`; check the slot/field name |
 | Value keeps growing unexpectedly | `slot = expr` **integrates** | to assign, write `slot = (target - slot)` |
 | `update` runs on the wrong bodies | no `on =` → it runs on **every** dynamic body | add `on = <entity\|pool>` |
 | Objects move oddly across a step | system order / read timing | order: forces → integrate → constraints; reads are start-of-step |
@@ -493,7 +493,8 @@ unambiguous.
 
 * sections `world` `funcs` `systems`
 * world `gravity` `title` `params` `chan` `value` `entity` `field` `pool` `soft`
-  `width` `height` `depth` `dx` `nx` `ny` `nz` `spacing` `origin` `shape` `part`
+  `struct` `width` `height` `depth` `dx` `nx` `ny` `nz` `spacing` `origin` `shape`
+  `part`
 * entity `position` `velocity` `state` `vec` `mass` `dynamic` `nbody` `parent`
   `restitution` `friction` `box` `sphere` `hull` `rotation` `camera` `color`
   `size` `opacity` `glow` `label` `orient` `vector`
@@ -520,6 +521,7 @@ Precedence (high → low): unary `-`, `not`/`!` → `* / %` → `+ -` → compar
 | `chan <name> { value = v }` | a channel entity (`state[0]`). |
 | `entity <name> { … }` | a body. |
 | `shape <name> { part … }` | a custom render shape. |
+| `struct <name> { field = <default> … }` | a named record type (§2.11). |
 | `field <name> { width; height; dx; depth? }` | a scalar grid. |
 | `pool <name>[N] { … }` | N inactive slots for dynamic entities. |
 | `soft <name> { nx; ny; nz?; spacing; origin; mass }` | a mass-spring grid. |
@@ -533,7 +535,7 @@ Precedence (high → low): unary `-`, `not`/`!` → `* / %` → `+ -` → compar
 | Field | Meaning |
 | --- | --- |
 | `position` / `velocity = (x,y,z)` | initial transform / velocity. |
-| `state = (…)` | state slots: positional `(v0,…)`, named `(x=0,…)`, `vec3 pos` (N slots). Max 16. |
+| `state = (…)` | state slots: positional `(v0,…)`, named `(x=0,…)`, `vec3 pos` (slots `pos.0…`), a `struct` type, or a nested record `(p = (x=0,…))`. Max 16. |
 | `mass` | mass (nbody, viewer size; required by joint/soft). |
 | `dynamic = false` | static. |
 | `nbody = false` | exclude from `nbody`. |
@@ -628,6 +630,36 @@ tanh asin acos atan`; 2-arg: `pow atan2 hypot min max`; `if(c,a,b)`; `random()`,
   (`break if (…)`), unrolled (≤10000 statements). Loop bodies: `let`, nested
   loops, `break`/`continue` only.
 
+## 2.11 Struct types (records)
+
+A `struct` names a group of fields; using it in `state = …` lays the fields out
+as dotted scalar slots:
+
+```pwe
+world {
+  struct Vec3 { x = 0.0; y = 0.0; z = 0.0 }
+  struct Body { pos = Vec3; vel = Vec3; mass = 1.0 }
+
+  entity a { state = Body }                               # slots pos.x…mass
+  entity b { state = (p = Vec3, hp = 10.0) }              # embed + a scalar
+  entity c { state = (pos = (x = 7.0, y = 8.0, z = 9.0)) }# inline record
+}
+systems {
+  update { on = a; dt = 0.1
+    pos.x = vel.x          # dotted LHS: pos.x += dt·vel.x
+    vel.y = 0.0 - 9.81 + 0.0
+  }
+}
+```
+
+* Fields may be scalars (with a default) or other structs (nested).
+* Access own fields as `pos.x`; another entity's as `@a.pos.x`; both in rules and
+  `funcs`.
+* A `struct` is compile-time sugar over flat slots — zero-cost, deterministic,
+  and part of world state. Unknown types and cycles are errors (detail 80).
+* `vecN name` is the built-in shorthand: `vec3 pos` → `pos.0`, `pos.1`, `pos.2`
+  (with `pos` an alias for `pos.0`).
+
 ---
 
 # Part 3 — Semantics and pitfalls
@@ -636,7 +668,8 @@ tanh asin acos atan`; 2-arg: `pow atan2 hypot min max`; `if(c,a,b)`; `random()`,
   advances by `dt` each step.
 * **`slot = expr` integrates** (`slot += dt·expr`). Assign with
   `slot = (target - slot)`.
-* **Bare-number RHS is a parameter**, not a rule.
+* **System parameters are recognised by name** per kind; any other
+  `name = <expr>` (including `name = 1.0`) is a rule.
 * **Reads**: within one system's function, all reads are sampled once at the
   start of the (sub)step (rules are simultaneous). Across systems, a later system
   sees an earlier system's writes — so order matters. Field reads see same-step
@@ -735,6 +768,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 77 | Dimensional mismatch. |
 | 78 | Unknown pool name (`spawn`/`despawn`). |
 | 79 | Unknown shape / shape-reference cycle. |
+| 80 | Unknown struct type / struct cycle / state too large. |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the
@@ -794,6 +828,7 @@ Compile then run/present the `.pweb`.
 | `cloth.pwe`, `jelly.pwe` | soft bodies (sheet, 3-D gel). |
 | `particles.pwe` | pool + `spawn`/`despawn`. |
 | `courtyard.pwe` | mesh ground + turning/leaning walkers (`orient`). |
+| `structs.pwe` | `struct` record types (`pos.x`, `@a.pos.y`). |
 
 ---
 

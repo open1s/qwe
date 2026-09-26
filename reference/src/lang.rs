@@ -398,6 +398,16 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
             .push(UpdateStmt::Let("_".to_string(), text));
         return Ok(());
     }
+    // Dotted LHS (`pos.x = expr`): a struct-field rule (resolved per entity).
+    if first.as_rule() == Rule::dot_lhs {
+        let key = first.as_str().trim().to_string();
+        let rhs = inner.next().unwrap();
+        if rhs.as_rule() != Rule::expr {
+            return Err(error(Status::Invalid, 55));
+        }
+        decl.update.insert(key, rhs.as_str().trim().to_string());
+        return Ok(());
+    }
     // Dynamic slot LHS: `s[expr] = expr` writes the State slot at a runtime
     // index; the raw LHS text is resolved per-entity during lowering.
     if first.as_rule() == Rule::slot_lhs {
@@ -409,7 +419,7 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
         decl.update.insert(key, rhs.as_str().trim().to_string());
         return Ok(());
     }
-    let key = first.as_str().to_string();
+    let key = first.as_str().trim().to_string();
     let rhs = inner.next().unwrap();
     match rhs.as_rule() {
         Rule::vecN => {
@@ -1097,7 +1107,17 @@ fn build_ref(pair: Pair<'_, Rule>) -> Result<Expr> {
                                 };
                                 return Ok(Expr::Name(expr_name));
                             }
-                            _ => return Err(error(Status::Invalid, 58)),
+                            // `@name.<dotted-named-state-slot>` — a struct field
+                            // such as `@e.pos.x` (entity `name`, slot `pos.x`).
+                            _ => {
+                                let path_txt = segs.join(".");
+                                let expr_name = if name == "self" {
+                                    path_txt
+                                } else {
+                                    format!("{name}.{path_txt}")
+                                };
+                                return Ok(Expr::Name(expr_name));
+                            }
                         },
                     }
                 }
@@ -1151,6 +1171,29 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
     for section in pairs {
         match section.as_rule() {
             Rule::world_section => {
+                // Pass 1: collect `struct` types (entities may reference them in
+                // any order).
+                for item in section.clone().into_inner() {
+                    if item.as_rule() != Rule::struct_stmt {
+                        continue;
+                    }
+                    let mut it = item.into_inner();
+                    let name = it.next().unwrap().as_str().to_string();
+                    let mut fields: crate::dsl::StructDef = Vec::new();
+                    for f in it {
+                        let mut fi = f.into_inner();
+                        let fname = fi.next().unwrap().as_str().to_string();
+                        let rhs = fi.next().unwrap();
+                        let ft = if rhs.as_rule() == Rule::value {
+                            crate::dsl::StructFieldType::Scalar(parse_value(rhs))
+                        } else {
+                            crate::dsl::StructFieldType::Struct(rhs.as_str().to_string())
+                        };
+                        fields.push((fname, ft));
+                    }
+                    model.structs.insert(name, fields);
+                }
+                let structs = model.structs.clone();
                 for item in section.into_inner() {
                     match item.as_rule() {
                         Rule::gravity_stmt => {
@@ -1356,7 +1399,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let name = inner.next().unwrap().as_str().to_string();
                             let mut decl = EntityDecl::named(&name);
                             for field in inner {
-                                apply_entity_field(field, &mut decl)?;
+                                apply_entity_field(field, &mut decl, &structs)?;
                             }
                             model.entities.push(decl);
                         }
@@ -1423,7 +1466,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 .unwrap_or(0);
                             let mut decl = EntityDecl::named(&name);
                             for field in inner {
-                                apply_entity_field(field, &mut decl)?;
+                                apply_entity_field(field, &mut decl, &structs)?;
                             }
                             model.pools.push(crate::dsl::PoolDecl { name, count, decl });
                         }
@@ -2549,13 +2592,14 @@ fn lower_expr(
             //   2. an own named state slot (bare names only),
             //   3. a model parameter — bare (`G`) or module-qualified (`mod.G`),
             //   4. a cross-entity named state slot (`@name.x` / `@name.state.x`).
-            if !name.contains('.') {
-                if let Some(&reg) = ctx.locals.get(name.as_str()) {
-                    return reg;
-                }
-                if let Some(slot) = ctx.state_names.get(name.as_str()).copied() {
-                    return ctx.slot_regs.get(slot).copied().unwrap_or(0);
-                }
+            if let Some(&reg) = ctx.locals.get(name.as_str()) {
+                return reg;
+            }
+            // Own named state slot — including dotted struct fields (`pos.x`).
+            // A dotted name not in this entity's layout (e.g. `a.x`) falls
+            // through to parameters / cross-entity handling below.
+            if let Some(slot) = ctx.state_names.get(name.as_str()).copied() {
+                return ctx.slot_regs.get(slot).copied().unwrap_or(0);
             }
             // A parameter: the exact name (module-qualified) or the system's
             // module namespace applied to a bare name, else globally bare.
@@ -5114,13 +5158,15 @@ fn expr_slot_span(
             *any = true;
         }
         Expr::SlotDyn(idx) => expr_slot_span(idx, sn, max, any),
-        Expr::Name(n) if !n.contains('.') => {
+        // Own named slot, including dotted struct fields (`pos.x`). Dotted
+        // cross-entity names (`a.x`) are not in `sn` and so are ignored here.
+        Expr::Name(n) => {
             if let Some(&s) = sn.get(n.as_str()) {
                 *max = (*max).max(s);
                 *any = true;
             }
         }
-        Expr::Name(_) | Expr::Ref(..) | Expr::PropRef(..) => {}
+        Expr::Ref(..) | Expr::PropRef(..) => {}
         Expr::Add(a, b)
         | Expr::Sub(a, b)
         | Expr::Mul(a, b)
@@ -6748,6 +6794,9 @@ fn merge_modules(
         for sd in &m.parsed.model.softs {
             model.softs.push(sd.clone());
         }
+        for (name, def) in &m.parsed.model.structs {
+            model.structs.insert(name.clone(), def.clone());
+        }
         // User-defined custom shapes merge by name (later definitions win).
         for (name, parts) in &m.parsed.model.shapes {
             model.shapes.insert(name.clone(), parts.clone());
@@ -7185,6 +7234,13 @@ pub fn compile_program(mut parsed: ParsedProgram) -> Result<CompiledProgram> {
             for (slot, n) in names.iter().enumerate() {
                 if let Some(n) = n {
                     map.insert(n.clone(), slot);
+                }
+            }
+            // `vecN pos` names slots `pos.0 …`; alias the bare `pos` to `pos.0`.
+            let entries: Vec<(String, usize)> = map.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            for (k, v) in entries {
+                if let Some(prefix) = k.strip_suffix(".0") {
+                    map.entry(prefix.to_string()).or_insert(v);
                 }
             }
             if !map.is_empty() {
@@ -7763,7 +7819,194 @@ impl LangRuntime {
 
 /// RFC-0038/RFC-0038: apply one `entity_field` grammar pair to a declaration
 /// (shared by `entity` and `pool` declarations).
-fn apply_entity_field(field: pest::iterators::Pair<'_, Rule>, decl: &mut EntityDecl) -> Result<()> {
+/// RFC-0042: flatten `state = (…)` (including nested records and `struct`
+/// references) into flat scalar slots with dotted names (`pos.x`, `vel.y`, …).
+fn parse_state_field(
+    field: pest::iterators::Pair<'_, Rule>,
+    decl: &mut EntityDecl,
+    structs: &std::collections::BTreeMap<String, crate::dsl::StructDef>,
+) -> Result<()> {
+    let list = field.into_inner().next().unwrap();
+    let mut values: Vec<f64> = Vec::new();
+    let mut names: Vec<Option<String>> = Vec::new();
+    let mut units: Vec<Option<crate::units::Dim>> = Vec::new();
+    match list.as_rule() {
+        Rule::vecN => {
+            values = list.into_inner().map(parse_value).collect();
+            names = vec![None; values.len()];
+            units = vec![None; values.len()];
+        }
+        Rule::type_ref => expand_struct(
+            list.as_str(),
+            "",
+            structs,
+            &mut values,
+            &mut names,
+            &mut units,
+            &mut Vec::new(),
+        )?,
+        Rule::named_state => expand_named_state(
+            list.into_inner(),
+            "",
+            structs,
+            &mut values,
+            &mut names,
+            &mut units,
+        )?,
+        _ => {}
+    }
+    if values.len() > crate::components::State::MAX_STATE_SLOTS {
+        return Err(error(Status::Invalid, 80));
+    }
+    decl.state = Some(values);
+    decl.state_names = Some(names);
+    if units.iter().any(|u| u.is_some()) {
+        decl.state_units = Some(units);
+    }
+    Ok(())
+}
+
+fn state_unit(pair: Option<pest::iterators::Pair<'_, Rule>>) -> Option<crate::units::Dim> {
+    pair.and_then(|p| {
+        p.as_str()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<crate::units::Dim>()
+            .ok()
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn expand_struct(
+    name: &str,
+    prefix: &str,
+    structs: &std::collections::BTreeMap<String, crate::dsl::StructDef>,
+    values: &mut Vec<f64>,
+    names: &mut Vec<Option<String>>,
+    units: &mut Vec<Option<crate::units::Dim>>,
+    stack: &mut Vec<String>,
+) -> Result<()> {
+    use crate::dsl::StructFieldType;
+    if stack.iter().any(|n| n == name) {
+        return Err(error_at(
+            Status::Invalid,
+            80,
+            0,
+            format!("struct cycle at '{name}'"),
+        ));
+    }
+    let def = structs.get(name).ok_or_else(|| {
+        error_at(
+            Status::Invalid,
+            80,
+            0,
+            format!("unknown struct type '{name}'"),
+        )
+    })?;
+    stack.push(name.to_string());
+    for (fname, ft) in def {
+        if values.len() >= crate::components::State::MAX_STATE_SLOTS {
+            return Err(error(Status::Invalid, 80));
+        }
+        let full = format!("{prefix}{fname}");
+        match ft {
+            StructFieldType::Scalar(v) => {
+                names.push(Some(full));
+                values.push(*v);
+                units.push(None);
+            }
+            StructFieldType::Struct(t) => {
+                expand_struct(t, &format!("{full}."), structs, values, names, units, stack)?
+            }
+        }
+    }
+    stack.pop();
+    Ok(())
+}
+
+fn expand_named_state(
+    items: pest::iterators::Pairs<'_, Rule>,
+    prefix: &str,
+    structs: &std::collections::BTreeMap<String, crate::dsl::StructDef>,
+    values: &mut Vec<f64>,
+    names: &mut Vec<Option<String>>,
+    units: &mut Vec<Option<crate::units::Dim>>,
+) -> Result<()> {
+    for item in items {
+        expand_state_item(item, prefix, structs, values, names, units)?;
+    }
+    Ok(())
+}
+
+fn expand_state_item(
+    item: pest::iterators::Pair<'_, Rule>,
+    prefix: &str,
+    structs: &std::collections::BTreeMap<String, crate::dsl::StructDef>,
+    values: &mut Vec<f64>,
+    names: &mut Vec<Option<String>>,
+    units: &mut Vec<Option<crate::units::Dim>>,
+) -> Result<()> {
+    let text = item.as_str().trim();
+    if let Some(rest) = text.strip_prefix("vec") {
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let n: usize = digits.parse().map_err(|_| error(Status::Invalid, 52))?;
+        let vname = text[3 + digits.len()..].trim().to_string();
+        let full = format!("{prefix}{vname}");
+        // `vecN pos` reserves N aligned slots `pos.0 … pos.{N-1}`; the bare name
+        // `pos` is an alias for component 0 (added to the name map).
+        for k in 0..n {
+            names.push(Some(format!("{full}.{k}")));
+            values.push(0.0);
+            units.push(None);
+        }
+        return Ok(());
+    }
+    let mut it = item.into_inner();
+    match it.next() {
+        Some(p) if p.as_rule() == Rule::ident => {
+            let full = format!("{prefix}{}", p.as_str());
+            let rhs = it.next().unwrap();
+            match rhs.as_rule() {
+                Rule::named_state => expand_named_state(
+                    rhs.into_inner(),
+                    &format!("{full}."),
+                    structs,
+                    values,
+                    names,
+                    units,
+                )?,
+                Rule::type_ref => expand_struct(
+                    rhs.as_str(),
+                    &format!("{full}."),
+                    structs,
+                    values,
+                    names,
+                    units,
+                    &mut Vec::new(),
+                )?,
+                Rule::value => {
+                    names.push(Some(full));
+                    values.push(parse_value(rhs));
+                    units.push(state_unit(it.next()));
+                }
+                _ => {}
+            }
+        }
+        Some(p) => {
+            names.push(None);
+            values.push(parse_value(p));
+            units.push(state_unit(it.next()));
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+fn apply_entity_field(
+    field: pest::iterators::Pair<'_, Rule>,
+    decl: &mut EntityDecl,
+    structs: &std::collections::BTreeMap<String, crate::dsl::StructDef>,
+) -> Result<()> {
     match field.as_rule() {
         Rule::position_field => {
             decl.position = Some(parse_vec3(field.into_inner().next().unwrap()))
@@ -7774,79 +8017,8 @@ fn apply_entity_field(field: pest::iterators::Pair<'_, Rule>, decl: &mut EntityD
         Rule::velocity_field => {
             decl.velocity = Some(parse_vec3(field.into_inner().next().unwrap()))
         }
-        Rule::state_field => {
-            let list = field.into_inner().next().unwrap();
-            match list.as_rule() {
-                Rule::vecN => {
-                    decl.state = Some(list.into_inner().map(parse_value).collect());
-                }
-                Rule::named_state => {
-                    let mut values = Vec::new();
-                    let mut names = Vec::new();
-                    let mut units: Vec<Option<crate::units::Dim>> = Vec::new();
-                    // `ident = value <unit>?` -> named slot with an
-                    // optional compile-time dimension annotation.
-                    let push_unit =
-                        |it: &mut pest::iterators::Pairs<'_, Rule>,
-                         units: &mut Vec<Option<crate::units::Dim>>| {
-                            let u = it.next().and_then(|p| {
-                                p.as_str()
-                                    .trim_start_matches('[')
-                                    .trim_end_matches(']')
-                                    .parse::<crate::units::Dim>()
-                                    .ok()
-                            });
-                            units.push(u);
-                        };
-                    for item in list.into_inner() {
-                        // `vec3 pos` -> N consecutive slots named
-                        // `pos`, `pos.0`, … `pos.{N-1}` (zero-init).
-                        let text = item.as_str().trim();
-                        if let Some(rest) = text.strip_prefix("vec") {
-                            let digits: String =
-                                rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-                            let n: usize =
-                                digits.parse().map_err(|_| error(Status::Invalid, 52))?;
-                            if n == 0 || names.len() + n > crate::components::State::MAX_STATE_SLOTS
-                            {
-                                return Err(error(Status::Invalid, 52));
-                            }
-                            let vname = text[3 + digits.len()..].trim().to_string();
-                            names.push(Some(vname.clone()));
-                            for k in 0..n {
-                                names.push(Some(format!("{vname}.{k}")));
-                                values.push(0.0);
-                                // `vecN` has no per-component unit.
-                                units.push(None);
-                            }
-                            continue;
-                        }
-                        let mut it = item.into_inner();
-                        match it.next() {
-                            // `ident = value` -> named slot.
-                            Some(p) if p.as_rule() == Rule::ident => {
-                                names.push(Some(p.as_str().to_string()));
-                                values.push(parse_value(it.next().unwrap()));
-                                push_unit(&mut it, &mut units);
-                            }
-                            // bare `value` -> positional slot.
-                            Some(p) => {
-                                names.push(None);
-                                values.push(parse_value(p));
-                                push_unit(&mut it, &mut units);
-                            }
-                            None => {}
-                        }
-                    }
-                    decl.state = Some(values);
-                    decl.state_names = Some(names);
-                    if units.iter().any(|u| u.is_some()) {
-                        decl.state_units = Some(units);
-                    }
-                }
-                _ => {}
-            }
-        }
+        Rule::state_field => parse_state_field(field, decl, structs)?,
+
         Rule::mass_field => decl.mass = Some(parse_value(field.into_inner().next().unwrap())),
         Rule::dynamic_field => {
             decl.dynamic = Some(field.into_inner().next().unwrap().as_str() == "true")
@@ -9631,6 +9803,60 @@ mod tests {
             (x - 3.0).abs() < 1e-9,
             "x should integrate by dt=1 per step: {x}"
         );
+    }
+
+    /// RFC-0042: `struct` record types flatten to dotted state slots; nested
+    /// types, inline records, dotted rule LHS, and `@name.a.b` access all work.
+    #[test]
+    fn struct_record_types_layout_and_rules() {
+        let src = "world { \
+          struct V { x = 1.0; y = 2.0 } \
+          struct Body { pos = V; vel = V; mass = 5.0 } \
+          entity a { state = Body } \
+          entity c { state = (pos = (x = 7.0, y = 8.0)) } \
+          entity probe { state = (d = 0.0) } } \
+          systems { \
+            update { on = a; dt = 1.0 pos.x = vel.x  vel.x = 0.0 + 1.0 } \
+            update { on = probe; dt = 1.0 d = (@a.pos.x - d) } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(3).unwrap();
+        let a = rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values
+            .clone();
+        assert!((a[0] - 7.0).abs() < 1e-9, "pos.x = {}", a[0]);
+        assert!((a[2] - 4.0).abs() < 1e-9, "vel.x = {}", a[2]);
+        let c = rt
+            .scene
+            .get(EntityId(2))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values
+            .clone();
+        assert_eq!((c[0], c[1]), (7.0, 8.0));
+        let pr = rt
+            .scene
+            .get(EntityId(3))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values
+            .clone();
+        assert!((pr[0] - 7.0).abs() < 1e-9, "probe = a.pos.x");
+    }
+
+    #[test]
+    fn unknown_struct_type_is_an_error() {
+        let bad = "world { gravity=(0,0,0) entity e { state = Nope } }";
+        assert!(LangRuntime::compile(bad).is_err());
     }
 
     #[test]
