@@ -22,15 +22,16 @@ systems {
 Fields (all optional except a sensible default): `nx` (default 8), `ny` (default 8), `spacing` (1.0), `origin` (0,0,0), `mass` (1.0), and the presentation `shape`/`size` applied to every particle.
 
 ## Rules
-1. **Particles.** A `soft` declaration creates `nx × ny` **active dynamic** entities, ids contiguous and immediately after the declared entities, channels, and pools (matching `build_scene`); particle `k = j·nx + i` is named `<body>#<k>` and starts at `origin + (i·spacing, j·spacing, 0)` with `mass` and a zero velocity.
+1. **Particles.** A `soft` declaration creates `nx × ny × nz` **active dynamic** entities (`nz` defaults to 1, a sheet), ids contiguous and immediately after the declared entities, channels, and pools (matching `build_scene`); particle `k = (kz·ny + ky)·nx + kx` is named `<body>#<k>` and starts at `origin + (i·spacing, j·spacing, k·spacing)` with `mass` and a zero velocity.
 2. **Constraints.** The grid generates:
-   * **structural** edges to the right and up (`spacing`);
-   * **shear** edges on both diagonals (`spacing·√2`);
-   * **bend** edges two cells right/up (`2·spacing`).
+   * **structural** edges one cell along each axis (`spacing`);
+   * **shear** edges on both diagonals of each coordinate plane (`spacing·√2`);
+   * **bend** edges two cells along each axis (`2·spacing`).
+   With `nz = 1` the edges involving the z axis vanish, leaving the 2D sheet.
    Each is a distance constraint `|p_a − p_b| = rest`.
 3. **Lowering.** A `soft` system lowers one function per particle. The particle owning a constraint's **lower index** applies it; per iteration it applies every such constraint as a position-relaxation pass (the RFC-0039 distance math, mass-weighted by `is_dynamic ? 1/mass : 0`), then the next particle's function applies its own. `iterations` (default 4) repeats the per-particle sweep; `stiffness` and optional `damping` (along-axis relative velocity) parameterize the springs.
 4. **Determinism.** The sweep order is fixed (particle id, then constraint order, then iterations); every read/write is an existing opcode, so results are reproducible and identical on both backends. No new opcode, ABI, schema, protocol, snapshot, or transaction contract is introduced.
 5. **Presentation.** Particles render as their `shape`; the structural and shear edges are emitted as `PresentationFrame.bonds`, so the viewer draws the mesh.
-6. **Scope.** This is a 2D lattice (`nz = 1`) of point masses, so it models cloth/membrane-like sheets. Volumetric (3D) grids, bending stiffness beyond the two-away edges, volume/pressure constraints, and self-collision are out of scope; `soft` complements `joint`/`pool` and does not replace a full FEM solver.
+6. **Scope.** This is a lattice of point masses with distance springs: `nz = 1` models cloth/membrane sheets, `nz > 1` a soft gel cube. Volume/pressure constraints and self-collision are out of scope; `soft` complements `joint`/`pool` and does not replace a full FEM solver.
 
 Implementation is staged: **Stage 1** adds the `soft` declaration, particle layout, and the `soft` system (structural/shear/bend, position relaxation). **Stage 2** adds render bonds and the example/`docs`. **Stage 3** re-baselines conformance and the example programs.

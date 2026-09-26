@@ -1301,6 +1301,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 name,
                                 nx: 8,
                                 ny: 8,
+                                nz: 1,
                                 spacing: 1.0,
                                 origin: Vec3::ZERO,
                                 mass: 1.0,
@@ -1334,6 +1335,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                             match key.as_str() {
                                                 "nx" => sd.nx = v as u32,
                                                 "ny" => sd.ny = v as u32,
+                                                "nz" => sd.nz = v as u32,
                                                 "spacing" => sd.spacing = v,
                                                 "mass" => sd.mass = v,
                                                 "size" => sd.size = Some(v),
@@ -5456,7 +5458,7 @@ pub fn build_systems(
     param_names: &std::collections::BTreeSet<String>,
     field_info: &std::collections::BTreeMap<String, (u32, u32, u32, f64)>,
     dynamic: &[u128],
-    softs: &[(String, u128, u32, u32, f64)],
+    softs: &[(String, u128, u32, u32, u32, f64)],
 ) -> Result<Vec<Box<dyn EirSystem>>> {
     // ChanSystem uses the first entity's named-state layout for its send value.
     let state_names = state_names_by_id
@@ -6014,7 +6016,7 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                         "soft requires `body = <name>`".to_string(),
                     )
                 })?;
-                let (_, base, nx, ny, spacing) = softs
+                let (_, base, nx, ny, nz, spacing) = softs
                     .iter()
                     .find(|(n, ..)| n == name)
                     .cloned()
@@ -6026,26 +6028,45 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                             format!("soft references unknown body '{name}'"),
                         )
                     })?;
-                let idx = |i: u32, j: u32| j * nx + i;
+                let idx = |i: u32, j: u32, k: u32| (k * ny + j) * nx + i;
                 let mut constraints: Vec<(u32, u32, f64)> = Vec::new();
                 let diag = spacing * std::f64::consts::SQRT_2;
-                for j in 0..ny {
-                    for i in 0..nx {
-                        if i + 1 < nx {
-                            constraints.push((idx(i, j), idx(i + 1, j), spacing));
-                        }
-                        if j + 1 < ny {
-                            constraints.push((idx(i, j), idx(i, j + 1), spacing));
-                        }
-                        if i + 1 < nx && j + 1 < ny {
-                            constraints.push((idx(i, j), idx(i + 1, j + 1), diag));
-                            constraints.push((idx(i + 1, j), idx(i, j + 1), diag));
-                        }
-                        if i + 2 < nx {
-                            constraints.push((idx(i, j), idx(i + 2, j), 2.0 * spacing));
-                        }
-                        if j + 2 < ny {
-                            constraints.push((idx(i, j), idx(i, j + 2), 2.0 * spacing));
+                for k in 0..nz {
+                    for j in 0..ny {
+                        for i in 0..nx {
+                            // structural (3 axes)
+                            if i + 1 < nx {
+                                constraints.push((idx(i, j, k), idx(i + 1, j, k), spacing));
+                            }
+                            if j + 1 < ny {
+                                constraints.push((idx(i, j, k), idx(i, j + 1, k), spacing));
+                            }
+                            if k + 1 < nz {
+                                constraints.push((idx(i, j, k), idx(i, j, k + 1), spacing));
+                            }
+                            // shear (both diagonals of each coordinate plane)
+                            if i + 1 < nx && j + 1 < ny {
+                                constraints.push((idx(i, j, k), idx(i + 1, j + 1, k), diag));
+                                constraints.push((idx(i + 1, j, k), idx(i, j + 1, k), diag));
+                            }
+                            if i + 1 < nx && k + 1 < nz {
+                                constraints.push((idx(i, j, k), idx(i + 1, j, k + 1), diag));
+                                constraints.push((idx(i + 1, j, k), idx(i, j, k + 1), diag));
+                            }
+                            if j + 1 < ny && k + 1 < nz {
+                                constraints.push((idx(i, j, k), idx(i, j + 1, k + 1), diag));
+                                constraints.push((idx(i, j + 1, k), idx(i, j, k + 1), diag));
+                            }
+                            // bend (two cells along each axis)
+                            if i + 2 < nx {
+                                constraints.push((idx(i, j, k), idx(i + 2, j, k), 2.0 * spacing));
+                            }
+                            if j + 2 < ny {
+                                constraints.push((idx(i, j, k), idx(i, j + 2, k), 2.0 * spacing));
+                            }
+                            if k + 2 < nz {
+                                constraints.push((idx(i, j, k), idx(i, j, k + 2), 2.0 * spacing));
+                            }
                         }
                     }
                 }
@@ -6990,8 +7011,8 @@ pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
     }
     // RFC-0040: soft-body particles are dynamic entities too.
     let softs = parsed.model.soft_ranges();
-    for (name, base, nx, ny, _) in &softs {
-        for k in 0..(*nx * *ny) {
+    for (name, base, nx, ny, nz, _) in &softs {
+        for k in 0..(nx * ny * nz) {
             entity_ids.insert(format!("{name}#{k}"), base + k as u128);
             entities.push(base + k as u128);
         }
@@ -7295,8 +7316,8 @@ impl LangRuntime {
             }
         }
         // RFC-0040: soft particles are `<body>#<k>`.
-        for (name, base, nx, ny, _) in compiled.parsed.model.soft_ranges() {
-            for k in 0..(nx * ny) {
+        for (name, base, nx, ny, nz, _) in compiled.parsed.model.soft_ranges() {
+            for k in 0..(nx * ny * nz) {
                 entity_names.insert(base + k as u128, format!("{name}#{k}"));
             }
         }
@@ -9344,6 +9365,34 @@ mod tests {
         let (a, b) = (p(&rt, 1), p(&rt, 2));
         let d = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2) + (b.z - a.z).powi(2)).sqrt();
         assert!((d - 1.0).abs() < 0.05, "cohesive after falling: {d}");
+    }
+
+    /// RFC-0040 (3D): a volumetric soft grid keeps spacing along all three axes.
+    #[test]
+    fn soft_body_3d_grid() {
+        let src = "world { gravity=(0,0,0) \
+                   soft gel { nx=3; ny=3; nz=3; spacing=1.0; origin=(0,0,0); mass=0.1 } } \
+                   systems { soft { body=gel; stiffness=1.0; iterations=8 } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        let p = |rt: &LangRuntime, id: u128| {
+            rt.scene
+                .get(EntityId(id))
+                .unwrap()
+                .transform
+                .unwrap()
+                .position
+        };
+        // 27 particles; particle k = (kz*ny + ky)*nx + kx, ids 1..=27.
+        assert_eq!(rt.scene.entities.len(), 27);
+        rt.step_cross_n(5).unwrap();
+        let p0 = p(&rt, 1); // (0,0,0)
+        let px = p(&rt, 2); // (1,0,0)
+        let pj = p(&rt, 4); // (0,1,0)  -> k=3
+        let pk = p(&rt, 10); // (0,0,1) -> k=9
+        let d = |a: crate::math::Vec3, b: crate::math::Vec3| (a - b).length();
+        assert!((d(p0, px) - 1.0).abs() < 1e-6, "x spacing {}", d(p0, px));
+        assert!((d(p0, pj) - 1.0).abs() < 1e-6, "y spacing {}", d(p0, pj));
+        assert!((d(p0, pk) - 1.0).abs() < 1e-6, "z spacing {}", d(p0, pk));
     }
 
     #[test]

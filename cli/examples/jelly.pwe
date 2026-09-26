@@ -1,0 +1,23 @@
+# jelly.pwe — a volumetric (3D) mass-spring soft body (RFC-0040).
+#
+# `nz > 1` makes the soft body a 3D lattice: particles are joined by
+# structural, shear (face diagonals) and bend springs along all three axes, so
+# it behaves like a soft gel cube. Drop it and it jiggles as a whole.
+
+world {
+  gravity = (0, -9.81, 0)
+  title = "Soft gel cube (3D)"
+  soft gel {
+    nx = 4; ny = 4; nz = 4
+    spacing = 0.35
+    origin = (-0.5, 4.0, -0.5)
+    mass = 0.1
+    shape = sphere; size = 0.05
+  }
+}
+
+systems {
+  gravity   { gravity_y = -9.81; dt = 0.016 }
+  integrate { dt = 0.016 }
+  soft      { body = gel; stiffness = 1.0; damping = 0.4; iterations = 6 }
+}

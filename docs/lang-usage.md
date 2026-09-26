@@ -342,13 +342,13 @@ the rotational DOF of `hinge`/`ball` is simply unconstrained. `gravity` +
 
 ### 4.9 Soft bodies — `soft` (RFC-0040)
 
-A `soft <name> { nx; ny; spacing; origin; mass; shape?; size? }` world declaration
-creates an `nx × ny` grid of dynamic particles joined by **structural**, **shear**,
-and **bend** distance springs. A `soft { body = <name>; stiffness?; damping?;
+A `soft <name> { nx; ny; nz?; spacing; origin; mass; shape?; size? }` world declaration
+creates an `nx × ny × nz` grid (default `nz = 1`, a sheet) of dynamic particles
+joined by **structural**, **shear**, and **bend** distance springs. A `soft { body = <name>; stiffness?; damping?;
 iterations? }` system relaxes those springs by mass-weighted position relaxation,
 so the sheet keeps its spacing while deforming. It composes with `gravity` +
-`integrate`, and the mesh edges are rendered as bonds. Example:
-`cli/examples/cloth.pwe`.
+`integrate`, and the mesh edges are rendered as bonds. Examples:
+`cli/examples/cloth.pwe` (sheet), `cli/examples/jelly.pwe` (3D gel).
 
 Unknown system kind → detail code 49.
 
