@@ -1402,17 +1402,26 @@ function addBonds(frame){
   }
 }
 let alive=true, inflight=null;
-// On teardown, stop polling, abort any in-flight request, and release the WebGL
-// context promptly — otherwise the browser can take a long time to close the
-// tab while it drains the GPU/context.
-function teardown(){
+function startLoop(){ renderer.setAnimationLoop(()=>{controls.update();renderer.render(scene,camera);labelRenderer.render(scene,camera);}); }
+// Stop polling and rendering, aborting any in-flight request. Called when the
+// tab is hidden or torn down.
+function stopAll(){
   alive=false;
   try{ if(inflight) inflight.abort(); }catch(e){}
   try{ renderer.setAnimationLoop(null); }catch(e){}
-  try{ renderer.dispose(); renderer.forceContextLoss(); }catch(e){}
 }
-addEventListener('pagehide',teardown);
-addEventListener('beforeunload',teardown);
+// On page hide navigate away / close, also release the WebGL context promptly:
+// otherwise the browser drains the GPU context and a pending request, which is
+// what makes closing the tab slow. No `beforeunload` handler (it can itself
+// delay or prompt on close).
+addEventListener('pagehide',()=>{
+  stopAll();
+  try{ renderer.dispose(); renderer.forceContextLoss(); }catch(e){}
+});
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){ stopAll(); }
+  else { alive=true; startLoop(); poll(); }
+});
 async function poll(){
   if(!alive) return;
   const ac=new AbortController(); inflight=ac;
@@ -1427,7 +1436,7 @@ document.getElementById('pse').onclick=()=>{paused=!paused;fetch('/pause?on='+(p
 document.getElementById('rst').addEventListener('click',()=>{paused=true;document.getElementById('pse').textContent='▶ Resume';});
 document.getElementById('lbl').onclick=()=>{labelsOn=!labelsOn;document.getElementById('lbl').style.opacity=labelsOn?'1':'0.45';};
 poll();
-renderer.setAnimationLoop(()=>{controls.update();renderer.render(scene,camera);labelRenderer.render(scene,camera);});
+startLoop();
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);labelRenderer.setSize(innerWidth,innerHeight);});
 </script>
 </body></html>"#
