@@ -1589,7 +1589,8 @@ mod tests {
         let json = frame_to_json(&snapshot(&scene_with_body(), None));
         let html = template(&format!("[{json}]"));
         assert!(html.contains("PWE 3D viewport"));
-        assert!(html.contains("three@0.160.0"));
+        // RFC-0041: three.js is vendored locally, not loaded from a CDN.
+        assert!(html.contains("/vendor/three/three.module.js"));
         // The frames placeholder is substituted.
         assert!(html.contains(&format!("[{json}]")));
     }
@@ -1613,7 +1614,7 @@ mod tests {
     fn live_viewer_page_polls_state() {
         let page = live_viewer_html();
         assert!(page.contains("PWE live 3D viewport"));
-        assert!(page.contains("fetch('/state')"));
+        assert!(page.contains("fetch('/state'"));
         assert!(page.contains("OrbitControls"));
     }
 
