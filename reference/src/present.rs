@@ -792,7 +792,9 @@ function addVel(x,y,z,vx,vy,vz,color) {{
 }}
 const fieldObjects = new Map();
 let fieldExtent = 0;
-function clearFields() {{ for (const o of fieldObjects.values()) {{ if (o.mc) {{ scene.remove(o.mc); scene.remove(o.trough.mc); }} if (o.line) scene.remove(o.line); }} fieldObjects.clear(); }}
+function disposeMat(m){{ if(!m) return; const arr=Array.isArray(m)?m:[m]; for(const mm of arr){{ try{{ if(mm){{ const tex=mm.map; if(tex&&tex.dispose)tex.dispose(); if(mm.dispose)mm.dispose(); }} }}catch(e){{}} }} }}
+function disposeObj(o){{ if(!o) return; try{{ if(o.geometry&&o.geometry.dispose)o.geometry.dispose(); }}catch(e){{}} disposeMat(o.material); try{{ if(o.element&&o.element.remove)o.element.remove(); }}catch(e){{}} if(o.children) for(const c of o.children) disposeObj(c); }}
+function clearFields() {{ for (const o of fieldObjects.values()) {{ if (o.mc) {{ scene.remove(o.mc); disposeObj(o.mc); if (o.trough && o.trough.mc) {{ scene.remove(o.trough.mc); disposeObj(o.trough.mc); }} disposeMat(o.mat); if (o.trough) disposeMat(o.trough.mat); }} if (o.line) {{ scene.remove(o.line); disposeObj(o.line); }} if (o.pts) {{ scene.remove(o.pts); disposeObj(o.pts); }} }} fieldObjects.clear(); }}
 // One translucent shell per field, coloured by radius (energy ~ 1/r^2): hot near
 // the source -> cool far away, across the shell's own hue family.
 function fieldRes(W, H, D) {{ return Math.max(16, Math.min(40, Math.round(1.5*Math.max(W,H,D)))); }}
@@ -911,15 +913,15 @@ function renderFields(fields) {{
     txt += fl.name+' '+W+'\u00d7'+H+dk+'  E\u221d|u|max '+peak.toFixed(3)+'<br>';
   }});
   for (const [name, ent] of [...fieldObjects]) {{
-    if (!seen.has(name)) {{ if (ent.mc) {{ scene.remove(ent.mc); scene.remove(ent.trough.mc); }} if (ent.line) scene.remove(ent.line); fieldObjects.delete(name); }}
+    if (!seen.has(name)) {{ if (ent.mc) {{ scene.remove(ent.mc); disposeObj(ent.mc); if (ent.trough && ent.trough.mc) {{ scene.remove(ent.trough.mc); disposeObj(ent.trough.mc); }} disposeMat(ent.mat); if (ent.trough) disposeMat(ent.trough.mat); }} if (ent.line) {{ scene.remove(ent.line); disposeObj(ent.line); }} if (ent.pts) {{ scene.remove(ent.pts); disposeObj(ent.pts); }} fieldObjects.delete(name); }}
   }}
   return txt;
 }}
 function applyFrame(f) {{
   const isMol = f.bonds && f.bonds.length>0;
-  for (const m of meshes.values()) scene.remove(m);
+  for (const m of meshes.values()) {{ scene.remove(m); disposeObj(m); }}
   meshes.clear();
-  for (const m of decals) scene.remove(m); decals.length=0;
+  for (const m of decals) {{ scene.remove(m); disposeObj(m); }} decals.length=0;
   let html = '<b>t='+f.time.toFixed(3)+'</b><hr>';
   let sun=null;
   for (const e of f.entities) {{ const r=Math.hypot(e.pos[0],e.pos[1]); if(!sun||r<sun.r) sun={{r:r,x:e.pos[0],y:e.pos[1],z:e.pos[2]}}; }}
@@ -1212,7 +1214,9 @@ function make(e){
 }
 const fieldObjects = new Map();
 let fieldExtent = 0;
-function clearFields() { for (const o of fieldObjects.values()) { if (o.mc) { scene.remove(o.mc); scene.remove(o.trough.mc); } if (o.line) scene.remove(o.line); if (o.pts) scene.remove(o.pts); } fieldObjects.clear(); }
+function disposeMat(m){ if(!m) return; const arr=Array.isArray(m)?m:[m]; for(const mm of arr){ try{ if(mm){ const tex=mm.map; if(tex&&tex.dispose)tex.dispose(); if(mm.dispose)mm.dispose(); } }catch(e){} } }
+function disposeObj(o){ if(!o) return; try{ if(o.geometry&&o.geometry.dispose)o.geometry.dispose(); }catch(e){} disposeMat(o.material); try{ if(o.element&&o.element.remove)o.element.remove(); }catch(e){} if(o.children) for(const c of o.children) disposeObj(c); }
+function clearFields() { for (const o of fieldObjects.values()) { if (o.mc) { scene.remove(o.mc); disposeObj(o.mc); if (o.trough && o.trough.mc) { scene.remove(o.trough.mc); disposeObj(o.trough.mc); } disposeMat(o.mat); if (o.trough) disposeMat(o.trough.mat); } if (o.line) { scene.remove(o.line); disposeObj(o.line); } if (o.pts) { scene.remove(o.pts); disposeObj(o.pts); } } fieldObjects.clear(); }
 // One translucent shell per field, coloured by radius (energy ~ 1/r^2): hot near
 // the source -> cool far away, across the shell's own hue family.
 function fieldRes(W, H, D) { return Math.max(16, Math.min(40, Math.round(1.5*Math.max(W,H,D)))); }
@@ -1331,14 +1335,15 @@ function renderFields(fields) {
     txt += fl.name+' '+W+'\u00d7'+H+dk+'  E\u221d|u|max '+peak.toFixed(3)+'<br>';
   });
   for (const [name, ent] of [...fieldObjects]) {
-    if (!seen.has(name)) { if (ent.mc) { scene.remove(ent.mc); scene.remove(ent.trough.mc); } if (ent.line) scene.remove(ent.line); fieldObjects.delete(name); }
+    if (!seen.has(name)) { if (ent.mc) { scene.remove(ent.mc); disposeObj(ent.mc); if (ent.trough && ent.trough.mc) { scene.remove(ent.trough.mc); disposeObj(ent.trough.mc); } disposeMat(ent.mat); if (ent.trough) disposeMat(ent.trough.mat); } if (ent.line) { scene.remove(ent.line); disposeObj(ent.line); } if (ent.pts) { scene.remove(ent.pts); disposeObj(ent.pts); } fieldObjects.delete(name); }
   }
   return txt;
 }
 function apply(f){
   const isMol = f.frame.bonds && f.frame.bonds.length > 0;
-  for(const m of meshes.values()) scene.remove(m); meshes.clear();
-  for(const m of decals) scene.remove(m); decals.length=0;
+  for(const m of meshes.values()){ scene.remove(m); disposeObj(m); }
+  meshes.clear();
+  for(const m of decals){ scene.remove(m); disposeObj(m); } decals.length=0;
   let html='<b>step '+f.step+' · t='+f.frame.time.toFixed(3)+'</b><hr>';
   // Sun = the body nearest the origin (central body).
   let sun={x:0,y:0,z:0};
@@ -1403,6 +1408,7 @@ function addBonds(frame){
 }
 let alive=true, inflight=null;
 function startLoop(){ renderer.setAnimationLoop(()=>{controls.update();renderer.render(scene,camera);labelRenderer.render(scene,camera);}); }
+window.__pwe=()=>({geo:renderer.info.memory.geometries,tex:renderer.info.memory.textures,prog:renderer.info.programs?renderer.info.programs.length:-1,meshes:meshes.size,decals:decals.length,children:scene.children.length});
 // Stop polling and rendering, aborting any in-flight request. Called when the
 // tab is hidden or torn down.
 function stopAll(){
@@ -1640,6 +1646,11 @@ mod tests {
         assert!(page.contains("forceContextLoss"));
         assert!(page.contains("AbortController"));
         assert!(page.contains("pagehide"));
+        // Leak guard: every per-frame removal must dispose GPU/DOM resources,
+        // or memory (and close time) grows with runtime.
+        assert!(page.contains("function disposeObj"));
+        assert!(page.contains("function disposeMat"));
+        assert!(page.contains("scene.remove(m); disposeObj(m)"));
         assert!(page.contains("OrbitControls"));
     }
 
