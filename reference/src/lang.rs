@@ -6588,7 +6588,11 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
             imports: Vec::new(),
         });
     }
-    merge_modules(modules, src.aliases.clone())
+    // Inline shape references so every consumer (including the artifact `run`
+    // path) sees concrete parts.
+    let mut parsed = merge_modules(modules, src.aliases.clone())?;
+    expand_shapes(&mut parsed.model.shapes)?;
+    Ok(parsed)
 }
 
 /// Loads a program file and its module imports, returning both the merged
@@ -7885,6 +7889,14 @@ fn apply_entity_field(field: pest::iterators::Pair<'_, Rule>, decl: &mut EntityD
         Rule::glow_field => {
             let v = parse_value(field.into_inner().next().unwrap());
             decl.render.get_or_insert_with(Default::default).glow = Some(v);
+        }
+        Rule::orient_field => {
+            let v = field.into_inner().next().unwrap().as_str() == "true";
+            decl.render.get_or_insert_with(Default::default).orient = v;
+        }
+        Rule::vector_field => {
+            let v = field.into_inner().next().unwrap().as_str() == "true";
+            decl.render.get_or_insert_with(Default::default).no_velocity = !v;
         }
         Rule::label_field => {
             let v = field.into_inner().next().unwrap().as_str() == "true";
@@ -9543,6 +9555,25 @@ mod tests {
                    shape a { part b at (0,0,0); } shape b { part a at (0,0,0); } \
                    entity e { position=(0,0,0); shape = a } }";
         assert!(LangRuntime::compile(cyc).is_err(), "cycle must be rejected");
+    }
+
+    /// `orient = true` marks a state body to read its render orientation from
+    /// state slots 7/8/9 (pitch, yaw, roll).
+    #[test]
+    fn orient_flag_sets_render_orientation() {
+        let src = "world { gravity=(0,0,0) \
+                   entity e { state=(x=0,y=0,z=0,a=0,b=0,c=0,d=0, rx=0.1, ry=0.2, rz=0.0) \
+                              orient = true } }";
+        let rt = LangRuntime::compile(src).unwrap();
+        assert!(
+            rt.scene
+                .get(EntityId(1))
+                .unwrap()
+                .render
+                .as_ref()
+                .unwrap()
+                .orient
+        );
     }
 
     #[test]

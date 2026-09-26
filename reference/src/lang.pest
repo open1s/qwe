@@ -89,13 +89,18 @@ scale_opt = { "scale" ~ value }
 shape_kind = @{ "point" | "sphere" | "box" | "capsule" | "svg" | "hull" | "poly" }
 size_field = { "size" ~ "=" ~ (vec3 | value) ~ ";"? }
 opacity_field = { "opacity" ~ "=" ~ value ~ ";"? }
+// Orientation from state slots 7/8/9 (euler pitch, yaw, roll) for state bodies.
+orient_field = { "orient" ~ "=" ~ boolean ~ ";"? }
+// `vector = false` hides the viewer's velocity arrow / orbit ring.
+vector_field = { "vector" ~ "=" ~ boolean ~ ";"? }
 glow_field = { "glow" ~ "=" ~ value ~ ";"? }
 label_field = { "label" ~ "=" ~ boolean ~ ";"? }
 entity_field = _{ position_field | velocity_field | state_field | mass_field | dynamic_field
                  | nbody_field | parent_field | restitution_field | friction_field | box_field
                  | rotation_field
                  | sphere_field | hull_field | camera_field | color_field
-                 | shape_field | size_field | opacity_field | glow_field | label_field }
+                 | shape_field | size_field | opacity_field | glow_field | label_field
+                 | orient_field | vector_field }
 
 hull_list = { "[" ~ vec3 ~ ("," ~ vec3)* ~ "]" }
 vec3 = { "(" ~ value ~ "," ~ value ~ "," ~ value ~ ")" }

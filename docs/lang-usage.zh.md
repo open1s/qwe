@@ -213,6 +213,7 @@ systems {
 | `opacity = v` | 不透明度 `[0, 1]`。 |
 | `glow = v` | 自发光强度（0=哑光）。 |
 | `label = false` | 隐藏浮动名称标签（默认 `true`）。 |
+| `orient = true` | 对纯 state 实体，将 state 槽 7/8/9 作为欧拉角（pitch, yaw, roll，弧度）用于渲染朝向（默认槽 7 为绕 Z 自转）。可让仿真驱动实体转向与前倾。 |
 
 ### 3.2 自定义形状（基本体、多面体、SVG）
 

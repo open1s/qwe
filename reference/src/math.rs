@@ -180,6 +180,25 @@ impl Quat {
         z: 0.0,
         w: 1.0,
     };
+    /// Quaternion product `a * b`.
+    fn mul(a: Self, b: Self) -> Self {
+        Self {
+            x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+            y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+            w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+        }
+    }
+
+    /// Yaw (about Y) then body-local pitch (about X) then roll (about Z) — so a
+    /// body's forward lean stays forward however it is facing (RFC orient).
+    pub fn from_yaw_pitch_roll(yaw: f64, pitch: f64, roll: f64) -> Self {
+        let qy = Self::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), yaw);
+        let qx = Self::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), pitch);
+        let qz = Self::from_axis_angle(Vec3::new(0.0, 0.0, 1.0), roll);
+        Self::mul(Self::mul(qy, qx), qz)
+    }
+
     /// Euler angles (radians, XYZ order) to a quaternion.
     pub fn from_euler(x: f64, y: f64, z: f64) -> Self {
         let (sx, cx) = (x * 0.5).sin_cos();

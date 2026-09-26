@@ -221,6 +221,7 @@ or the state hash):
 | `opacity = v` | Opacity in `[0, 1]`. |
 | `glow = v` | Emissive glow intensity (0 = matte). |
 | `label = false` | Hide the floating name label (default `true`). |
+| `orient = true` | For a state-only body, read state slots 7/8/9 as euler (pitch, yaw, roll) radians for the render orientation (default: slot 7 is a spin about Z). Lets the simulation steer a body's facing/lean. |
 
 ### 3.2 Custom shapes (primitives, polyhedra, SVG)
 

@@ -1,30 +1,32 @@
-# courtyard.pwe — people walking a smoothly sloped, winding courtyard.
+# courtyard.pwe — people walking a smoothly sloped courtyard, with
+# simulation-driven orientation (they turn to face their heading and lean
+# forward) and a seamless triangle-mesh ground (no tile stair-steps).
 #
-# Ground:  y = h(x,z) = 0.30*sin(0.5x)*cos(0.45z) + 0.20x - 0.15*channel,
-#   channel = 1/(1+3*(z-path)^2), path = 1.6*sin(0.5x). Gentle rolling
-#   hills, a steady up-slope toward +x, and a lower winding path band
-#   (sandy tiles). 14x11 tiles, each tilted to the local gradient via the
-#   entity `rotation` field, so the ground slopes smoothly (not a staircase).
+# Ground: a single `poly` triangle mesh sampled from
+#   y = h(x,z) = 0.30*sin(0.5x)*cos(0.45z) + 0.20x - 0.15*channel,
+#   channel = 1/(1+3*(z-path)^2), path = 1.6*sin(0.5x), plus a `path` mesh
+#   (a sand-coloured strip) laid just above it. Because it is one mesh there
+#   are no inter-tile seams.
 #
-# People: a state-only body with seven slots (x,y,z, vx,vz = unit heading,
-# dx,dz = desired heading). Slot 7 is the viewer Z-spin, so the gait phase
-# is derived from the clock, phase = frac(t*gait). The rule steers the
-# heading smoothly toward an occasionally-refreshed desired direction and
-# away from the walls, advances by `speed`, and snaps y to the terrain. Four
-# limb entities per person (legs with feet, arms with hands) read the owner
-# via @name and swing along the heading from the same clock phase (legs
-# opposite, arms counter-swinging). `random()` is seeded → identical replays.
+# People: a state-only body with ten slots
+#   (x,y,z, vx,vz = unit heading, dx,dz = desired heading, rx,ry,rz)
+# with `orient = true`, so the viewer reads slots 7/8/9 as euler
+# (pitch, yaw, roll): ry is the yaw about Y, rx a forward lean. The rule
+# steers the heading smoothly toward an occasionally-refreshed desired
+# direction and away from the walls, advances by `speed`, snaps y to the
+# terrain, and sets yaw = atan2(vx, vz) + a small forward lean. Four limb
+# entities (legs with feet, arms with hands, also `orient = true`) read the
+# owner via @name and swing along the heading from the clock phase
+# phase = frac(t*gait). `random()` is seeded, so replays are identical.
 #
 #   cargo build --release -p pwe-cli
 #   pwe compile cli/examples/courtyard.pwe -o courtyard.pweb
 #   pwe run courtyard.pweb --port 8000        # live 3D viewer
 
 world {
-  title = "Courtyard walk (smooth slopes, winding path, walking people)"
+  title = "Courtyard walk (mesh ground, turning/leaning people)"
   gravity = (0, 0, 0)
 
-  # Shapes compose: `part <other-shape>` includes a named shape (with an
-  # optional `at`/`scale`), so a person reuses the head/foot/hand shapes.
   shape head { part sphere = 0.115 at (0, 0, 0); }
   shape foot { part box    = (0.10, 0.05, 0.17) at (0, 0, 0.04); }
   shape hand { part sphere = 0.055 at (0, 0, 0); }
@@ -40,188 +42,35 @@ world {
     part capsule = (0.05, 0.30, 0.045) at (0, -0.13, 0);
     part hand at (0, -0.31, 0);
   }
+  shape terrain { part poly = [(-3.600,-0.864,-2.750),(-3.150,-0.778,-2.750),(-2.700,-0.684,-2.750),(-2.250,-0.583,-2.750),(-1.800,-0.476,-2.750),(-1.350,-0.366,-2.750),(-0.900,-0.254,-2.750),(-0.450,-0.140,-2.750),(0.000,-0.026,-2.750),(0.450,0.087,-2.750),(0.900,0.199,-2.750),(1.350,0.308,-2.750),(1.800,0.414,-2.750),(2.250,0.516,-2.750),(2.700,0.613,-2.750),(3.150,0.706,-2.750),(3.600,0.793,-2.750),(-3.600,-0.947,-2.292),(-3.150,-0.866,-2.292),(-2.700,-0.768,-2.292),(-2.250,-0.657,-2.292),(-1.800,-0.536,-2.292),(-1.350,-0.411,-2.292),(-0.900,-0.284,-2.292),(-0.450,-0.157,-2.292),(0.000,-0.029,-2.292),(0.450,0.098,-2.292),(0.900,0.222,-2.292),(1.350,0.342,-2.292),(1.800,0.457,-2.292),(2.250,0.566,-2.292),(2.700,0.667,-2.292),(3.150,0.761,-2.292),(3.600,0.847,-2.292),(-3.600,-1.060,-1.833),(-3.150,-0.983,-1.833),(-2.700,-0.881,-1.833),(-2.250,-0.757,-1.833),(-1.800,-0.614,-1.833),(-1.350,-0.466,-1.833),(-0.900,-0.319,-1.833),(-0.450,-0.175,-1.833),(0.000,-0.034,-1.833),(0.450,0.106,-1.833),(0.900,0.241,-1.833),(1.350,0.371,-1.833),(1.800,0.494,-1.833),(2.250,0.609,-1.833),(2.700,0.714,-1.833),(3.150,0.809,-1.833),(3.600,0.894,-1.833),(-3.600,-1.114,-1.375),(-3.150,-1.025,-1.375),(-2.700,-0.934,-1.375),(-2.250,-0.838,-1.375),(-1.800,-0.715,-1.375),(-1.350,-0.548,-1.375),(-0.900,-0.369,-1.375),(-0.450,-0.201,-1.375),(0.000,-0.042,-1.375),(0.450,0.110,-1.375),(0.900,0.255,-1.375),(1.350,0.394,-1.375),(1.800,0.525,-1.375),(2.250,0.644,-1.375),(2.700,0.753,-1.375),(3.150,0.849,-1.375),(3.600,0.932,-1.375),(-3.600,-1.075,-0.917),(-3.150,-0.987,-0.917),(-2.700,-0.895,-0.917),(-2.250,-0.800,-0.917),(-1.800,-0.707,-0.917),(-1.350,-0.609,-0.917),(-0.900,-0.450,-0.917),(-0.450,-0.249,-0.917),(0.000,-0.063,-0.917),(0.450,0.106,-0.917),(0.900,0.263,-0.917),(1.350,0.409,-0.917),(1.800,0.545,-0.917),(2.250,0.670,-0.917),(2.700,0.780,-0.917),(3.150,0.877,-0.917),(3.600,0.960,-0.917),(-3.600,-1.058,-0.458),(-3.150,-0.974,-0.458),(-2.700,-0.879,-0.458),(-2.250,-0.773,-0.458),(-1.800,-0.662,-0.458),(-1.350,-0.553,-0.458),(-0.900,-0.456,-0.458),(-0.450,-0.321,-0.458),(0.000,-0.112,-0.458),(0.450,0.085,-0.458),(0.900,0.258,-0.458),(1.350,0.413,-0.458),(1.800,0.555,-0.458),(2.250,0.682,-0.458),(2.700,0.795,-0.458),(3.150,0.893,-0.458),(3.600,0.975,-0.458),(-3.600,-1.050,0.000),(-3.150,-0.967,0.000),(-2.700,-0.871,0.000),(-2.250,-0.761,0.000),(-1.800,-0.641,0.000),(-1.350,-0.515,0.000),(-0.900,-0.392,0.000),(-0.450,-0.285,0.000),(0.000,-0.170,0.000),(0.450,0.028,0.000),(0.900,0.229,0.000),(1.350,0.400,0.000),(1.800,0.549,0.000),(2.250,0.680,0.000),(2.700,0.795,0.000),(3.150,0.893,0.000),(3.600,0.974,0.000),(-3.600,-1.037,0.458),(-3.150,-0.955,0.458),(-2.700,-0.858,0.458),(-2.250,-0.748,0.458),(-1.800,-0.625,0.458),(-1.350,-0.494,0.458),(-0.900,-0.358,0.458),(-0.450,-0.226,0.458),(0.000,-0.112,0.458),(0.450,-0.010,0.458),(0.900,0.159,0.458),(1.350,0.354,0.458),(1.800,0.518,0.458),(2.250,0.657,0.458),(2.700,0.774,0.458),(3.150,0.873,0.458),(3.600,0.954,0.458),(-3.600,-1.015,0.917),(-3.150,-0.932,0.917),(-2.700,-0.836,0.917),(-2.250,-0.726,0.917),(-1.800,-0.605,0.917),(-1.350,-0.474,0.917),(-0.900,-0.337,0.917),(-0.450,-0.197,0.917),(0.000,-0.063,0.917),(0.450,0.054,0.917),(0.900,0.149,0.917),(1.350,0.275,0.917),(1.800,0.443,0.917),(2.250,0.596,0.917),(2.700,0.721,0.917),(3.150,0.822,0.917),(3.600,0.901,0.917),(-3.600,-0.984,1.375),(-3.150,-0.900,1.375),(-2.700,-0.804,1.375),(-2.250,-0.697,1.375),(-1.800,-0.578,1.375),(-1.350,-0.451,1.375),(-0.900,-0.317,1.375),(-0.450,-0.180,1.375),(0.000,-0.042,1.375),(0.450,0.088,1.375),(0.900,0.203,1.375),(1.350,0.297,1.375),(1.800,0.388,1.375),(2.250,0.503,1.375),(2.700,0.623,1.375),(3.150,0.724,1.375),(3.600,0.802,1.375),(-3.600,-0.942,1.833),(-3.150,-0.858,1.833),(-2.700,-0.763,1.833),(-2.250,-0.658,1.833),(-1.800,-0.545,1.833),(-1.350,-0.423,1.833),(-0.900,-0.296,1.833),(-0.450,-0.165,1.833),(0.000,-0.034,1.833),(0.450,0.096,1.833),(0.900,0.218,1.833),(1.350,0.329,1.833),(1.800,0.425,1.833),(2.250,0.511,1.833),(2.700,0.596,1.833),(3.150,0.685,1.833),(3.600,0.776,1.833),(-3.600,-0.893,2.292),(-3.150,-0.807,2.292),(-2.700,-0.714,2.292),(-2.250,-0.613,2.292),(-1.800,-0.505,2.292),(-1.350,-0.391,2.292),(-0.900,-0.272,2.292),(-0.450,-0.151,2.292),(0.000,-0.029,2.292),(0.450,0.092,2.292),(0.900,0.210,2.292),(1.350,0.321,2.292),(1.800,0.425,2.292),(2.250,0.522,2.292),(2.700,0.613,2.292),(3.150,0.703,2.292),(3.600,0.793,2.292),(-3.600,-0.838,2.750),(-3.150,-0.751,2.750),(-2.700,-0.658,2.750),(-2.250,-0.561,2.750),(-1.800,-0.460,2.750),(-1.350,-0.355,2.750),(-0.900,-0.247,2.750),(-0.450,-0.137,2.750),(0.000,-0.026,2.750),(0.450,0.084,2.750),(0.900,0.192,2.750),(1.350,0.297,2.750),(1.800,0.397,2.750),(2.250,0.494,2.750),(2.700,0.587,2.750),(3.150,0.678,2.750),(3.600,0.767,2.750)] faces = [[0,1,18],[0,18,17],[1,2,19],[1,19,18],[2,3,20],[2,20,19],[3,4,21],[3,21,20],[4,5,22],[4,22,21],[5,6,23],[5,23,22],[6,7,24],[6,24,23],[7,8,25],[7,25,24],[8,9,26],[8,26,25],[9,10,27],[9,27,26],[10,11,28],[10,28,27],[11,12,29],[11,29,28],[12,13,30],[12,30,29],[13,14,31],[13,31,30],[14,15,32],[14,32,31],[15,16,33],[15,33,32],[17,18,35],[17,35,34],[18,19,36],[18,36,35],[19,20,37],[19,37,36],[20,21,38],[20,38,37],[21,22,39],[21,39,38],[22,23,40],[22,40,39],[23,24,41],[23,41,40],[24,25,42],[24,42,41],[25,26,43],[25,43,42],[26,27,44],[26,44,43],[27,28,45],[27,45,44],[28,29,46],[28,46,45],[29,30,47],[29,47,46],[30,31,48],[30,48,47],[31,32,49],[31,49,48],[32,33,50],[32,50,49],[34,35,52],[34,52,51],[35,36,53],[35,53,52],[36,37,54],[36,54,53],[37,38,55],[37,55,54],[38,39,56],[38,56,55],[39,40,57],[39,57,56],[40,41,58],[40,58,57],[41,42,59],[41,59,58],[42,43,60],[42,60,59],[43,44,61],[43,61,60],[44,45,62],[44,62,61],[45,46,63],[45,63,62],[46,47,64],[46,64,63],[47,48,65],[47,65,64],[48,49,66],[48,66,65],[49,50,67],[49,67,66],[51,52,69],[51,69,68],[52,53,70],[52,70,69],[53,54,71],[53,71,70],[54,55,72],[54,72,71],[55,56,73],[55,73,72],[56,57,74],[56,74,73],[57,58,75],[57,75,74],[58,59,76],[58,76,75],[59,60,77],[59,77,76],[60,61,78],[60,78,77],[61,62,79],[61,79,78],[62,63,80],[62,80,79],[63,64,81],[63,81,80],[64,65,82],[64,82,81],[65,66,83],[65,83,82],[66,67,84],[66,84,83],[68,69,86],[68,86,85],[69,70,87],[69,87,86],[70,71,88],[70,88,87],[71,72,89],[71,89,88],[72,73,90],[72,90,89],[73,74,91],[73,91,90],[74,75,92],[74,92,91],[75,76,93],[75,93,92],[76,77,94],[76,94,93],[77,78,95],[77,95,94],[78,79,96],[78,96,95],[79,80,97],[79,97,96],[80,81,98],[80,98,97],[81,82,99],[81,99,98],[82,83,100],[82,100,99],[83,84,101],[83,101,100],[85,86,103],[85,103,102],[86,87,104],[86,104,103],[87,88,105],[87,105,104],[88,89,106],[88,106,105],[89,90,107],[89,107,106],[90,91,108],[90,108,107],[91,92,109],[91,109,108],[92,93,110],[92,110,109],[93,94,111],[93,111,110],[94,95,112],[94,112,111],[95,96,113],[95,113,112],[96,97,114],[96,114,113],[97,98,115],[97,115,114],[98,99,116],[98,116,115],[99,100,117],[99,117,116],[100,101,118],[100,118,117],[102,103,120],[102,120,119],[103,104,121],[103,121,120],[104,105,122],[104,122,121],[105,106,123],[105,123,122],[106,107,124],[106,124,123],[107,108,125],[107,125,124],[108,109,126],[108,126,125],[109,110,127],[109,127,126],[110,111,128],[110,128,127],[111,112,129],[111,129,128],[112,113,130],[112,130,129],[113,114,131],[113,131,130],[114,115,132],[114,132,131],[115,116,133],[115,133,132],[116,117,134],[116,134,133],[117,118,135],[117,135,134],[119,120,137],[119,137,136],[120,121,138],[120,138,137],[121,122,139],[121,139,138],[122,123,140],[122,140,139],[123,124,141],[123,141,140],[124,125,142],[124,142,141],[125,126,143],[125,143,142],[126,127,144],[126,144,143],[127,128,145],[127,145,144],[128,129,146],[128,146,145],[129,130,147],[129,147,146],[130,131,148],[130,148,147],[131,132,149],[131,149,148],[132,133,150],[132,150,149],[133,134,151],[133,151,150],[134,135,152],[134,152,151],[136,137,154],[136,154,153],[137,138,155],[137,155,154],[138,139,156],[138,156,155],[139,140,157],[139,157,156],[140,141,158],[140,158,157],[141,142,159],[141,159,158],[142,143,160],[142,160,159],[143,144,161],[143,161,160],[144,145,162],[144,162,161],[145,146,163],[145,163,162],[146,147,164],[146,164,163],[147,148,165],[147,165,164],[148,149,166],[148,166,165],[149,150,167],[149,167,166],[150,151,168],[150,168,167],[151,152,169],[151,169,168],[153,154,171],[153,171,170],[154,155,172],[154,172,171],[155,156,173],[155,173,172],[156,157,174],[156,174,173],[157,158,175],[157,175,174],[158,159,176],[158,176,175],[159,160,177],[159,177,176],[160,161,178],[160,178,177],[161,162,179],[161,179,178],[162,163,180],[162,180,179],[163,164,181],[163,181,180],[164,165,182],[164,182,181],[165,166,183],[165,183,182],[166,167,184],[166,184,183],[167,168,185],[167,185,184],[168,169,186],[168,186,185],[170,171,188],[170,188,187],[171,172,189],[171,189,188],[172,173,190],[172,190,189],[173,174,191],[173,191,190],[174,175,192],[174,192,191],[175,176,193],[175,193,192],[176,177,194],[176,194,193],[177,178,195],[177,195,194],[178,179,196],[178,196,195],[179,180,197],[179,197,196],[180,181,198],[180,198,197],[181,182,199],[181,199,198],[182,183,200],[182,200,199],[183,184,201],[183,201,200],[184,185,202],[184,202,201],[185,186,203],[185,203,202],[187,188,205],[187,205,204],[188,189,206],[188,206,205],[189,190,207],[189,207,206],[190,191,208],[190,208,207],[191,192,209],[191,209,208],[192,193,210],[192,210,209],[193,194,211],[193,211,210],[194,195,212],[194,212,211],[195,196,213],[195,213,212],[196,197,214],[196,214,213],[197,198,215],[197,215,214],[198,199,216],[198,216,215],[199,200,217],[199,217,216],[200,201,218],[200,218,217],[201,202,219],[201,219,218],[202,203,220],[202,220,219]]; }
+  shape path { part poly = [(-3.600,-0.939,-2.108),(-3.600,-1.031,-1.008),(-3.287,-0.876,-2.146),(-3.287,-0.973,-1.046),(-2.974,-0.814,-2.144),(-2.974,-0.910,-1.044),(-2.661,-0.751,-2.104),(-2.661,-0.843,-1.004),(-2.348,-0.688,-2.026),(-2.348,-0.771,-0.926),(-2.035,-0.622,-1.911),(-2.035,-0.694,-0.811),(-1.722,-0.553,-1.763),(-1.722,-0.610,-0.663),(-1.409,-0.477,-1.586),(-1.409,-0.520,-0.486),(-1.096,-0.395,-1.383),(-1.096,-0.423,-0.283),(-0.783,-0.304,-1.160),(-0.783,-0.320,-0.060),(-0.470,-0.206,-0.922),(-0.470,-0.212,0.178),(-0.157,-0.102,-0.675),(-0.157,-0.103,0.425),(0.157,0.006,-0.425),(0.157,0.005,0.675),(0.470,0.115,-0.178),(0.470,0.109,0.922),(0.783,0.222,0.060),(0.783,0.207,1.160),(1.096,0.325,0.283),(1.096,0.297,1.383),(1.409,0.423,0.486),(1.409,0.380,1.586),(1.722,0.513,0.663),(1.722,0.455,1.763),(2.035,0.597,0.811),(2.035,0.525,1.911),(2.348,0.674,0.926),(2.348,0.590,2.026),(2.661,0.746,1.004),(2.661,0.654,2.104),(2.974,0.813,1.044),(2.974,0.716,2.144),(3.287,0.875,1.046),(3.287,0.779,2.146),(3.600,0.934,1.008),(3.600,0.842,2.108)] faces = [[0,1,3],[0,3,2],[2,3,5],[2,5,4],[4,5,7],[4,7,6],[6,7,9],[6,9,8],[8,9,11],[8,11,10],[10,11,13],[10,13,12],[12,13,15],[12,15,14],[14,15,17],[14,17,16],[16,17,19],[16,19,18],[18,19,21],[18,21,20],[20,21,23],[20,23,22],[22,23,25],[22,25,24],[24,25,27],[24,27,26],[26,27,29],[26,29,28],[28,29,31],[28,31,30],[30,31,33],[30,33,32],[32,33,35],[32,35,34],[34,35,37],[34,37,36],[36,37,39],[36,39,38],[38,39,41],[38,41,40],[40,41,43],[40,43,42],[42,43,45],[42,45,44],[44,45,47],[44,47,46]]; }
 
-  # --- smoothly tilted terrain tiles ---
-  entity t0x0 { position = (-3.575, -0.900, -2.750); rotation = (0.1637, 0.0, 0.1827); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t1x0 { position = (-3.025, -0.793, -2.750); rotation = (0.1691, 0.0, 0.2048); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x65954B; label = false }
-  entity t2x0 { position = (-2.475, -0.675, -2.750); rotation = (0.1561, 0.0, 0.2254); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x69944B; label = false }
-  entity t3x0 { position = (-1.925, -0.546, -2.750); rotation = (0.1297, 0.0, 0.2395); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x6D944C; label = false }
-  entity t4x0 { position = (-1.375, -0.412, -2.750); rotation = (0.0965, 0.0, 0.2475); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x72934D; label = false }
-  entity t5x0 { position = (-0.825, -0.275, -2.750); rotation = (0.0604, 0.0, 0.2517); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x76924D; label = false }
-  entity t6x0 { position = (-0.275, -0.136, -2.750); rotation = (0.0231, 0.0, 0.2530); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x7B924E; label = false }
-  entity t7x0 { position = (0.275, 0.003, -2.750); rotation = (-0.0139, 0.0, 0.2514); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x80914E; label = false }
-  entity t8x0 { position = (0.825, 0.140, -2.750); rotation = (-0.0487, 0.0, 0.2467); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x85904F; label = false }
-  entity t9x0 { position = (1.375, 0.274, -2.750); rotation = (-0.0792, 0.0, 0.2390); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x898F50; label = false }
-  entity t10x0 { position = (1.925, 0.403, -2.750); rotation = (-0.1033, 0.0, 0.2287); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x8E8F50; label = false }
-  entity t11x0 { position = (2.475, 0.525, -2.750); rotation = (-0.1193, 0.0, 0.2164); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x928E51; label = false }
-  entity t12x0 { position = (3.025, 0.640, -2.750); rotation = (-0.1262, 0.0, 0.2029); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x968D51; label = false }
-  entity t13x0 { position = (3.575, 0.748, -2.750); rotation = (-0.1234, 0.0, 0.1892); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x998D52; label = false }
-  entity t0x1 { position = (-3.575, -1.003, -2.200); rotation = (0.2267, 0.0, 0.1623); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t1x1 { position = (-3.025, -0.901, -2.200); rotation = (0.2369, 0.0, 0.2106); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t2x1 { position = (-2.475, -0.773, -2.200); rotation = (0.2124, 0.0, 0.2546); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x65954B; label = false }
-  entity t3x1 { position = (-1.925, -0.625, -2.200); rotation = (0.1633, 0.0, 0.2794); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x6B944C; label = false }
-  entity t4x1 { position = (-1.375, -0.468, -2.200); rotation = (0.1109, 0.0, 0.2879); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x70934C; label = false }
-  entity t5x1 { position = (-0.825, -0.309, -2.200); rotation = (0.0657, 0.0, 0.2904); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x75924D; label = false }
-  entity t6x1 { position = (-0.275, -0.149, -2.200); rotation = (0.0264, 0.0, 0.2902); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x7B924E; label = false }
-  entity t7x1 { position = (0.275, 0.009, -2.200); rotation = (-0.0091, 0.0, 0.2865); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x80914E; label = false }
-  entity t8x1 { position = (0.825, 0.165, -2.200); rotation = (-0.0412, 0.0, 0.2783); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x85904F; label = false }
-  entity t9x1 { position = (1.375, 0.315, -2.200); rotation = (-0.0688, 0.0, 0.2654); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x8B8F50; label = false }
-  entity t10x1 { position = (1.925, 0.456, -2.200); rotation = (-0.0904, 0.0, 0.2480); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x8F8E50; label = false }
-  entity t11x1 { position = (2.475, 0.587, -2.200); rotation = (-0.1048, 0.0, 0.2274); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x948E51; label = false }
-  entity t12x1 { position = (3.025, 0.706, -2.200); rotation = (-0.1109, 0.0, 0.2049); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x988D52; label = false }
-  entity t13x1 { position = (3.575, 0.812, -2.200); rotation = (-0.1084, 0.0, 0.1820); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x9C8C52; label = false }
-  entity t0x2 { position = (-3.575, -1.138, -1.650); rotation = (0.1643, 0.0, 0.1633); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t1x2 { position = (-3.025, -1.034, -1.650); rotation = (0.1378, 0.0, 0.2086); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t2x2 { position = (-2.475, -0.906, -1.650); rotation = (0.1974, 0.0, 0.2653); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t3x2 { position = (-1.925, -0.738, -1.650); rotation = (0.2436, 0.0, 0.3403); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t4x2 { position = (-1.375, -0.543, -1.650); rotation = (0.1751, 0.0, 0.3578); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x6D944C; label = false }
-  entity t5x2 { position = (-0.825, -0.351, -1.650); rotation = (0.0919, 0.0, 0.3418); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x74934D; label = false }
-  entity t6x2 { position = (-0.275, -0.166, -1.650); rotation = (0.0378, 0.0, 0.3295); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x7A924E; label = false }
-  entity t7x2 { position = (0.275, 0.012, -1.650); rotation = (0.0002, 0.0, 0.3196); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x80914E; label = false }
-  entity t8x2 { position = (0.825, 0.185, -1.650); rotation = (-0.0292, 0.0, 0.3066); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x86904F; label = false }
-  entity t9x2 { position = (1.375, 0.349, -1.650); rotation = (-0.0531, 0.0, 0.2884); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x8C8F50; label = false }
-  entity t10x2 { position = (1.925, 0.501, -1.650); rotation = (-0.0713, 0.0, 0.2648); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x918E51; label = false }
-  entity t11x2 { position = (2.475, 0.639, -1.650); rotation = (-0.0833, 0.0, 0.2369); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x968D51; label = false }
-  entity t12x2 { position = (3.025, 0.761, -1.650); rotation = (-0.0884, 0.0, 0.2066); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x9A8D52; label = false }
-  entity t13x2 { position = (3.575, 0.866, -1.650); rotation = (-0.0863, 0.0, 0.1758); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x9D8C52; label = false }
-  entity t0x3 { position = (-3.575, -1.124, -1.100); rotation = (-0.0918, 0.0, 0.1982); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t1x3 { position = (-3.025, -1.015, -1.100); rotation = (-0.0835, 0.0, 0.2008); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t2x3 { position = (-2.475, -0.904, -1.100); rotation = (-0.1022, 0.0, 0.2006); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t3x3 { position = (-1.925, -0.794, -1.100); rotation = (-0.0959, 0.0, 0.2075); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t4x3 { position = (-1.375, -0.649, -1.100); rotation = (0.1137, 0.0, 0.3471); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t5x3 { position = (-0.825, -0.423, -1.100); rotation = (0.1809, 0.0, 0.4347); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t6x3 { position = (-0.275, -0.196, -1.100); rotation = (0.0804, 0.0, 0.3875); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x79924E; label = false }
-  entity t7x3 { position = (0.275, 0.007, -1.100); rotation = (0.0219, 0.0, 0.3551); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x80914E; label = false }
-  entity t8x3 { position = (0.825, 0.196, -1.100); rotation = (-0.0103, 0.0, 0.3322); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x86904F; label = false }
-  entity t9x3 { position = (1.375, 0.372, -1.100); rotation = (-0.0315, 0.0, 0.3077); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x8D8F50; label = false }
-  entity t10x3 { position = (1.925, 0.534, -1.100); rotation = (-0.0463, 0.0, 0.2783); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x928E51; label = false }
-  entity t11x3 { position = (2.475, 0.677, -1.100); rotation = (-0.0555, 0.0, 0.2445); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x978D51; label = false }
-  entity t12x3 { position = (3.025, 0.802, -1.100); rotation = (-0.0594, 0.0, 0.2079); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x9B8C52; label = false }
-  entity t13x3 { position = (3.575, 0.906, -1.100); rotation = (-0.0578, 0.0, 0.1708); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x9F8C53; label = false }
-  entity t0x4 { position = (-3.575, -1.096, -0.550); rotation = (-0.0226, 0.0, 0.1782); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t1x4 { position = (-3.025, -0.990, -0.550); rotation = (-0.0182, 0.0, 0.2061); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t2x4 { position = (-2.475, -0.870, -0.550); rotation = (-0.0295, 0.0, 0.2317); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t3x4 { position = (-1.925, -0.738, -0.550); rotation = (-0.0639, 0.0, 0.2415); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x67954B; label = false }
-  entity t4x4 { position = (-1.375, -0.611, -0.550); rotation = (-0.1329, 0.0, 0.2172); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t5x4 { position = (-0.825, -0.488, -0.550); rotation = (-0.0651, 0.0, 0.2758); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t6x4 { position = (-0.275, -0.268, -0.550); rotation = (0.1733, 0.0, 0.4778); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t7x4 { position = (0.275, -0.019, -0.550); rotation = (0.0853, 0.0, 0.4153); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x7F914E; label = false }
-  entity t8x4 { position = (0.825, 0.193, -0.550); rotation = (0.0255, 0.0, 0.3617); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x86904F; label = false }
-  entity t9x4 { position = (1.375, 0.382, -0.550); rotation = (-0.0008, 0.0, 0.3249); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x8D8F50; label = false }
-  entity t10x4 { position = (1.925, 0.551, -0.550); rotation = (-0.0143, 0.0, 0.2890); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x938E51; label = false }
-  entity t11x4 { position = (2.475, 0.699, -0.550); rotation = (-0.0214, 0.0, 0.2501); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x988D52; label = false }
-  entity t12x4 { position = (3.025, 0.825, -0.550); rotation = (-0.0242, 0.0, 0.2089); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x9C8C52; label = false }
-  entity t13x4 { position = (3.575, 0.929, -0.550); rotation = (-0.0231, 0.0, 0.1672); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x9F8C53; label = false }
-  entity t0x5 { position = (-3.575, -1.086, 0.000); rotation = (-0.0203, 0.0, 0.1712); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t1x5 { position = (-3.025, -0.982, 0.000); rotation = (-0.0192, 0.0, 0.2078); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t2x5 { position = (-2.475, -0.858, 0.000); rotation = (-0.0220, 0.0, 0.2433); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63954B; label = false }
-  entity t3x5 { position = (-1.925, -0.715, 0.000); rotation = (-0.0310, 0.0, 0.2715); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x67954B; label = false }
-  entity t4x5 { position = (-1.375, -0.562, 0.000); rotation = (-0.0546, 0.0, 0.2822); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x6D944C; label = false }
-  entity t5x5 { position = (-0.825, -0.412, 0.000); rotation = (-0.1156, 0.0, 0.2527); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x72934D; label = false }
-  entity t6x5 { position = (-0.275, -0.287, 0.000); rotation = (-0.1507, 0.0, 0.2291); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t7x5 { position = (0.275, -0.095, 0.000); rotation = (0.1507, 0.0, 0.4680); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t8x5 { position = (0.825, 0.158, 0.000); rotation = (0.1156, 0.0, 0.4222); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x85904F; label = false }
-  entity t9x5 { position = (1.375, 0.369, 0.000); rotation = (0.0546, 0.0, 0.3497); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x8C8F50; label = false }
-  entity t10x5 { position = (1.925, 0.547, 0.000); rotation = (0.0310, 0.0, 0.2999); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x928E51; label = false }
-  entity t11x5 { position = (2.475, 0.699, 0.000); rotation = (0.0220, 0.0, 0.2548); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x988D52; label = false }
-  entity t12x5 { position = (3.025, 0.827, 0.000); rotation = (0.0192, 0.0, 0.2096); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x9C8C52; label = false }
-  entity t13x5 { position = (3.575, 0.930, 0.000); rotation = (0.0203, 0.0, 0.1643); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xA08C53; label = false }
-  entity t0x6 { position = (-3.575, -1.069, 0.550); rotation = (-0.0415, 0.0, 0.1703); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t1x6 { position = (-3.025, -0.965, 0.550); rotation = (-0.0418, 0.0, 0.2081); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t2x6 { position = (-2.475, -0.841, 0.550); rotation = (-0.0411, 0.0, 0.2450); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63954B; label = false }
-  entity t3x6 { position = (-1.925, -0.697, 0.550); rotation = (-0.0400, 0.0, 0.2772); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x68954B; label = false }
-  entity t4x6 { position = (-1.375, -0.538, 0.550); rotation = (-0.0412, 0.0, 0.2999); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x6D944C; label = false }
-  entity t5x6 { position = (-0.825, -0.370, 0.550); rotation = (-0.0520, 0.0, 0.3048); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x73934D; label = false }
-  entity t6x6 { position = (-0.275, -0.209, 0.550); rotation = (-0.0944, 0.0, 0.2728); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x79924D; label = false }
-  entity t7x6 { position = (0.275, -0.078, 0.550); rotation = (-0.1642, 0.0, 0.2103); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t8x6 { position = (0.825, 0.075, 0.550); rotation = (0.0916, 0.0, 0.3906); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t9x6 { position = (1.375, 0.309, 0.550); rotation = (0.1749, 0.0, 0.4075); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t10x6 { position = (1.925, 0.509, 0.550); rotation = (0.1182, 0.0, 0.3247); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x918E51; label = false }
-  entity t11x6 { position = (2.475, 0.670, 0.550); rotation = (0.0920, 0.0, 0.2635); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x978D51; label = false }
-  entity t12x6 { position = (3.025, 0.800, 0.550); rotation = (0.0842, 0.0, 0.2109); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x9B8C52; label = false }
-  entity t13x6 { position = (3.575, 0.902, 0.550); rotation = (0.0872, 0.0, 0.1593); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x9F8C53; label = false }
-  entity t0x7 { position = (-3.575, -1.040, 1.100); rotation = (-0.0675, 0.0, 0.1725); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t1x7 { position = (-3.025, -0.935, 1.100); rotation = (-0.0687, 0.0, 0.2075); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t2x7 { position = (-2.475, -0.811, 1.100); rotation = (-0.0657, 0.0, 0.2418); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x64954B; label = false }
-  entity t3x7 { position = (-1.925, -0.670, 1.100); rotation = (-0.0590, 0.0, 0.2725); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x69944B; label = false }
-  entity t4x7 { position = (-1.375, -0.513, 1.100); rotation = (-0.0498, 0.0, 0.2964); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x6E944C; label = false }
-  entity t5x7 { position = (-0.825, -0.346, 1.100); rotation = (-0.0411, 0.0, 0.3097); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x74934D; label = false }
-  entity t6x7 { position = (-0.275, -0.175, 1.100); rotation = (-0.0395, 0.0, 0.3064); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x7A924E; label = false }
-  entity t7x7 { position = (0.275, -0.014, 1.100); rotation = (-0.0628, 0.0, 0.2740); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x7F914E; label = false }
-  entity t8x7 { position = (0.825, 0.119, 1.100); rotation = (-0.1295, 0.0, 0.2072); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t9x7 { position = (1.375, 0.236, 1.100); rotation = (-0.0323, 0.0, 0.2569); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t10x7 { position = (1.925, 0.410, 1.100); rotation = (0.2011, 0.0, 0.3433); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t11x7 { position = (2.475, 0.585, 1.100); rotation = (0.2234, 0.0, 0.2858); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t12x7 { position = (3.025, 0.722, 1.100); rotation = (0.2115, 0.0, 0.2146); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t13x7 { position = (3.575, 0.821, 1.100); rotation = (0.2171, 0.0, 0.1451); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t0x8 { position = (-3.575, -0.996, 1.650); rotation = (-0.0920, 0.0, 0.1767); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t1x8 { position = (-3.025, -0.890, 1.650); rotation = (-0.0939, 0.0, 0.2063); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t2x8 { position = (-2.475, -0.769, 1.650); rotation = (-0.0892, 0.0, 0.2354); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x66954B; label = false }
-  entity t3x8 { position = (-1.925, -0.632, 1.650); rotation = (-0.0785, 0.0, 0.2615); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x6A944C; label = false }
-  entity t4x8 { position = (-1.375, -0.482, 1.650); rotation = (-0.0627, 0.0, 0.2824); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x6F934C; label = false }
-  entity t5x8 { position = (-0.825, -0.323, 1.650); rotation = (-0.0439, 0.0, 0.2959); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x75934D; label = false }
-  entity t6x8 { position = (-0.275, -0.158, 1.650); rotation = (-0.0253, 0.0, 0.2994); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x7A924E; label = false }
-  entity t7x8 { position = (0.275, 0.004, 1.650); rotation = (-0.0127, 0.0, 0.2895); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x80914E; label = false }
-  entity t8x8 { position = (0.825, 0.157, 1.650); rotation = (-0.0187, 0.0, 0.2607); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x85904F; label = false }
-  entity t9x8 { position = (1.375, 0.287, 1.650); rotation = (-0.0592, 0.0, 0.2130); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x8A8F50; label = false }
-  entity t10x8 { position = (1.925, 0.395, 1.650); rotation = (-0.0938, 0.0, 0.1860); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t11x8 { position = (2.475, 0.502, 1.650); rotation = (-0.0249, 0.0, 0.2071); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t12x8 { position = (3.025, 0.617, 1.650); rotation = (0.0445, 0.0, 0.2043); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t13x8 { position = (3.575, 0.724, 1.650); rotation = (0.0140, 0.0, 0.1892); dynamic = false; box = (0.53, 0.12, 0.53); color = 0xC9B27C; label = false }
-  entity t0x9 { position = (-3.575, -0.939, 2.200); rotation = (-0.1120, 0.0, 0.1826); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t1x9 { position = (-3.025, -0.833, 2.200); rotation = (-0.1144, 0.0, 0.2047); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63954B; label = false }
-  entity t2x9 { position = (-2.475, -0.714, 2.200); rotation = (-0.1085, 0.0, 0.2264); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x67954B; label = false }
-  entity t3x9 { position = (-1.925, -0.584, 2.200); rotation = (-0.0948, 0.0, 0.2460); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x6C944C; label = false }
-  entity t4x9 { position = (-1.375, -0.444, 2.200); rotation = (-0.0744, 0.0, 0.2619); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x71934C; label = false }
-  entity t5x9 { position = (-0.825, -0.297, 2.200); rotation = (-0.0493, 0.0, 0.2725); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x76924D; label = false }
-  entity t6x9 { position = (-0.275, -0.146, 2.200); rotation = (-0.0218, 0.0, 0.2765); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x7B924E; label = false }
-  entity t7x9 { position = (0.275, 0.006, 2.200); rotation = (0.0045, 0.0, 0.2729); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x80914E; label = false }
-  entity t8x9 { position = (0.825, 0.153, 2.200); rotation = (0.0248, 0.0, 0.2604); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x85904F; label = false }
-  entity t9x9 { position = (1.375, 0.291, 2.200); rotation = (0.0323, 0.0, 0.2393); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x8A8F50; label = false }
-  entity t10x9 { position = (1.925, 0.415, 2.200); rotation = (0.0219, 0.0, 0.2147); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x8E8F50; label = false }
-  entity t11x9 { position = (2.475, 0.529, 2.200); rotation = (0.0009, 0.0, 0.1993); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x928E51; label = false }
-  entity t12x9 { position = (3.025, 0.638, 2.200); rotation = (-0.0115, 0.0, 0.1990); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x968D51; label = false }
-  entity t13x9 { position = (3.575, 0.748, 2.200); rotation = (-0.0063, 0.0, 0.2023); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x998D52; label = false }
-  entity t0x10 { position = (-3.575, -0.873, 2.750); rotation = (-0.1258, 0.0, 0.1897); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x63964B; label = false }
-  entity t1x10 { position = (-3.025, -0.766, 2.750); rotation = (-0.1285, 0.0, 0.2028); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x66954B; label = false }
-  entity t2x10 { position = (-2.475, -0.650, 2.750); rotation = (-0.1218, 0.0, 0.2157); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x6A944B; label = false }
-  entity t3x10 { position = (-1.925, -0.529, 2.750); rotation = (-0.1061, 0.0, 0.2274); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x6E944C; label = false }
-  entity t4x10 { position = (-1.375, -0.401, 2.750); rotation = (-0.0827, 0.0, 0.2368); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x72934D; label = false }
-  entity t5x10 { position = (-0.825, -0.269, 2.750); rotation = (-0.0536, 0.0, 0.2432); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x77924D; label = false }
-  entity t6x10 { position = (-0.275, -0.134, 2.750); rotation = (-0.0210, 0.0, 0.2458); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x7B924E; label = false }
-  entity t7x10 { position = (0.275, 0.001, 2.750); rotation = (0.0119, 0.0, 0.2442); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x80914E; label = false }
-  entity t8x10 { position = (0.825, 0.134, 2.750); rotation = (0.0419, 0.0, 0.2382); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x84904F; label = false }
-  entity t9x10 { position = (1.375, 0.262, 2.750); rotation = (0.0654, 0.0, 0.2283); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x898F50; label = false }
-  entity t10x10 { position = (1.925, 0.385, 2.750); rotation = (0.0797, 0.0, 0.2166); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x8D8F50; label = false }
-  entity t11x10 { position = (2.475, 0.501, 2.750); rotation = (0.0850, 0.0, 0.2067); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x918E51; label = false }
-  entity t12x10 { position = (3.025, 0.613, 2.750); rotation = (0.0856, 0.0, 0.2009); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x958D51; label = false }
-  entity t13x10 { position = (3.575, 0.722, 2.750); rotation = (0.0855, 0.0, 0.1962); dynamic = false; box = (0.53, 0.12, 0.53); color = 0x988D52; label = false }
-
+  entity ground { position = (0, 0, 0); dynamic = false; shape = terrain; color = 0x6F8F4F; label = false }
+  entity path   { position = (0, 0, 0); dynamic = false; shape = path; color = 0xC9B27C; label = false }
   entity wallN { position = (0, 0.6, 3.05); dynamic = false; box = (8.2, 1.2, 0.15); color = 0xA9663E; opacity = 0.35; label = false }
   entity wallS { position = (0, 0.6, -3.05); dynamic = false; box = (8.2, 1.2, 0.15); color = 0xA9663E; opacity = 0.35; label = false }
   entity wallE { position = (4.05, 0.6, 0); dynamic = false; box = (0.15, 1.2, 6.2); color = 0xA9663E; opacity = 0.35; label = false }
   entity wallW { position = (-4.05, 0.6, 0); dynamic = false; box = (0.15, 1.2, 6.2); color = 0xA9663E; opacity = 0.35; label = false }
 
-  # --- people: 7 slots (x,y,z, vx,vz, dx,dz) ---
-  entity p1 { state = (x = -2.4, y = 0.0, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6) shape = person; color = 0xE4572E }
-  entity p1_lleg { state = (x = -2.4, y = 0.3, z = -1.4) shape = leg; color = 0xE4572E; label = false }
-  entity p1_rleg { state = (x = -2.4, y = 0.3, z = -1.4) shape = leg; color = 0xE4572E; label = false }
-  entity p1_larm { state = (x = -2.4, y = 0.78, z = -1.4) shape = arm; color = 0xE4572E; label = false }
-  entity p1_rarm { state = (x = -2.4, y = 0.78, z = -1.4) shape = arm; color = 0xE4572E; label = false }
-  entity p2 { state = (x = 0.6, y = 0.0, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8) shape = person; color = 0x2E86DE }
-  entity p2_lleg { state = (x = 0.6, y = 0.3, z = 1.6) shape = leg; color = 0x2E86DE; label = false }
-  entity p2_rleg { state = (x = 0.6, y = 0.3, z = 1.6) shape = leg; color = 0x2E86DE; label = false }
-  entity p2_larm { state = (x = 0.6, y = 0.78, z = 1.6) shape = arm; color = 0x2E86DE; label = false }
-  entity p2_rarm { state = (x = 0.6, y = 0.78, z = 1.6) shape = arm; color = 0x2E86DE; label = false }
-  entity p3 { state = (x = 2.4, y = 0.0, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71) shape = person; color = 0x9B5DE5 }
-  entity p3_lleg { state = (x = 2.4, y = 0.3, z = -0.6) shape = leg; color = 0x9B5DE5; label = false }
-  entity p3_rleg { state = (x = 2.4, y = 0.3, z = -0.6) shape = leg; color = 0x9B5DE5; label = false }
-  entity p3_larm { state = (x = 2.4, y = 0.78, z = -0.6) shape = arm; color = 0x9B5DE5; label = false }
-  entity p3_rarm { state = (x = 2.4, y = 0.78, z = -0.6) shape = arm; color = 0x9B5DE5; label = false }
+  # --- people: ten slots (…, rx,ry,rz) with orient = true ---
+  entity p1 { state = (x = -2.4, y = 0.0, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, rx = 0.0, ry = 0.0, rz = 0.0) shape = person; orient = true; vector = false; color = 0xE4572E }
+  entity p1_lleg { state = (x = -2.4, y = 0.3, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0xE4572E; label = false }
+  entity p1_rleg { state = (x = -2.4, y = 0.3, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0xE4572E; label = false }
+  entity p1_larm { state = (x = -2.4, y = 0.78, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, rx = 0.0, ry = 0.0, rz = 0.0) shape = arm; orient = true; vector = false; color = 0xE4572E; label = false }
+  entity p1_rarm { state = (x = -2.4, y = 0.78, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, rx = 0.0, ry = 0.0, rz = 0.0) shape = arm; orient = true; vector = false; color = 0xE4572E; label = false }
+  entity p2 { state = (x = 0.6, y = 0.0, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, rx = 0.0, ry = 0.0, rz = 0.0) shape = person; orient = true; color = 0x2E86DE }
+  entity p2_lleg { state = (x = 0.6, y = 0.3, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0x2E86DE; label = false }
+  entity p2_rleg { state = (x = 0.6, y = 0.3, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0x2E86DE; label = false }
+  entity p2_larm { state = (x = 0.6, y = 0.78, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, rx = 0.0, ry = 0.0, rz = 0.0) shape = arm; orient = true; vector = false; color = 0x2E86DE; label = false }
+  entity p2_rarm { state = (x = 0.6, y = 0.78, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, rx = 0.0, ry = 0.0, rz = 0.0) shape = arm; orient = true; vector = false; color = 0x2E86DE; label = false }
+  entity p3 { state = (x = 2.4, y = 0.0, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71, rx = 0.0, ry = 0.0, rz = 0.0) shape = person; orient = true; color = 0x9B5DE5 }
+  entity p3_lleg { state = (x = 2.4, y = 0.3, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0x9B5DE5; label = false }
+  entity p3_rleg { state = (x = 2.4, y = 0.3, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0x9B5DE5; label = false }
+  entity p3_larm { state = (x = 2.4, y = 0.78, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71, rx = 0.0, ry = 0.0, rz = 0.0) shape = arm; orient = true; vector = false; color = 0x9B5DE5; label = false }
+  entity p3_rarm { state = (x = 2.4, y = 0.78, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71, rx = 0.0, ry = 0.0, rz = 0.0) shape = arm; orient = true; vector = false; color = 0x9B5DE5; label = false }
 }
 
 systems {
-  # p1: smooth steering + terrain-following; gait phase = frac(t*0.55)
   update { on = p1; dt = 1.0
     let speed = 0.052
     let turn = 0.10
@@ -243,6 +92,7 @@ systems {
     let pn = t * 0.55
     let phase = pn - floor(pn)
     let bob = 0.02 * sin(4.0 * pi * phase)
+    let yaw = atan2(nvx, nvz)
     x = speed * nvx
     z = speed * nvz
     y = (hh + bob - y)
@@ -250,8 +100,9 @@ systems {
     vz = nvz - vz
     dx = (wx - dx)
     dz = (wz - dz)
+    ry = (yaw - ry)
+    rx = (0.12 - rx)
   }
-  # p2: smooth steering + terrain-following; gait phase = frac(t*0.5)
   update { on = p2; dt = 1.0
     let speed = 0.048
     let turn = 0.10
@@ -273,6 +124,7 @@ systems {
     let pn = t * 0.5
     let phase = pn - floor(pn)
     let bob = 0.02 * sin(4.0 * pi * phase)
+    let yaw = atan2(nvx, nvz)
     x = speed * nvx
     z = speed * nvz
     y = (hh + bob - y)
@@ -280,8 +132,9 @@ systems {
     vz = nvz - vz
     dx = (wx - dx)
     dz = (wz - dz)
+    ry = (yaw - ry)
+    rx = (0.12 - rx)
   }
-  # p3: smooth steering + terrain-following; gait phase = frac(t*0.6)
   update { on = p3; dt = 1.0
     let speed = 0.056
     let turn = 0.10
@@ -303,6 +156,7 @@ systems {
     let pn = t * 0.6
     let phase = pn - floor(pn)
     let bob = 0.02 * sin(4.0 * pi * phase)
+    let yaw = atan2(nvx, nvz)
     x = speed * nvx
     z = speed * nvz
     y = (hh + bob - y)
@@ -310,6 +164,8 @@ systems {
     vz = nvz - vz
     dx = (wx - dx)
     dz = (wz - dz)
+    ry = (yaw - ry)
+    rx = (0.12 - rx)
   }
   update { on = p1_lleg; dt = 1.0
     let hx = @p1.vx
@@ -323,6 +179,7 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p1.ry - ry)
   }
   update { on = p1_rleg; dt = 1.0
     let hx = @p1.vx
@@ -336,6 +193,7 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p1.ry - ry)
   }
   update { on = p1_larm; dt = 1.0
     let hx = @p1.vx
@@ -349,6 +207,7 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p1.ry - ry)
   }
   update { on = p1_rarm; dt = 1.0
     let hx = @p1.vx
@@ -362,6 +221,7 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p1.ry - ry)
   }
   update { on = p2_lleg; dt = 1.0
     let hx = @p2.vx
@@ -375,6 +235,7 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p2.ry - ry)
   }
   update { on = p2_rleg; dt = 1.0
     let hx = @p2.vx
@@ -388,6 +249,7 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p2.ry - ry)
   }
   update { on = p2_larm; dt = 1.0
     let hx = @p2.vx
@@ -401,6 +263,7 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p2.ry - ry)
   }
   update { on = p2_rarm; dt = 1.0
     let hx = @p2.vx
@@ -414,6 +277,7 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p2.ry - ry)
   }
   update { on = p3_lleg; dt = 1.0
     let hx = @p3.vx
@@ -427,6 +291,7 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p3.ry - ry)
   }
   update { on = p3_rleg; dt = 1.0
     let hx = @p3.vx
@@ -440,6 +305,7 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p3.ry - ry)
   }
   update { on = p3_larm; dt = 1.0
     let hx = @p3.vx
@@ -453,6 +319,7 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p3.ry - ry)
   }
   update { on = p3_rarm; dt = 1.0
     let hx = @p3.vx
@@ -466,5 +333,6 @@ systems {
     x = (tx - x)
     z = (tz - z)
     y = (ty - y)
+    ry = (@p3.ry - ry)
   }
 }

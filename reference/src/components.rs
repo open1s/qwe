@@ -754,8 +754,15 @@ pub struct RenderStyle {
     pub glow: Option<f64>,
     /// Whether to draw the floating name label (default `true`).
     pub label: Option<bool>,
+    /// `vector = false`: suppress the viewer's velocity arrow / orbit ring for
+    /// this entity (useful when slots 3..5 are not a velocity).
+    pub no_velocity: bool,
     /// A user-defined custom shape name (`shape = <name>`), resolved at build.
     pub shape_name: Option<String>,
+    /// `orient = true`: for a state-only body, derive the orientation from state
+    /// slots 7/8/9 as euler (pitch, yaw, roll) radians instead of the default
+    /// `state[7]` spin about Z. Lets simulation steer a body's facing/lean.
+    pub orient: bool,
     /// The resolved parts of that custom shape (built from the world's `shape`s).
     pub parts: Option<Vec<ShapePart>>,
 }

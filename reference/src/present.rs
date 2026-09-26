@@ -68,6 +68,8 @@ pub struct EntityVisual {
     pub glow: f64,
     /// Whether to draw the floating name label (language `label`; default true).
     pub label: bool,
+    /// When true, suppress the velocity arrow / orbit ring for this entity.
+    pub no_velocity: bool,
 }
 
 impl EntityVisual {
@@ -210,13 +212,24 @@ pub fn snapshot_with(
         let rotation = match e.transform.map(|t| t.rotation) {
             Some(q) => q,
             None => {
-                // Self-rotation (自转): state[7] is a spin angle about Z.
-                let ang = state.get(7).copied().unwrap_or(0.0);
-                Quat {
-                    x: 0.0,
-                    y: 0.0,
-                    z: (ang * 0.5).sin(),
-                    w: (ang * 0.5).cos(),
+                let orient = e.render.as_ref().map(|r| r.orient).unwrap_or(false);
+                if orient {
+                    // `orient = true`: state[7/8/9] are euler (pitch, yaw, roll) —
+                    // the body faces and leans as the simulation steers it.
+                    Quat::from_yaw_pitch_roll(
+                        state.get(8).copied().unwrap_or(0.0),
+                        state.get(7).copied().unwrap_or(0.0),
+                        state.get(9).copied().unwrap_or(0.0),
+                    )
+                } else {
+                    // Self-rotation (自转): state[7] is a spin angle about Z.
+                    let ang = state.get(7).copied().unwrap_or(0.0);
+                    Quat {
+                        x: 0.0,
+                        y: 0.0,
+                        z: (ang * 0.5).sin(),
+                        w: (ang * 0.5).cos(),
+                    }
                 }
             }
         };
@@ -235,6 +248,7 @@ pub fn snapshot_with(
             opacity: 1.0,
             glow: 0.8,
             label: true,
+            no_velocity: false,
         };
         // Presentation-only overrides declared in the language.
         if let Some(r) = &e.render {
@@ -340,6 +354,7 @@ pub fn snapshot_with(
             if let Some(l) = r.label {
                 vis.label = l;
             }
+            vis.no_velocity = r.no_velocity;
         }
         entities.push(vis);
     }
@@ -419,7 +434,7 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
             out.push(',');
         }
         out.push_str(&format!(
-            "{{\"id\":{},\"name\":\"{}\",\"pos\":{},\"rot\":{},\"color\":{},\"opacity\":{},\"glow\":{},\"label\":{},\"kind\":",
+            "{{\"id\":{},\"name\":\"{}\",\"pos\":{},\"rot\":{},\"color\":{},\"opacity\":{},\"glow\":{},\"label\":{},\"vec\":{},\"kind\":",
             e.id,
             e.name.replace('\\', "\\\\").replace('"', "\\\""),
             vec3_json(e.position),
@@ -427,7 +442,8 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
             e.color_value(),
             fmt_f64(e.opacity),
             fmt_f64(e.glow),
-            e.label
+            e.label,
+            !e.no_velocity
         ));
         match &e.shape {
             Shape::Box { dims } => {
@@ -933,8 +949,8 @@ function applyFrame(f) {{
     if ((e.name==='sun'||(sun&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6)) && m.material) {{ m.material.emissive=new THREE.Color(e.color); if (e.glow==null) m.material.emissiveIntensity=1.2; }}
     m.userData=e; scene.add(m); meshes.set(e.id, m);
     if (e.name && e.label!==false && labelsOn) {{ const el=document.createElement('div'); el.className='lbl'; el.textContent=e.name; const l=new CSS2DObject(el); l.position.set(e.pos[0],e.pos[1]+(e.size||0.3),e.pos[2]); scene.add(l); decals.push(l); }}
-    if (!isMol && sun && e.state && e.state.length>=5 && Math.hypot(e.state[3],e.state[4],e.state[5])>1e-6) addOrbit(sun, Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y), e.color);
-    if (!isMol && e.state && e.state.length>=5) addVel(e.pos[0],e.pos[1],e.pos[2],e.state[3],e.state[4],e.state[5],e.color);
+    if (e.vec!==false && !isMol && sun && e.state && e.state.length>=5 && Math.hypot(e.state[3],e.state[4],e.state[5])>1e-6) addOrbit(sun, Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y), e.color);
+    if (e.vec!==false && !isMol && e.state && e.state.length>=5) addVel(e.pos[0],e.pos[1],e.pos[2],e.state[3],e.state[4],e.state[5],e.color);
     if (e.state && e.state.length) html += (e.name||('#'+e.id))+' r='+Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y).toFixed(2)+'<br>';
   }}
   if (isMol) addBonds(f);
@@ -1358,9 +1374,9 @@ function apply(f){
     if(e.label!==false && labelsOn){ const el=document.createElement('div'); el.className='lbl'; el.textContent=e.name||('#'+e.id);
     const l=new CSS2DObject(el); l.position.set(e.pos[0],e.pos[1]+(e.size||0.3),e.pos[2]); scene.add(l); decals.push(l); }
     // For a molecule (bonds present) skip orbit rings; atoms don't orbit.
-    if(!isMol && e.state && e.state.length>=5 && Math.hypot(e.state[3],e.state[4],e.state[5])>1e-6){ if(sun.r){const r=Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y);addOrbit(sun,r,e.color);} }
+    if(e.vec!==false && !isMol && e.state && e.state.length>=5 && Math.hypot(e.state[3],e.state[4],e.state[5])>1e-6){ if(sun.r){const r=Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y);addOrbit(sun,r,e.color);} }
     // Velocity vector (skip for static molecule atoms).
-    if(!isMol && e.state&&e.state.length>=5){addVel(e.pos[0],e.pos[1],e.pos[2],e.state[3],e.state[4],e.state[5],e.color);}
+    if(e.vec!==false && !isMol && e.state&&e.state.length>=5){addVel(e.pos[0],e.pos[1],e.pos[2],e.state[3],e.state[4],e.state[5],e.color);}
     html+='<span style="color:#'+e.color.toString(16).padStart(6,'0')+'">■</span> '+(e.name||('#'+e.id))+' r='+Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y).toFixed(2)+'<br>';
   }
   // Draw bonds (molecule) as lines between bonded atoms.
@@ -1533,6 +1549,8 @@ mod tests {
         let mut e = Entity::dynamic();
         e.state = Some(crate::components::State::new(vec![0.0]));
         e.render = Some(crate::components::RenderStyle {
+            orient: false,
+            no_velocity: false,
             shape: Some(1),
             size: Some(2.0),
             size3: None,
@@ -1561,6 +1579,8 @@ mod tests {
         let mut e = Entity::dynamic();
         e.state = Some(crate::components::State::new(vec![0.0]));
         e.render = Some(crate::components::RenderStyle {
+            orient: false,
+            no_velocity: false,
             shape_name: Some("gizmo".into()),
             parts: Some(vec![
                 crate::components::ShapePart {
