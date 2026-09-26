@@ -1564,6 +1564,7 @@ mod tests {
             shape_name: Some("gizmo".into()),
             parts: Some(vec![
                 crate::components::ShapePart {
+                    name: None,
                     kind: 3,
                     a: 0.05,
                     b: 0.3,
@@ -1575,6 +1576,7 @@ mod tests {
                     scale: 1.0,
                 },
                 crate::components::ShapePart {
+                    name: None,
                     kind: 1,
                     a: 0.1,
                     b: 0.1,

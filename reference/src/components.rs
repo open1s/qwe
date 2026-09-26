@@ -734,6 +734,10 @@ pub struct ShapePart {
     pub faces: Vec<Vec<u32>>,
     /// Uniform scale of this part (its "amplitude"/size); `1.0` = as written.
     pub scale: f64,
+    /// For `kind == 7` (a shape reference): the name of the referenced shape.
+    /// References are inlined into their parent shape at parse time (see
+    /// `expand_shapes`), so render paths only ever see concrete parts.
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

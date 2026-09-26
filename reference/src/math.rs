@@ -180,6 +180,19 @@ impl Quat {
         z: 0.0,
         w: 1.0,
     };
+    /// Euler angles (radians, XYZ order) to a quaternion.
+    pub fn from_euler(x: f64, y: f64, z: f64) -> Self {
+        let (sx, cx) = (x * 0.5).sin_cos();
+        let (sy, cy) = (y * 0.5).sin_cos();
+        let (sz, cz) = (z * 0.5).sin_cos();
+        Self {
+            x: sx * cy * cz - cx * sy * sz,
+            y: cx * sy * cz + sx * cy * sz,
+            z: cx * cy * sz - sx * sy * cz,
+            w: cx * cy * cz + sx * sy * sz,
+        }
+    }
+
     pub fn from_axis_angle(axis: Vec3, angle: f64) -> Self {
         let axis = axis.normalized();
         if axis.length_sq() < 1e-24 {

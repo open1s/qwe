@@ -26,6 +26,7 @@ fn main() -> pwe_api::Result<()> {
         velocity: Some(Vec3::new(4.0, 0.0, 0.0)),
         mass: Some(4.0),
         dynamic: Some(true),
+        rotation: None,
         restitution: Some(0.5),
         friction: None,
         collider: Some(pwe_reference::dsl::ColliderDecl::Box {
@@ -46,6 +47,7 @@ fn main() -> pwe_api::Result<()> {
         velocity: None,
         mass: None,
         dynamic: Some(false),
+        rotation: None,
         restitution: None,
         friction: None,
         collider: Some(pwe_reference::dsl::ColliderDecl::Box {

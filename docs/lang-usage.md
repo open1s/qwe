@@ -207,6 +207,7 @@ Entity ids are 1-based in declaration order; channels follow the bodies.
 | `nbody = false` | Exclude from the mutual `nbody` system. |
 | `restitution = v` / `friction = v` | Contact bounciness / tangential friction. |
 | `box = (dx,dy,dz)` / `sphere = r` / `hull = [(x,y,z), …]` | Collider (hull needs ≥ 4 points). |
+| `rotation = (rx, ry, rz)` | Static euler rotation in radians (XYZ), e.g. a tilted ground plane. |
 | `camera = true` | Marks the entity as the viewer camera (excluded from simulation). |
 
 **Presentation-only fields** (they never affect simulation state, determinism,
@@ -260,6 +261,19 @@ world {
 `at` offsets the part in the entity's local frame; `scale` sets the part's size
 (amplitude). An entity can scale the whole shape with `size = s`. Custom shapes
 are **presentation only**.
+
+**Composition.** A part may include another declared shape by name:
+`part <shape> [at (x,y,z)] [scale s]`. The reference is inlined (the referenced
+shape's parts are copied, offset by `at` and scaled by `scale`), recursively;
+an unknown name or a reference cycle is a compile error.
+
+```pwe
+  shape head { part sphere = 0.115 at (0, 0, 0); }
+  shape rider {
+    part box = (0.34, 0.46, 0.20) at (0, 0.57, 0);
+    part head at (0, 0.92, 0);          # include the head shape
+  }
+```
 
 ### 3.3 Grid fields — the 4D continuum substrate
 

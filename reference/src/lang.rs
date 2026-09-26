@@ -1145,7 +1145,38 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let name = it.next().unwrap().as_str().to_string();
                             let mut parts: Vec<crate::components::ShapePart> = Vec::new();
                             for part in it {
+                                let part_rule = part.as_rule();
                                 let mut pi = part.into_inner();
+                                if part_rule == Rule::shape_ref {
+                                    let refname = pi.next().unwrap().as_str().to_string();
+                                    let mut offset = (0.0, 0.0, 0.0);
+                                    let mut scale = 1.0f64;
+                                    for opt in pi {
+                                        let rule = opt.as_rule();
+                                        let inner = opt.into_inner().next().unwrap();
+                                        match rule {
+                                            Rule::at_opt => {
+                                                let o = parse_vec3(inner);
+                                                offset = (o.x, o.y, o.z);
+                                            }
+                                            Rule::scale_opt => scale = parse_value(inner),
+                                            _ => {}
+                                        }
+                                    }
+                                    parts.push(crate::components::ShapePart {
+                                        kind: 7,
+                                        a: 0.0,
+                                        b: 0.0,
+                                        c: 0.0,
+                                        offset,
+                                        path: None,
+                                        points: Vec::new(),
+                                        faces: Vec::new(),
+                                        scale,
+                                        name: Some(refname),
+                                    });
+                                    continue;
+                                }
                                 let kind = match pi.next().unwrap().as_str() {
                                     "sphere" => 1u8,
                                     "box" => 2,
@@ -1219,6 +1250,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         points,
                                         faces,
                                         scale,
+                                        name: None,
                                     });
                                 }
                             }
@@ -6257,6 +6289,68 @@ fn normalize3(v: &[f64]) -> (f64, f64, f64) {
     }
 }
 
+/// RFC: inline shape references (`shape A { part B at (x,y,z); … }`) into
+/// concrete parts, applying the reference's `at` offset and `scale`. Errors on
+/// an unknown shape name or a reference cycle (detail 79).
+pub fn expand_shapes(
+    shapes: &mut std::collections::BTreeMap<String, Vec<crate::components::ShapePart>>,
+) -> Result<()> {
+    use crate::components::ShapePart;
+    fn resolve(
+        name: &str,
+        shapes: &std::collections::BTreeMap<String, Vec<ShapePart>>,
+        stack: &mut Vec<String>,
+        done: &mut std::collections::BTreeMap<String, Vec<ShapePart>>,
+    ) -> Result<Vec<ShapePart>> {
+        if let Some(v) = done.get(name) {
+            return Ok(v.clone());
+        }
+        if stack.iter().any(|n| n == name) {
+            return Err(error_at(
+                Status::Invalid,
+                79,
+                0,
+                format!("shape reference cycle at '{name}'"),
+            ));
+        }
+        let parts = shapes
+            .get(name)
+            .cloned()
+            .ok_or_else(|| error_at(Status::Invalid, 79, 0, format!("unknown shape '{name}'")))?;
+        stack.push(name.to_string());
+        let mut out = Vec::new();
+        for p in parts {
+            if p.kind == 7 {
+                let sub = resolve(p.name.as_deref().unwrap_or(""), shapes, stack, done)?;
+                for s in sub {
+                    out.push(ShapePart {
+                        offset: (
+                            p.offset.0 + s.offset.0 * p.scale,
+                            p.offset.1 + s.offset.1 * p.scale,
+                            p.offset.2 + s.offset.2 * p.scale,
+                        ),
+                        scale: s.scale * p.scale,
+                        ..s
+                    });
+                }
+            } else {
+                out.push(p);
+            }
+        }
+        stack.pop();
+        done.insert(name.to_string(), out.clone());
+        Ok(out)
+    }
+    let names: Vec<String> = shapes.keys().cloned().collect();
+    let mut done: std::collections::BTreeMap<String, Vec<ShapePart>> =
+        std::collections::BTreeMap::new();
+    for n in &names {
+        let r = resolve(n, shapes, &mut Vec::new(), &mut done)?;
+        shapes.insert(n.clone(), r);
+    }
+    Ok(())
+}
+
 fn dynamic_entity_ids(model: &WorldModel) -> Vec<u128> {
     model
         .entities
@@ -6981,8 +7075,10 @@ pub fn compile(source: &str) -> Result<CompiledProgram> {
 }
 
 /// Compiles an already-parsed (and merged) program to EIR.
-pub fn compile_program(parsed: ParsedProgram) -> Result<CompiledProgram> {
+pub fn compile_program(mut parsed: ParsedProgram) -> Result<CompiledProgram> {
     check_dimensions(&parsed)?;
+    // Inline `part <other-shape>` references so render paths see concrete parts.
+    expand_shapes(&mut parsed.model.shapes)?;
     // Entity name -> scene id (ids are 1-based model order, matching build_scene).
     let mut entity_ids: std::collections::BTreeMap<String, u128> = parsed
         .model
@@ -7633,6 +7729,9 @@ fn apply_entity_field(field: pest::iterators::Pair<'_, Rule>, decl: &mut EntityD
     match field.as_rule() {
         Rule::position_field => {
             decl.position = Some(parse_vec3(field.into_inner().next().unwrap()))
+        }
+        Rule::rotation_field => {
+            decl.rotation = Some(parse_vec3(field.into_inner().next().unwrap()))
         }
         Rule::velocity_field => {
             decl.velocity = Some(parse_vec3(field.into_inner().next().unwrap()))
@@ -9393,6 +9492,57 @@ mod tests {
         assert!((d(p0, px) - 1.0).abs() < 1e-6, "x spacing {}", d(p0, px));
         assert!((d(p0, pj) - 1.0).abs() < 1e-6, "y spacing {}", d(p0, pj));
         assert!((d(p0, pk) - 1.0).abs() < 1e-6, "z spacing {}", d(p0, pk));
+    }
+
+    /// A `rotation = (rx, ry, rz)` entity field tilts the body (Transform).
+    #[test]
+    fn rotation_field_tilts_a_body() {
+        let src = "world { gravity=(0,0,0) \
+                   entity e { position=(0,0,0); rotation=(0.0, 0.0, 1.5707963267948966) } }";
+        let rt = LangRuntime::compile(src).unwrap();
+        let q = rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .transform
+            .unwrap()
+            .rotation;
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        assert!((q.z - h).abs() < 1e-6, "{q:?}");
+        assert!((q.w - h).abs() < 1e-6, "{q:?}");
+    }
+
+    /// A shape may include another declared shape (`part <other> at (...)`) and
+    /// the reference is inlined; reference cycles are rejected.
+    #[test]
+    fn shape_can_include_another_shape() {
+        let src = "world { gravity=(0,0,0) \
+                   shape ball { part sphere = 0.2 at (0,0,0); } \
+                   shape stack { part ball at (0,0,0); part ball at (0,0.4,0); } \
+                   entity e { position=(0,0,0); shape = stack } }";
+        let rt = LangRuntime::compile(src).unwrap();
+        let parts = rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .render
+            .as_ref()
+            .unwrap()
+            .parts
+            .clone()
+            .unwrap();
+        assert_eq!(parts.len(), 2);
+        assert!(parts.iter().all(|p| p.kind == 1));
+        assert!(
+            (parts[1].offset.1 - 0.4).abs() < 1e-9,
+            "{:?}",
+            parts[1].offset
+        );
+
+        let cyc = "world { gravity=(0,0,0) \
+                   shape a { part b at (0,0,0); } shape b { part a at (0,0,0); } \
+                   entity e { position=(0,0,0); shape = a } }";
+        assert!(LangRuntime::compile(cyc).is_err(), "cycle must be rejected");
     }
 
     #[test]

@@ -63,6 +63,8 @@ parent_field = { "parent" ~ "=" ~ ident ~ ";"? }
 restitution_field = { "restitution" ~ "=" ~ value ~ ";"? }
 friction_field = { "friction" ~ "=" ~ value ~ ";"? }
 box_field = { "box" ~ "=" ~ vec3 ~ ";"? }
+// Static euler rotation (radians) for an entity, e.g. a tilted ground plane.
+rotation_field = { "rotation" ~ "=" ~ vec3 ~ ";"? }
 sphere_field = { "sphere" ~ "=" ~ value ~ ";"? }
 hull_field = { "hull" ~ "=" ~ hull_list ~ ";"? }
 camera_field = { "camera" ~ "=" ~ boolean ~ ";"? }
@@ -72,7 +74,10 @@ color = @{ "0x" ~ ASCII_HEX_DIGIT+ }
 shape_field = { "shape" ~ "=" ~ ident ~ ";"? }
 // A user-defined custom shape: `shape <name> { part <kind> = <params> [at (x,y,z)]; }
 shape_stmt = { "shape" ~ ident ~ "{" ~ shape_part* ~ "}" }
-shape_part = { "part" ~ shape_kind ~ "=" ~ shape_part_value ~ shape_part_opt* ~ ";"? }
+shape_part = _{ shape_builtin | shape_ref }
+shape_builtin = { "part" ~ shape_kind ~ "=" ~ shape_part_value ~ shape_part_opt* ~ ";"? }
+// `part <shape> [at (x,y,z)] [scale s];` includes another declared shape.
+shape_ref = { "part" ~ ident ~ shape_part_opt* ~ ";"? }
 shape_part_value = _{ string | hull_list | vec3 | value }
 shape_part_opt = _{ at_opt | depth_opt | scale_opt | faces_opt }
 faces_opt = { "faces" ~ "=" ~ faces_list }
@@ -88,6 +93,7 @@ glow_field = { "glow" ~ "=" ~ value ~ ";"? }
 label_field = { "label" ~ "=" ~ boolean ~ ";"? }
 entity_field = _{ position_field | velocity_field | state_field | mass_field | dynamic_field
                  | nbody_field | parent_field | restitution_field | friction_field | box_field
+                 | rotation_field
                  | sphere_field | hull_field | camera_field | color_field
                  | shape_field | size_field | opacity_field | glow_field | label_field }
 

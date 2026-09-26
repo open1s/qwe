@@ -52,6 +52,9 @@ pub struct EntityDecl {
     pub velocity: Option<Vec3>,
     pub mass: Option<f64>,
     pub dynamic: Option<bool>,
+    /// Static euler rotation in radians (`rotation = (rx, ry, rz)`), e.g. a
+    /// tilted ground plane. Applies to transform-based entities.
+    pub rotation: Option<Vec3>,
     pub restitution: Option<f64>,
     pub friction: Option<f64>,
     /// `0` = box (dims), `1` = sphere (radius in `radius`).
@@ -94,6 +97,7 @@ impl EntityDecl {
             velocity: None,
             mass: None,
             dynamic: None,
+            rotation: None,
             restitution: None,
             friction: None,
             collider: None,
@@ -315,6 +319,10 @@ impl WorldModel {
         if let Some(p) = decl.position {
             let t = e.transform.get_or_insert_with(Transform::default);
             t.position = p;
+        }
+        if let Some(r) = decl.rotation {
+            let t = e.transform.get_or_insert_with(Transform::default);
+            t.rotation = crate::math::Quat::from_euler(r.x, r.y, r.z);
         }
         if let Some(v) = decl.velocity {
             let vel = e.velocity.get_or_insert_with(Velocity::default);
