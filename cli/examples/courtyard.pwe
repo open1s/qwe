@@ -1,80 +1,377 @@
-# courtyard.pwe — three people wandering at random inside a small walled yard.
+# courtyard.pwe — people walking a sloped, winding courtyard (DSL demo).
 #
-# The yard is four static box walls around a paved ground. Each person is a
-# state-only body `(x, y, z, vx, vz)` where slots 0..2 are the render position
-# and `(vx, vz)` is a unit heading. One `update` rule (no `on` — it targets
-# every dynamic body) walks each person forward one `step` per pass; when the
-# heading would carry them past the yard boundary the rule draws a fresh
-# `random()` angle, flips any component that still points outward, and snaps
-# the heading — so a wall hit picks a new random direction and nobody ever
-# leaves the yard. `random()` is seeded, so every replay is identical.
+# Ground: a tiled heightfield.  h(x,z) = 0.55*sin(0.50x)*cos(0.45z) + 0.30x
+#   - 0.35*channel,  channel = 1/(1+5*(z-path)^2),  path = 1.6*sin(0.50x)
+# gives rolling hills, a clear up-slope toward +x (down toward -x), and a
+# lowered winding "path" band (sandy tiles). The ground is 10x8 tiles whose
+# height follows h, so the slope reads as steps.
+#
+# People: each is a state-only body (x,y,z = render position, vx,vz = unit
+# heading, dx,dz = desired heading, phase = gait phase 0..1). The rule steers
+# the heading smoothly toward an occasionally-refreshed desired direction and
+# away from the walls, advances by `speed` along the heading, and snaps y to
+# the terrain so the feet follow the slope. Four limb entities per person
+# (two legs, two arms) read the owner via @name and swing along the heading
+# from the owner gait phase: left/right legs are opposite and the arms
+# counter-swing. `random()` is seeded, so every replay is identical.
 #
 #   cargo build --release -p pwe-cli
 #   pwe compile cli/examples/courtyard.pwe -o courtyard.pweb
-#   pwe present courtyard.pweb --port 8000      # live 3D viewer
+#   pwe run courtyard.pweb --port 8000        # live 3D viewer
 
 world {
-  title = "Courtyard random walk (3 persons, walls turn you around)"
+  title = "Courtyard walk (sloped terrain, winding path, walking people)"
   gravity = (0, 0, 0)
 
   shape person {
-    part capsule = (0.16, 0.5, 0.13) at (0, 0.45, 0);
-    part sphere  = 0.14 at (0, 0.88, 0);
+    part capsule = (0.15, 0.52, 0.12) at (0, 0.46, 0);
+    part sphere  = 0.13 at (0, 0.90, 0);
   }
+  shape leg { part capsule = (0.075, 0.46, 0.06) at (0, 0, 0); }
+  shape arm { part capsule = (0.055, 0.40, 0.05) at (0, 0, 0); }
 
-  entity ground {
-    position = (0, -0.05, 0); dynamic = false
-    box = (10.0, 0.1, 8.0); color = 0xD7C48A
-  }
-  entity wallN {
-    position = (0, 0.5, 3.0); dynamic = false
-    box = (8.0, 1.0, 0.2); color = 0xA9663E
-  }
-  entity wallS {
-    position = (0, 0.5, -3.0); dynamic = false
-    box = (8.0, 1.0, 0.2); color = 0xA9663E
-  }
-  entity wallE {
-    position = (4.0, 0.5, 0); dynamic = false
-    box = (0.2, 1.0, 6.0); color = 0xA9663E
-  }
-  entity wallW {
-    position = (-4.0, 0.5, 0); dynamic = false
-    box = (0.2, 1.0, 6.0); color = 0xA9663E
-  }
+  # --- tiled terrain: height follows h; sandy where the path band is ---
+  entity t0x0 { position = (-3.60, -1.396, -2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x63964B; label = false }
+  entity t1x0 { position = (-2.80, -1.160, -2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x65954B; label = false }
+  entity t2x0 { position = (-2.00, -0.874, -2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x6C944C; label = false }
+  entity t3x0 { position = (-1.20, -0.560, -2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x74934D; label = false }
+  entity t4x0 { position = (-0.40, -0.234, -2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x7C914E; label = false }
+  entity t5x0 { position = (0.40, 0.094, -2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x84904F; label = false }
+  entity t6x0 { position = (1.20, 0.412, -2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x8C8F50; label = false }
+  entity t7x0 { position = (2.00, 0.711, -2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x948E51; label = false }
+  entity t8x0 { position = (2.80, 0.982, -2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x9B8D52; label = false }
+  entity t9x0 { position = (3.60, 1.219, -2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xA08C53; label = false }
+  entity t0x1 { position = (-3.60, -1.729, -1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t1x1 { position = (-2.80, -1.502, -1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t2x1 { position = (-2.00, -1.114, -1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x66954B; label = false }
+  entity t3x1 { position = (-1.20, -0.688, -1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x71934C; label = false }
+  entity t4x1 { position = (-0.40, -0.279, -1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x7B924E; label = false }
+  entity t5x1 { position = (0.40, 0.119, -1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x85904F; label = false }
+  entity t6x1 { position = (1.20, 0.498, -1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x8E8E50; label = false }
+  entity t7x1 { position = (2.00, 0.841, -1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x978D52; label = false }
+  entity t8x1 { position = (2.80, 1.134, -1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x9E8C52; label = false }
+  entity t9x1 { position = (3.60, 1.370, -1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xA48B53; label = false }
+  entity t0x2 { position = (-3.60, -1.789, -1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t1x2 { position = (-2.80, -1.547, -1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x63964B; label = false }
+  entity t2x2 { position = (-2.00, -1.346, -1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t3x2 { position = (-1.20, -0.973, -1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t4x2 { position = (-0.40, -0.358, -1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x79924E; label = false }
+  entity t5x2 { position = (0.40, 0.125, -1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x85904F; label = false }
+  entity t6x2 { position = (1.20, 0.555, -1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x908E51; label = false }
+  entity t7x2 { position = (2.00, 0.934, -1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x998D52; label = false }
+  entity t8x2 { position = (2.80, 1.245, -1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xA18B53; label = false }
+  entity t9x2 { position = (3.60, 1.479, -1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xA78B54; label = false }
+  entity t0x3 { position = (-3.60, -1.712, -0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x63964B; label = false }
+  entity t1x3 { position = (-2.80, -1.477, -0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x63964B; label = false }
+  entity t2x3 { position = (-2.00, -1.177, -0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x65954B; label = false }
+  entity t3x3 { position = (-1.20, -0.872, -0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x6C944C; label = false }
+  entity t4x3 { position = (-0.40, -0.632, -0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t5x3 { position = (0.40, 0.065, -0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x84904F; label = false }
+  entity t6x3 { position = (1.20, 0.568, -0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x908E51; label = false }
+  entity t7x3 { position = (2.00, 0.974, -0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x9A8D52; label = false }
+  entity t8x3 { position = (2.80, 1.297, -0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xA28B53; label = false }
+  entity t9x3 { position = (3.60, 1.530, -0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xA88A54; label = false }
+  entity t0x4 { position = (-3.60, -1.686, 0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x63964B; label = false }
+  entity t1x4 { position = (-2.80, -1.452, 0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x63964B; label = false }
+  entity t2x4 { position = (-2.00, -1.138, 0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x66954B; label = false }
+  entity t3x4 { position = (-1.20, -0.764, 0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x6F944C; label = false }
+  entity t4x4 { position = (-0.40, -0.391, 0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x78924D; label = false }
+  entity t5x4 { position = (0.40, -0.177, 0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t6x4 { position = (1.20, 0.460, 0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x8E8F50; label = false }
+  entity t7x4 { position = (2.00, 0.935, 0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x998D52; label = false }
+  entity t8x4 { position = (2.80, 1.272, 0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xA28B53; label = false }
+  entity t9x4 { position = (3.60, 1.504, 0.38); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xA88A54; label = false }
+  entity t0x5 { position = (-3.60, -1.618, 1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x63964B; label = false }
+  entity t1x5 { position = (-2.80, -1.383, 1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x63964B; label = false }
+  entity t2x5 { position = (-2.00, -1.076, 1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x67954B; label = false }
+  entity t3x5 { position = (-1.20, -0.708, 1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x70934C; label = false }
+  entity t4x5 { position = (-0.40, -0.306, 1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x7A924E; label = false }
+  entity t5x5 { position = (0.40, 0.073, 1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x84904F; label = false }
+  entity t6x5 { position = (1.20, 0.291, 1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t7x5 { position = (2.00, 0.664, 1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t8x5 { position = (2.80, 1.081, 1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x9D8C52; label = false }
+  entity t9x5 { position = (3.60, 1.308, 1.12); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t0x6 { position = (-3.60, -1.502, 1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x63964B; label = false }
+  entity t1x6 { position = (-2.80, -1.266, 1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x63964B; label = false }
+  entity t2x6 { position = (-2.00, -0.974, 1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x6A944B; label = false }
+  entity t3x6 { position = (-1.20, -0.635, 1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x72934D; label = false }
+  entity t4x6 { position = (-0.40, -0.267, 1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x7B924E; label = false }
+  entity t5x6 { position = (0.40, 0.106, 1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x85904F; label = false }
+  entity t6x6 { position = (1.20, 0.445, 1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x8D8F50; label = false }
+  entity t7x6 { position = (2.00, 0.702, 1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x948E51; label = false }
+  entity t8x6 { position = (2.80, 0.898, 1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t9x6 { position = (3.60, 1.143, 1.88); dynamic = false; box = (0.80, 0.12, 0.75); color = 0xC9B27C; label = false }
+  entity t0x7 { position = (-3.60, -1.347, 2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x63964B; label = false }
+  entity t1x7 { position = (-2.80, -1.110, 2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x66954B; label = false }
+  entity t2x7 { position = (-2.00, -0.840, 2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x6D944C; label = false }
+  entity t3x7 { position = (-1.20, -0.543, 2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x74934D; label = false }
+  entity t4x7 { position = (-0.40, -0.229, 2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x7C914E; label = false }
+  entity t5x7 { position = (0.40, 0.089, 2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x84904F; label = false }
+  entity t6x7 { position = (1.20, 0.396, 2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x8C8F50; label = false }
+  entity t7x7 { position = (2.00, 0.678, 2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x938E51; label = false }
+  entity t8x7 { position = (2.80, 0.932, 2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x998D52; label = false }
+  entity t9x7 { position = (3.60, 1.171, 2.62); dynamic = false; box = (0.80, 0.12, 0.75); color = 0x9F8C53; label = false }
 
-  entity p1 {
-    state = (x = -2.0, y = 0.0, z = -1.2, vx = 0.80, vz = 0.60)
-    shape = person; color = 0xE4572E
-  }
-  entity p2 {
-    state = (x = 0.5, y = 0.0, z = 1.5, vx = -0.60, vz = 0.80)
-    shape = person; color = 0x2E86DE
-  }
-  entity p3 {
-    state = (x = 2.2, y = 0.0, z = -0.5, vx = -0.71, vz = -0.71)
-    shape = person; color = 0x9B5DE5
-  }
+  # --- low, semi-transparent courtyard wall (does not occlude the interior) ---
+  entity wallN { position = (0, 0.6, 3.05); dynamic = false; box = (8.2, 1.2, 0.15); color = 0xA9663E; opacity = 0.35; label = false }
+  entity wallS { position = (0, 0.6, -3.05); dynamic = false; box = (8.2, 1.2, 0.15); color = 0xA9663E; opacity = 0.35; label = false }
+  entity wallE { position = (4.05, 0.6, 0); dynamic = false; box = (0.15, 1.2, 6.2); color = 0xA9663E; opacity = 0.35; label = false }
+  entity wallW { position = (-4.05, 0.6, 0); dynamic = false; box = (0.15, 1.2, 6.2); color = 0xA9663E; opacity = 0.35; label = false }
+
+  # --- people (x,y,z, vx,vz heading, dx,dz desired, phase) ---
+  entity p1 { state = (x = -2.4, y = 0.0, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, phase = 0.0) shape = person; color = 0xE4572E }
+  entity p1_lleg { state = (x = -2.4, y = 0.2, z = -1.4) shape = leg; color = 0xE4572E; label = false }
+  entity p1_rleg { state = (x = -2.4, y = 0.2, z = -1.4) shape = leg; color = 0xE4572E; label = false }
+  entity p1_larm { state = (x = -2.4, y = 0.62, z = -1.4) shape = arm; color = 0xE4572E; label = false }
+  entity p1_rarm { state = (x = -2.4, y = 0.62, z = -1.4) shape = arm; color = 0xE4572E; label = false }
+  entity p2 { state = (x = 0.6, y = 0.0, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, phase = 0.0) shape = person; color = 0x2E86DE }
+  entity p2_lleg { state = (x = 0.6, y = 0.2, z = 1.6) shape = leg; color = 0x2E86DE; label = false }
+  entity p2_rleg { state = (x = 0.6, y = 0.2, z = 1.6) shape = leg; color = 0x2E86DE; label = false }
+  entity p2_larm { state = (x = 0.6, y = 0.62, z = 1.6) shape = arm; color = 0x2E86DE; label = false }
+  entity p2_rarm { state = (x = 0.6, y = 0.62, z = 1.6) shape = arm; color = 0x2E86DE; label = false }
+  entity p3 { state = (x = 2.4, y = 0.0, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71, phase = 0.0) shape = person; color = 0x9B5DE5 }
+  entity p3_lleg { state = (x = 2.4, y = 0.2, z = -0.6) shape = leg; color = 0x9B5DE5; label = false }
+  entity p3_rleg { state = (x = 2.4, y = 0.2, z = -0.6) shape = leg; color = 0x9B5DE5; label = false }
+  entity p3_larm { state = (x = 2.4, y = 0.62, z = -0.6) shape = arm; color = 0x9B5DE5; label = false }
+  entity p3_rarm { state = (x = 2.4, y = 0.62, z = -0.6) shape = arm; color = 0x9B5DE5; label = false }
 }
 
 systems {
-  # dt = 1.0 makes `slot = expr` an exact per-step write, so each pass moves
-  # the body `step` metres along its heading and snaps the heading slots.
-  update { dt = 1.0
-    let step = 0.025
-    let hitx = if(abs(x) >= 3.5, sign(x), 0.0)
-    let hitz = if(abs(z) >= 2.5, sign(z), 0.0)
-    let hit = (hitx != 0.0) or (hitz != 0.0)
-    let a = 2.0 * pi * random()
-    let ux = cos(a)
-    let uz = sin(a)
-    let fx = if(hitx * ux > 0.0, -ux, ux)
-    let fz = if(hitz * uz > 0.0, -uz, uz)
-    let nvx = if(hit, fx, vx)
-    let nvz = if(hit, fz, vz)
-    x = step * nvx
-    z = step * nvz
+  # p1: smooth steering + terrain-following + gait phase
+  update { on = p1; dt = 1.0
+    let speed = 0.052
+    let turn = 0.10
+    let wander = random() < 0.03
+    let ra = 2.0 * pi * random()
+    let ndx = if(wander, cos(ra), dx)
+    let ndz = if(wander, sin(ra), dz)
+    let wx = if(x > 3.4 and ndx > 0.0, -ndx, if(x < -3.4 and ndx < 0.0, -ndx, ndx))
+    let wz = if(z > 2.4 and ndz > 0.0, -ndz, if(z < -2.4 and ndz < 0.0, -ndz, ndz))
+    let hx = vx + turn * (wx - vx)
+    let hz = vz + turn * (wz - vz)
+    let inv = 1.0 / sqrt(hx*hx + hz*hz + 0.000001)
+    let nvx = hx * inv
+    let nvz = hz * inv
+    let path = 1.6 * sin(0.50 * x)
+    let dd = z - path
+    let channel = 1.0 / (1.0 + 5.0 * dd * dd)
+    let hh = 0.55*sin(0.50*x)*cos(0.45*z) + 0.30*x - 0.35*channel
+    let bob = 0.02 * sin(4.0 * pi * phase)
+    let pn = phase + 0.14
+    let pw = if(pn >= 1.0, pn - 1.0, pn)
+    x = speed * nvx
+    z = speed * nvz
+    y = (hh + bob - y)
     vx = nvx - vx
     vz = nvz - vz
+    dx = (wx - dx)
+    dz = (wz - dz)
+    phase = (pw - phase)
+  }
+  # p2: smooth steering + terrain-following + gait phase
+  update { on = p2; dt = 1.0
+    let speed = 0.048
+    let turn = 0.10
+    let wander = random() < 0.03
+    let ra = 2.0 * pi * random()
+    let ndx = if(wander, cos(ra), dx)
+    let ndz = if(wander, sin(ra), dz)
+    let wx = if(x > 3.4 and ndx > 0.0, -ndx, if(x < -3.4 and ndx < 0.0, -ndx, ndx))
+    let wz = if(z > 2.4 and ndz > 0.0, -ndz, if(z < -2.4 and ndz < 0.0, -ndz, ndz))
+    let hx = vx + turn * (wx - vx)
+    let hz = vz + turn * (wz - vz)
+    let inv = 1.0 / sqrt(hx*hx + hz*hz + 0.000001)
+    let nvx = hx * inv
+    let nvz = hz * inv
+    let path = 1.6 * sin(0.50 * x)
+    let dd = z - path
+    let channel = 1.0 / (1.0 + 5.0 * dd * dd)
+    let hh = 0.55*sin(0.50*x)*cos(0.45*z) + 0.30*x - 0.35*channel
+    let bob = 0.02 * sin(4.0 * pi * phase)
+    let pn = phase + 0.13
+    let pw = if(pn >= 1.0, pn - 1.0, pn)
+    x = speed * nvx
+    z = speed * nvz
+    y = (hh + bob - y)
+    vx = nvx - vx
+    vz = nvz - vz
+    dx = (wx - dx)
+    dz = (wz - dz)
+    phase = (pw - phase)
+  }
+  # p3: smooth steering + terrain-following + gait phase
+  update { on = p3; dt = 1.0
+    let speed = 0.056
+    let turn = 0.10
+    let wander = random() < 0.03
+    let ra = 2.0 * pi * random()
+    let ndx = if(wander, cos(ra), dx)
+    let ndz = if(wander, sin(ra), dz)
+    let wx = if(x > 3.4 and ndx > 0.0, -ndx, if(x < -3.4 and ndx < 0.0, -ndx, ndx))
+    let wz = if(z > 2.4 and ndz > 0.0, -ndz, if(z < -2.4 and ndz < 0.0, -ndz, ndz))
+    let hx = vx + turn * (wx - vx)
+    let hz = vz + turn * (wz - vz)
+    let inv = 1.0 / sqrt(hx*hx + hz*hz + 0.000001)
+    let nvx = hx * inv
+    let nvz = hz * inv
+    let path = 1.6 * sin(0.50 * x)
+    let dd = z - path
+    let channel = 1.0 / (1.0 + 5.0 * dd * dd)
+    let hh = 0.55*sin(0.50*x)*cos(0.45*z) + 0.30*x - 0.35*channel
+    let bob = 0.02 * sin(4.0 * pi * phase)
+    let pn = phase + 0.15
+    let pw = if(pn >= 1.0, pn - 1.0, pn)
+    x = speed * nvx
+    z = speed * nvz
+    y = (hh + bob - y)
+    vx = nvx - vx
+    vz = nvz - vz
+    dx = (wx - dx)
+    dz = (wz - dz)
+    phase = (pw - phase)
+  }
+  update { on = p1_lleg; dt = 1.0
+    let hx = @p1.vx
+    let hz = @p1.vz
+    let ph = @p1.phase
+    let sw = 0.18 * sin(2.0*pi*ph + 0.000000)
+    let tx = @p1.x + hx*sw + (-hz)*0.09
+    let tz = @p1.z + hz*sw + hx*0.09
+    let ty = @p1.y + 0.2
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
+  }
+  update { on = p1_rleg; dt = 1.0
+    let hx = @p1.vx
+    let hz = @p1.vz
+    let ph = @p1.phase
+    let sw = 0.18 * sin(2.0*pi*ph + 3.141593)
+    let tx = @p1.x + hx*sw + (-hz)*-0.09
+    let tz = @p1.z + hz*sw + hx*-0.09
+    let ty = @p1.y + 0.2
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
+  }
+  update { on = p1_larm; dt = 1.0
+    let hx = @p1.vx
+    let hz = @p1.vz
+    let ph = @p1.phase
+    let sw = 0.12 * sin(2.0*pi*ph + 3.141593)
+    let tx = @p1.x + hx*sw + (-hz)*0.16
+    let tz = @p1.z + hz*sw + hx*0.16
+    let ty = @p1.y + 0.62
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
+  }
+  update { on = p1_rarm; dt = 1.0
+    let hx = @p1.vx
+    let hz = @p1.vz
+    let ph = @p1.phase
+    let sw = 0.12 * sin(2.0*pi*ph + 0.000000)
+    let tx = @p1.x + hx*sw + (-hz)*-0.16
+    let tz = @p1.z + hz*sw + hx*-0.16
+    let ty = @p1.y + 0.62
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
+  }
+  update { on = p2_lleg; dt = 1.0
+    let hx = @p2.vx
+    let hz = @p2.vz
+    let ph = @p2.phase
+    let sw = 0.18 * sin(2.0*pi*ph + 0.000000)
+    let tx = @p2.x + hx*sw + (-hz)*0.09
+    let tz = @p2.z + hz*sw + hx*0.09
+    let ty = @p2.y + 0.2
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
+  }
+  update { on = p2_rleg; dt = 1.0
+    let hx = @p2.vx
+    let hz = @p2.vz
+    let ph = @p2.phase
+    let sw = 0.18 * sin(2.0*pi*ph + 3.141593)
+    let tx = @p2.x + hx*sw + (-hz)*-0.09
+    let tz = @p2.z + hz*sw + hx*-0.09
+    let ty = @p2.y + 0.2
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
+  }
+  update { on = p2_larm; dt = 1.0
+    let hx = @p2.vx
+    let hz = @p2.vz
+    let ph = @p2.phase
+    let sw = 0.12 * sin(2.0*pi*ph + 3.141593)
+    let tx = @p2.x + hx*sw + (-hz)*0.16
+    let tz = @p2.z + hz*sw + hx*0.16
+    let ty = @p2.y + 0.62
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
+  }
+  update { on = p2_rarm; dt = 1.0
+    let hx = @p2.vx
+    let hz = @p2.vz
+    let ph = @p2.phase
+    let sw = 0.12 * sin(2.0*pi*ph + 0.000000)
+    let tx = @p2.x + hx*sw + (-hz)*-0.16
+    let tz = @p2.z + hz*sw + hx*-0.16
+    let ty = @p2.y + 0.62
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
+  }
+  update { on = p3_lleg; dt = 1.0
+    let hx = @p3.vx
+    let hz = @p3.vz
+    let ph = @p3.phase
+    let sw = 0.18 * sin(2.0*pi*ph + 0.000000)
+    let tx = @p3.x + hx*sw + (-hz)*0.09
+    let tz = @p3.z + hz*sw + hx*0.09
+    let ty = @p3.y + 0.2
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
+  }
+  update { on = p3_rleg; dt = 1.0
+    let hx = @p3.vx
+    let hz = @p3.vz
+    let ph = @p3.phase
+    let sw = 0.18 * sin(2.0*pi*ph + 3.141593)
+    let tx = @p3.x + hx*sw + (-hz)*-0.09
+    let tz = @p3.z + hz*sw + hx*-0.09
+    let ty = @p3.y + 0.2
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
+  }
+  update { on = p3_larm; dt = 1.0
+    let hx = @p3.vx
+    let hz = @p3.vz
+    let ph = @p3.phase
+    let sw = 0.12 * sin(2.0*pi*ph + 3.141593)
+    let tx = @p3.x + hx*sw + (-hz)*0.16
+    let tz = @p3.z + hz*sw + hx*0.16
+    let ty = @p3.y + 0.62
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
+  }
+  update { on = p3_rarm; dt = 1.0
+    let hx = @p3.vx
+    let hz = @p3.vz
+    let ph = @p3.phase
+    let sw = 0.12 * sin(2.0*pi*ph + 0.000000)
+    let tx = @p3.x + hx*sw + (-hz)*-0.16
+    let tz = @p3.z + hz*sw + hx*-0.16
+    let ty = @p3.y + 0.62
+    x = (tx - x)
+    z = (tz - z)
+    y = (ty - y)
   }
 }
