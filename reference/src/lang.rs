@@ -340,6 +340,35 @@ pub enum PropKind {
     State(usize),
 }
 
+/// The scalar (numeric) parameter names a system kind recognises. An
+/// `name = <number>` whose name is not listed here is a **rule**, not a
+/// parameter — so `update { x = 1.0 }` is a rule (and `update { dt = 0.01 }` is
+/// the `dt` parameter). Keeps system config self-documenting and avoids the old
+/// "bare number silently became a parameter" surprise.
+fn numeric_param_keys(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "gravity" => &["gravity_y", "dt"],
+        "integrate" => &["dt"],
+        "damping" => &["factor"],
+        "ground_contact" => &["restitution"],
+        "wall" => &["x", "z", "y_min", "restitution"],
+        "force" => &["ax", "ay", "az", "dt"],
+        "linear" => &["slots", "dt"],
+        "nbody" => &["G", "dt"],
+        "send" => &["value"],
+        "recv" => &["slot"],
+        "update" | "rk4" => &["dt", "every", "substeps"],
+        "watch" => &["mem", "into"],
+        "diffuse" => &["rate"],
+        "poisson" => &["iters", "scale"],
+        "wave" => &["velocity", "dt", "damping", "absorb", "absorb_width"],
+        "spawn" => &["count", "every", "phase"],
+        "soft" => &["stiffness", "damping", "iterations"],
+        "joint" => &["length", "stiffness", "damping", "iterations"],
+        _ => &[],
+    }
+}
+
 /// Parses an `ident = rhs` parameter pair and stores it in the appropriate
 /// bucket (scalar / vector / expression) of a `SystemDecl`.
 fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
@@ -405,7 +434,12 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
             ) {
                 decl.string_params.insert(key, text);
             } else if let Some(v) = parse_scalar_number(&text) {
-                decl.params.insert(key, v);
+                if numeric_param_keys(&decl.kind).contains(&key.as_str()) {
+                    decl.params.insert(key, v);
+                } else {
+                    // `name = <number>` with an unrecognised name is a rule.
+                    decl.update.insert(key, text);
+                }
             } else {
                 decl.update.insert(key, text);
             }
@@ -9573,6 +9607,29 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .orient
+        );
+    }
+
+    /// `name = <number>` is a **rule** unless `name` is a recognised parameter
+    /// of that system kind (so `update { x = 1.0 }` integrates x, while
+    /// `update { dt = 0.01 }` is the dt parameter).
+    #[test]
+    fn bare_number_rhs_is_a_rule_not_a_parameter() {
+        let src = "world { gravity=(0,0,0) entity m { state = (x = 0.0) } } \
+                   systems { update { on = m; dt = 1.0 x = 1.0 } }";
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(3).unwrap();
+        let x = rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[0];
+        assert!(
+            (x - 3.0).abs() < 1e-9,
+            "x should integrate by dt=1 per step: {x}"
         );
     }
 
