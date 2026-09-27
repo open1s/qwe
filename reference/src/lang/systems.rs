@@ -1023,9 +1023,15 @@ pub struct InvariantSystem {
     pub expr: Expr,
     /// `let name = expr` local bindings, computed sequentially before the check.
     pub lets: Vec<LetStmt>,
-    /// Byte offset of this invariant's verdict within the check component.
-    /// Each `invariant` system owns one offset so several coexist.
+    /// Byte offset of this system's field within its hidden component. Each
+    /// `invariant`/`conserved` system owns one offset so several coexist.
     pub check_offset: u32,
+    /// The hidden component to write: `check_id()` (invariant verdict) or
+    /// `conserved_id()` (conserved quantity value).
+    pub component: pwe_api::ComponentTypeId,
+    /// True for a `conserved` system (writes the quantity), false for an
+    /// `invariant` (writes a 0/1 violation verdict).
+    pub conserved: bool,
     /// Entity name -> id, for resolving `@name.sN` cross-entity references.
     pub entity_map: std::collections::BTreeMap<String, u128>,
     /// Optional set of entity ids this invariant applies to (empty = all bodies).
@@ -1044,7 +1050,11 @@ pub struct InvariantSystem {
 }
 impl EirSystem for InvariantSystem {
     fn name(&self) -> &'static str {
-        "lang.invariant"
+        if self.conserved {
+            "lang.conserved"
+        } else {
+            "lang.invariant"
+        }
     }
     fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
         if let Some(only) = &self.only {
@@ -1177,36 +1187,43 @@ impl EirSystem for InvariantSystem {
         lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
         let ctx = parts.ctx(&locals);
         let expr_reg = lower_expr(&self.expr, &ctx, &mut next_id, out);
-        let zero = const_reg(0.0, &mut next_id, out);
-        let one = const_reg(1.0, &mut next_id, out);
-        let eq0 = next_id;
-        next_id += 1;
-        out.push(crate::physics_eir::instr(
-            crate::eir::Opcode::Eq,
-            eq0,
-            Some(crate::eir::ValueType::Bool),
-            vec![expr_reg, zero],
-            None,
-            None,
-        ));
-        let viol = next_id;
-        out.push(crate::physics_eir::instr(
-            crate::eir::Opcode::Select,
-            viol,
-            Some(crate::eir::ValueType::F64),
-            vec![eq0, one, zero],
-            None,
-            None,
-        ));
+        // `conserved` records the quantity itself; `invariant` records a 0/1
+        // verdict (1 = violated, when the expression is exactly zero / NaN).
+        let value = if self.conserved {
+            expr_reg
+        } else {
+            let zero = const_reg(0.0, &mut next_id, out);
+            let one = const_reg(1.0, &mut next_id, out);
+            let eq0 = next_id;
+            next_id += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Eq,
+                eq0,
+                Some(crate::eir::ValueType::Bool),
+                vec![expr_reg, zero],
+                None,
+                None,
+            ));
+            let viol = next_id;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Select,
+                viol,
+                Some(crate::eir::ValueType::F64),
+                vec![eq0, one, zero],
+                None,
+                None,
+            ));
+            viol
+        };
         out.push(crate::physics_eir::instr(
             crate::eir::Opcode::WriteView,
             0,
             None,
-            vec![viol],
+            vec![value],
             None,
             Some(crate::physics_eir::cr(
                 entity,
-                crate::physics_eir::check_id(),
+                self.component,
                 self.check_offset,
             )),
         ));

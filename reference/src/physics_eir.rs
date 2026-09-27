@@ -74,6 +74,11 @@ pub fn active_id() -> ComponentTypeId {
 /// Canonical `ComponentTypeId` for the hidden per-entity invariant verdict
 /// component: each `invariant` system writes its 0/1 check result here so the
 /// host can fail the step when an invariant is violated.
+pub fn conserved_id() -> ComponentTypeId {
+    static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
+    fixed_id(&ID, "pwe.lang", "conserved")
+}
+
 pub fn check_id() -> ComponentTypeId {
     static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
     fixed_id(&ID, "pwe.lang", "check")

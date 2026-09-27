@@ -58,6 +58,7 @@ pub(crate) fn numeric_param_keys(kind: &str) -> &'static [&'static str] {
         "recv" => &["slot"],
         "update" | "rk4" => &["dt", "every", "substeps"],
         "watch" => &["mem", "into"],
+        "conserved" => &["tolerance"],
         "diffuse" => &["rate"],
         "poisson" => &["iters", "scale"],
         "wave" => &["velocity", "dt", "damping", "absorb", "absorb_width"],

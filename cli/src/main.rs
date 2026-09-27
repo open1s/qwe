@@ -648,6 +648,9 @@ fn auto_frame_camera(rt: &LangRuntime) -> CameraVisual {
 /// Reports the final state of a batch run.
 fn report(rt: &LangRuntime, steps: u64) {
     println!("ran {steps} steps (interpreter == JIT, cross-checked every {CROSS_BATCH} steps)");
+    for (expr, drift) in rt.conserved_drifts() {
+        println!("  conserved `{expr}`: relative drift {drift:.3e}");
+    }
     println!("  sim time:  {:.6} s", rt.scene.sim_time);
     println!("  entities:  {}", rt.scene.entities.len());
     for e in &rt.present_frame(None).entities {

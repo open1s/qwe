@@ -6,6 +6,14 @@ use super::*;
 // Cross-backend runtime
 // ---------------------------------------------------------------------------
 
+/// A declared `conserved { expr; tolerance }` quantity and its tracked drift.
+struct ConservedSpec {
+    expr: String,
+    tolerance: f64,
+    first: Option<f64>,
+    last: f64,
+}
+
 /// Runs a compiled program's low-level IR across the interpreter and the CPU
 /// JIT, verifying they produce byte-identical writes (the "run cross" contract).
 pub struct LangRuntime {
@@ -40,6 +48,8 @@ pub struct LangRuntime {
     /// When set, every step asserts that no entity state became non-finite and
     /// fails with detail 88 otherwise (catches unphysical blow-ups).
     finite_check: bool,
+    /// Declared conserved quantities (drift tracked over the run; detail 87).
+    conserved: Vec<ConservedSpec>,
 }
 
 impl LangRuntime {
@@ -166,6 +176,23 @@ impl LangRuntime {
             peer_region: None,
             env: crate::eir::ExecEnv::default(),
             finite_check: false,
+            conserved: compiled
+                .parsed
+                .systems
+                .iter()
+                .filter(|s| s.kind == "conserved")
+                .map(|s| ConservedSpec {
+                    expr: s
+                        .assigns
+                        .get("expr")
+                        .or_else(|| s.update.get("expr"))
+                        .cloned()
+                        .unwrap_or_default(),
+                    tolerance: s.params.get("tolerance").copied().unwrap_or(1e-4),
+                    first: None,
+                    last: 0.0,
+                })
+                .collect(),
             invariant_exprs: compiled
                 .parsed
                 .systems
@@ -322,6 +349,59 @@ impl LangRuntime {
         Ok(())
     }
 
+    /// Tracks each declared conserved quantity: the first value is the reference;
+    /// each step's drift must stay within `tolerance` (detail 87).
+    fn check_conserved(&mut self, writes: &[WorldWrite]) -> Result<()> {
+        if self.conserved.is_empty() {
+            return Ok(());
+        }
+        for w in writes {
+            if w.component != crate::physics_eir::conserved_id() {
+                continue;
+            }
+            let idx = (w.offset / crate::physics_eir::field::STATE_SLOT_BYTES) as usize;
+            let Some(spec) = self.conserved.get_mut(idx) else {
+                continue;
+            };
+            let v = f64::from_bits(w.value);
+            match spec.first {
+                None => {
+                    spec.first = Some(v);
+                    spec.last = v;
+                }
+                Some(first) => {
+                    spec.last = v;
+                    let drift = (v - first).abs();
+                    let scale = first.abs().max(1.0);
+                    if drift > spec.tolerance * scale {
+                        return Err(error_at(
+                            Status::EirInvalid,
+                            87,
+                            0,
+                            format!(
+                                "conserved quantity `{}` drifted: {first} -> {v} (Δ={drift}, tol={})",
+                                spec.expr, spec.tolerance
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `(expression, relative drift)` for each declared conserved quantity.
+    pub fn conserved_drifts(&self) -> Vec<(String, f64)> {
+        self.conserved
+            .iter()
+            .filter_map(|s| {
+                let first = s.first?;
+                let scale = first.abs().max(1.0);
+                Some((s.expr.clone(), (s.last - first).abs() / scale))
+            })
+            .collect()
+    }
+
     /// Advances the global simulation clock by one step.
     fn advance_clock(&mut self) {
         self.scene.sim_time += self.sim_dt;
@@ -373,6 +453,7 @@ impl LangRuntime {
         if self.finite_check {
             self.assert_finite()?;
         }
+        self.check_conserved(&writes)?;
         self.advance_clock();
         Ok(writes)
     }
@@ -458,6 +539,9 @@ impl LangRuntime {
         if self.finite_check {
             self.assert_finite()?;
         }
+        // Copy the conserved writes before the borrow ends.
+        let cw: Vec<WorldWrite> = int_writes.clone();
+        self.check_conserved(&cw)?;
         self.advance_clock();
         Ok(int_writes)
     }

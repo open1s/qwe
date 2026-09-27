@@ -694,6 +694,9 @@ systems {
   rejected at compile time (detail 83). Legacy pre-v0.3 sources can be upgraded
   with `pwe migrate <src.pwe> [-o out.pwe]` (old implicit `=` integration and the
   old `deriv` form are rewritten to `inte`).
+* **Conserved quantities**: `conserved { on = <entity>; expr = <expr>;
+  tolerance = 1e-4 }` records `expr` each step; the run fails (detail 87) if its
+  relative drift exceeds `tolerance`. `pwe run` prints the drift.
 * **System parameters are recognised by name** per kind; any other
   `name = <expr>` (including `name = 1.0`) is a rule.
 * **Reads**: within one system's function, all reads are sampled once at the
@@ -799,6 +802,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 84 | Malformed unit annotation. |
 | 85 | Unknown identifier (reads 0.0) — a warning. |
 | 86 | Unstable solver setting (CFL / diffusion limit). |
+| 87 | Conserved quantity drifted beyond `tolerance`. |
 | 88 | Non-finite state (simulation diverged) — with `pwe run --check`. |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check

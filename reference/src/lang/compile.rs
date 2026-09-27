@@ -40,6 +40,7 @@ pub fn build_systems(
     }
     let mut out: Vec<Box<dyn EirSystem>> = Vec::new();
     let mut invariant_count: usize = 0;
+    let mut conserved_count: usize = 0;
     for s in systems {
         match s.kind.as_str() {
             "gravity" => out.push(Box::new(GravitySystem {
@@ -358,6 +359,50 @@ becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
                     expr,
                     lets,
                     check_offset,
+                    component: crate::physics_eir::check_id(),
+                    conserved: false,
+                    entity_map: entity_ids.clone(),
+                    only,
+                    func_ids: func_ids.clone(),
+                    field_dims: field_dims.clone(),
+                    namespace: s.namespace.clone(),
+                    param_names: param_names.clone(),
+                    state_names_by_id: state_names_by_id.clone(),
+                }));
+            }
+            "conserved" => {
+                // A conserved quantity: the runtime tracks its drift over the run
+                // and fails (detail 87) past the `tolerance` (default 1e-4).
+                let expr_text = s
+                    .assigns
+                    .get("expr")
+                    .or_else(|| s.update.get("expr"))
+                    .cloned()
+                    .ok_or_else(|| {
+                        error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            "conserved is missing required parameter 'expr'".to_string(),
+                        )
+                    })?;
+                let expr = parse_expr_str(&expr_text)?;
+                let lets = to_let_stmts(&s.update_stmts)?;
+                let only = match s.string_params.get("on") {
+                    Some(name) => {
+                        Some(resolve_on(entity_ids, name).ok_or(error(Status::Invalid, 62))?)
+                    }
+                    None => None,
+                };
+                let check_offset =
+                    (conserved_count as u32) * crate::physics_eir::field::STATE_SLOT_BYTES;
+                conserved_count += 1;
+                out.push(Box::new(InvariantSystem {
+                    expr,
+                    lets,
+                    check_offset,
+                    component: crate::physics_eir::conserved_id(),
+                    conserved: true,
                     entity_map: entity_ids.clone(),
                     only,
                     func_ids: func_ids.clone(),

@@ -2691,3 +2691,45 @@ fn finite_check_catches_divergence() {
     }
     assert!(caught, "divergence must be caught by the finite check");
 }
+
+#[test]
+fn conserved_quantity_is_tracked_and_enforced() {
+    // RK4 conserves the oscillator energy to ~1e-9; the drift is reported.
+    let ok = r#"
+        world { gravity=(0,0,0) entity o { state=(x = 1.0, v = 0.0) } }
+        systems {
+            rk4 { on = o; dt = 0.01
+                inte x = v
+                inte v = -4.0 * x
+            }
+            conserved { on = o; expr = 0.5*v*v + 2.0*x*x; tolerance = 1e-6 }
+        }
+    "#;
+    let mut rt = LangRuntime::compile(ok).unwrap();
+    rt.step_cross_n(1000).unwrap();
+    let d = rt.conserved_drifts();
+    assert_eq!(d.len(), 1);
+    assert!(d[0].1 < 1e-7, "energy drift too large: {}", d[0].1);
+
+    // A damped rule breaks conservation: detail 87 before tolerance is exceeded.
+    let bad = r#"
+        world { gravity=(0,0,0) entity o { state=(x = 1.0, v = 0.0) } }
+        systems {
+            update { on = o; dt = 0.1
+                inte x = v
+                inte v = -4.0 * x - 0.1 * v
+            }
+            conserved { on = o; expr = 0.5*v*v + 2.0*x*x; tolerance = 1e-3 }
+        }
+    "#;
+    let mut rt = LangRuntime::compile(bad).unwrap();
+    let mut caught = false;
+    for _ in 0..2000 {
+        if let Err(e) = rt.step_cross() {
+            assert_eq!(e.detail, 87, "detail = {}", e.detail);
+            caught = true;
+            break;
+        }
+    }
+    assert!(caught, "damping must break the conserved quantity");
+}
