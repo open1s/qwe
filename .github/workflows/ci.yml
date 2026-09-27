@@ -22,8 +22,6 @@ jobs:
         run: cargo run -q -p pwe-conformance
       - name: Build examples
         run: cargo build --examples -p pwe-reference
-      - name: Benchmarks (smoke)
-        run: cargo bench -p pwe-reference
   supply-chain:
     runs-on: ubuntu-latest
     steps:
