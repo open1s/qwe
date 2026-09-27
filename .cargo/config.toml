@@ -1,0 +1,6 @@
+# Deterministic build/runtime policy (RFC-0013): the reference implementation
+# must not rely on fast-math/FMA contraction, so we never opt into it. Rust does
+# not contract floats by default; this file records that and adds CI aliases.
+[alias]
+gate = ["test", "--workspace"]
+report = ["run", "-q", "-p", "pwe-conformance"]

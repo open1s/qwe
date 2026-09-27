@@ -126,6 +126,10 @@ pub mod field {
 pub struct SceneRuntime<'a> {
     pub scene: &'a Scene,
     pending: std::collections::BTreeMap<(u128, ComponentTypeId, u32), u64>,
+    /// Writes committed at the last system barrier. Committed reads use this
+    /// (plus the scene), so every entity of a system sees one start-of-system
+    /// snapshot while later systems see earlier systems' writes.
+    committed: std::collections::BTreeMap<(u128, ComponentTypeId, u32), u64>,
     /// A **dense** per-field overlay of cell values written so far this step,
     /// materialized lazily from the `Field` on the first grid write. Grid
     /// read-after-write therefore costs O(1), not a tree lookup per cell
@@ -151,6 +155,7 @@ impl<'a> SceneRuntime<'a> {
         Self {
             scene,
             pending: std::collections::BTreeMap::new(),
+            committed: std::collections::BTreeMap::new(),
             field_overlay: std::collections::BTreeMap::new(),
             field_ids,
             param_ids,
@@ -169,6 +174,9 @@ impl SceneRuntime<'_> {
             if let Some(&v) = self.pending.get(&key) {
                 return Ok(v);
             }
+        }
+        if let Some(&v) = self.committed.get(&key) {
+            return Ok(v);
         }
         // The global simulation clock (`t`) does not belong to any entity.
         if target.component == sim_time_id() {
@@ -272,6 +280,10 @@ impl EirRuntime for SceneRuntime<'_> {
     fn read_committed_field(&self, target: ComponentRef) -> Result<u64> {
         self.read_field_impl(target, false)
     }
+    fn commit_barrier(&mut self) {
+        let drained = std::mem::take(&mut self.pending);
+        self.committed.extend(drained);
+    }
     fn write_field(&mut self, target: ComponentRef, value: u64) {
         // Grid cells go to the dense per-field overlay (RFC-0037); the
         // interpreter still records the `WorldWrite`, so `apply_writes` and the
@@ -329,9 +341,9 @@ impl EirRuntime for SceneRuntime<'_> {
             if origin.distance(self.effective_position(e, id.0)) > radius {
                 continue;
             }
-            // Read the neighbor's State slot through `read_field` so it honors
-            // any in-interpretation write (the same overlay as every read).
-            let raw = self.read_field(crate::eir::ComponentRef {
+            // Read the neighbor's State slot from the committed snapshot, so
+            // every entity of a system sees the same neighbor positions.
+            let raw = self.read_committed_field(crate::eir::ComponentRef {
                 entity: id.0,
                 component: state_id(),
                 offset: slot.wrapping_mul(field::STATE_SLOT_BYTES),
@@ -880,33 +892,31 @@ impl SceneRuntime<'_> {
     /// A body's position, preferring any position written earlier in this
     /// interpretation (the write overlay), then `Transform`, then `state[0..2]`.
     fn effective_position(&self, e: &crate::scene::Entity, entity: u128) -> Vec3 {
+        // State-slot reads prefer the committed (start-of-system) snapshot.
+        let slot = |i: usize| -> Option<f64> {
+            self.committed
+                .get(&(entity, state_id(), field::state_slot(i)))
+                .map(|v| f64::from_bits(*v))
+                .or_else(|| e.state.as_ref().and_then(|st| st.values.get(i).copied()))
+        };
         let base = match e.transform.map(|t| t.position) {
             Some(p) => p,
             None => Vec3::new(
-                e.state
-                    .as_ref()
-                    .and_then(|st| st.values.first().copied())
-                    .unwrap_or(0.0),
-                e.state
-                    .as_ref()
-                    .and_then(|st| st.values.get(1).copied())
-                    .unwrap_or(0.0),
-                e.state
-                    .as_ref()
-                    .and_then(|st| st.values.get(2).copied())
-                    .unwrap_or(0.0),
+                slot(0).unwrap_or(0.0),
+                slot(1).unwrap_or(0.0),
+                slot(2).unwrap_or(0.0),
             ),
         };
         let px = self
-            .pending
+            .committed
             .get(&(entity, transform_id(), field::POS_X))
             .map(|v| f64::from_bits(*v));
         let py = self
-            .pending
+            .committed
             .get(&(entity, transform_id(), field::POS_Y))
             .map(|v| f64::from_bits(*v));
         let pz = self
-            .pending
+            .committed
             .get(&(entity, transform_id(), field::POS_Z))
             .map(|v| f64::from_bits(*v));
         Vec3::new(
@@ -1806,9 +1816,13 @@ impl PhysicsProgram {
     ) -> Self {
         let mut functions = Vec::new();
         let mut fid = 1u64;
-        for (s_idx, sys) in systems.iter().enumerate() {
+        for sys in &systems {
             let mut ents = entities.clone();
             ents.sort_unstable();
+            // The first function emitted for this system carries a `Barrier`,
+            // which commits the previous systems' writes before any entity of
+            // this system reads cross-entity state (start-of-system snapshot).
+            let mut barrier_emitted = false;
             for entity in ents {
                 let mut instrs = Vec::new();
                 sys.lower_entity(entity, &mut instrs);
@@ -1821,15 +1835,21 @@ impl PhysicsProgram {
                 if guard_slots.contains(&entity) && sys.guards_pool_slots() {
                     prepend_active_guard(entity, &mut instrs);
                 }
+                let barrier = !barrier_emitted;
+                barrier_emitted = true;
                 functions.push(Function {
                     id: fid,
                     effect_mask: crate::eir::EIR_EFFECT_READ_WORLD
-                        | crate::eir::EIR_EFFECT_WRITE_WORLD,
+                        | crate::eir::EIR_EFFECT_WRITE_WORLD
+                        | if barrier {
+                            crate::eir::EIR_EFFECT_BARRIER
+                        } else {
+                            0
+                        },
                     argument_count: 0,
                     instructions: instrs,
                 });
                 fid += 1;
-                let _ = s_idx;
             }
         }
         let module = EirModule {

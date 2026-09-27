@@ -1,0 +1,5 @@
+# MSRV is declared per-crate as `rust-version = "1.81"`; CI pins this channel.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

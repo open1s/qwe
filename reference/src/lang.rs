@@ -1809,12 +1809,14 @@ impl EirSystem for UpdateSystem {
         prop_ids.sort_unstable();
         prop_ids.dedup();
 
-        // Read each distinct referenced (entity, slot) once.
+        // Read each distinct referenced (entity, slot) once, from the committed
+        // (start-of-system) snapshot — one frozen view shared by every entity of
+        // the system (simultaneous semantics; preserves Newton's third law).
         let mut ref_regs: std::collections::BTreeMap<(u128, usize), u32> = Default::default();
         for (rid, rslot) in ref_ids {
             let next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
             out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::ReadView,
+                crate::eir::Opcode::ReadCommitted,
                 next,
                 Some(crate::eir::ValueType::F64),
                 vec![],
@@ -1827,13 +1829,13 @@ impl EirSystem for UpdateSystem {
             ));
             ref_regs.insert((rid, rslot), next);
         }
-        // Read each distinct cross-entity property once.
+        // Read each distinct cross-entity property once (committed snapshot).
         let mut prop_regs: std::collections::BTreeMap<(u128, PropKind), u32> = Default::default();
         for (pid, kind) in prop_ids {
             let (cid, off) = prop_component(kind);
             let next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
             out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::ReadView,
+                crate::eir::Opcode::ReadCommitted,
                 next,
                 Some(crate::eir::ValueType::F64),
                 vec![],
@@ -2313,12 +2315,13 @@ impl EirSystem for Rk4System {
         prop_ids.sort_unstable();
         prop_ids.dedup();
 
-        // Cross-entity references and properties are sampled once per step.
+        // Cross-entity references and properties are sampled once per step from
+        // the committed (start-of-system) snapshot.
         let mut ref_regs: std::collections::BTreeMap<(u128, usize), u32> = Default::default();
         for (rid, rslot) in ref_ids {
             let next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
             out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::ReadView,
+                crate::eir::Opcode::ReadCommitted,
                 next,
                 Some(crate::eir::ValueType::F64),
                 vec![],
@@ -2336,7 +2339,7 @@ impl EirSystem for Rk4System {
             let (cid, off) = prop_component(kind);
             let next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
             out.push(crate::physics_eir::instr(
-                crate::eir::Opcode::ReadView,
+                crate::eir::Opcode::ReadCommitted,
                 next,
                 Some(crate::eir::ValueType::F64),
                 vec![],
@@ -8742,6 +8745,72 @@ mod tests {
         assert!(st.values[1].is_finite() && st.values[1] > 0.0);
         // Cross-backend agreement is enforced on every step by step_cross.
         assert!(rt.clock == 500);
+    }
+
+    #[test]
+    fn system_barrier_within_system_is_simultaneous() {
+        // One system, two entities: the later-id entity must read the earlier
+        // entity's *start-of-system* value, not its same-step update.
+        let src = r#"
+            world { gravity=(0,0,0)
+                entity a { state = (5.0) }
+                entity b { state = (0.0) } }
+            systems { update { dt = 1.0 s0 = s0 + @a.s0 } }
+        "#;
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(1).unwrap();
+        let av = rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[0];
+        let bv = rt
+            .scene
+            .get(EntityId(2))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[0];
+        assert!((av - 10.0).abs() < 1e-9, "a = {av}"); // 5 + committed(5)
+        assert!((bv - 5.0).abs() < 1e-9, "b = {bv}"); // 0 + committed(a=5), not 10
+    }
+
+    #[test]
+    fn system_barrier_across_systems_sees_prior_writes() {
+        // A later system observes an earlier system's write via `@name`.
+        let src = r#"
+            world { gravity=(0,0,0)
+                entity a { state = (5.0) }
+                entity c { state = (0.0) } }
+            systems {
+                update { on = a; dt = 1.0 s0 = s0 + 1.0 }
+                update { on = c; dt = 1.0 s0 = @a.s0 }
+            }
+        "#;
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(1).unwrap();
+        let av = rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[0];
+        let cv = rt
+            .scene
+            .get(EntityId(2))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[0];
+        assert!((av - 6.0).abs() < 1e-9, "a = {av}");
+        assert!((cv - 6.0).abs() < 1e-9, "c = {cv}"); // sees a's committed write
     }
 
     #[test]

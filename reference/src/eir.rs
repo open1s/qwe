@@ -28,6 +28,10 @@ pub const EIR_EFFECT_DEVICE: u32 = 64;
 pub const EIR_EFFECT_NETWORK: u32 = 128;
 pub const EIR_EFFECT_TIME: u32 = 256;
 pub const EIR_EFFECT_RANDOM: u32 = 512;
+/// Marks a function that begins a system: the engine commits the previous
+/// systems' writes before running it (start-of-system snapshot for committed
+/// reads). Not produced by any opcode.
+pub const EIR_EFFECT_BARRIER: u32 = 1024;
 
 const NONDETERMINISTIC: u32 =
     EIR_EFFECT_TIME | EIR_EFFECT_RANDOM | EIR_EFFECT_IO | EIR_EFFECT_DEVICE | EIR_EFFECT_NETWORK;
@@ -485,6 +489,10 @@ pub trait EirRuntime {
     fn read_committed_field(&self, target: ComponentRef) -> Result<u64> {
         self.read_field(target)
     }
+    /// Advances the committed (start-of-system) snapshot: all writes made so far
+    /// in this interpretation become visible to subsequent committed reads. The
+    /// engine emits a `Barrier` at each system boundary. Default: no-op.
+    fn commit_barrier(&mut self) {}
     /// Applies a scalar write during interpretation so later reads observe it.
     fn write_field(&mut self, target: ComponentRef, value: u64);
     /// Counts the entities (other than `entity`) whose position lies within
@@ -629,7 +637,7 @@ fn infer_instruction_type(i: &Instruction) -> Option<ValueType> {
 
 /// All operands of an arithmetic instruction must share one numeric type.
 fn numeric_type(
-    reg_types: &std::collections::HashMap<u32, ValueType>,
+    reg_types: &[Option<ValueType>],
     operands: &[u32],
     index: usize,
 ) -> Result<ValueType> {
@@ -637,11 +645,12 @@ fn numeric_type(
         return Err(error(Status::EirInvalid, 11, index));
     }
     let first = reg_types
-        .get(&operands[0])
+        .get(operands[0] as usize)
         .copied()
+        .flatten()
         .ok_or(error(Status::EirInvalid, 12, index))?;
     for &id in operands.iter().skip(1) {
-        if reg_types.get(&id).copied() != Some(first) {
+        if reg_types.get(id as usize).copied().flatten() != Some(first) {
             return Err(error(Status::EirInvalid, 13, index));
         }
     }
@@ -664,11 +673,12 @@ impl EirModule {
     /// `pure` marks the module as deterministic (no time/random/io/device/
     /// network effects permitted).
     pub fn validate(&self, pure: bool) -> Result<()> {
+        let fn_ids: std::collections::HashSet<u64> = self.functions.iter().map(|f| f.id).collect();
         for function in &self.functions {
             if pure && function.effect_mask & NONDETERMINISTIC != 0 {
                 return Err(error(Status::EirInvalid, 1, function.id as usize));
             }
-            self.validate_function(function)?;
+            self.validate_function(function, &fn_ids)?;
         }
         Ok(())
     }
@@ -714,28 +724,42 @@ impl EirModule {
         Ok(())
     }
 
-    fn validate_function(&self, function: &Function) -> Result<()> {
-        // SSA value table: id -> (defining instruction index, type, defined flag).
-        let mut defs: BTreeMap<u32, (ValueType, bool)> = BTreeMap::new();
+    fn validate_function(
+        &self,
+        function: &Function,
+        fn_ids: &std::collections::HashSet<u64>,
+    ) -> Result<()> {
+        // Dense SSA tables indexed by register id (registers are small contiguous
+        // ids), sized to the largest id referenced. Dense arrays keep validation
+        // linear with a small constant (BTreeMap/HashMap tables were the dominant
+        // compile cost for large unrolled systems).
+        // Registers are result ids (and pre-defined argument slots); operand
+        // ids always reference an earlier result, so sizing from result ids is
+        // sufficient. (A `Call`'s first operand is a *function* id — up to
+        // 0xF000_0000 — and must not inflate the table.)
+        let mut cap = function.argument_count as usize + 1;
+        for ins in &function.instructions {
+            cap = cap.max(ins.result_id as usize + 1);
+        }
+        // defs[id] = (type, defined). reg_types[id] = inferable type.
+        let mut defs: Vec<Option<(ValueType, bool)>> = vec![None; cap];
+        let mut reg_types: Vec<Option<ValueType>> = vec![None; cap];
         let mut result_count = 0usize;
         // Required effect bits the function must declare (RFC-0021 effect mask).
         let mut required_effects: u32 = 0;
-        // Function arguments are pre-defined SSA slots (typed F64 by default, matching
-        // the reference's F64-centric component values).
+        // Function arguments are pre-defined SSA slots (typed F64 by default,
+        // matching the reference's F64-centric component values).
         for slot in 1..=function.argument_count {
-            defs.insert(slot, (ValueType::F64, true));
-        }
-        // Register id -> inferable type, computed once. A linear rescan per
-        // operand was quadratic on large unrolled systems (3D field sweeps).
-        let mut reg_types: std::collections::HashMap<u32, ValueType> =
-            std::collections::HashMap::with_capacity(function.instructions.len());
-        for slot in 1..=function.argument_count {
-            reg_types.insert(slot, ValueType::F64);
+            let i = slot as usize;
+            defs[i] = Some((ValueType::F64, true));
+            reg_types[i] = Some(ValueType::F64);
         }
         for ins in &function.instructions {
             if ins.result_id != 0 {
                 if let Some(t) = infer_instruction_type(ins) {
-                    reg_types.insert(ins.result_id, t);
+                    if let Some(slot) = reg_types.get_mut(ins.result_id as usize) {
+                        *slot = Some(t);
+                    }
                 }
             }
         }
@@ -772,7 +796,7 @@ impl EirModule {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
                     let target_id = instruction.operands[0] as u64;
-                    if !self.functions.iter().any(|f| f.id == target_id) {
+                    if !fn_ids.contains(&target_id) {
                         return Err(error(Status::EirInvalid, 37, index));
                     }
                     Some(instruction.result_type.unwrap_or(ValueType::U64))
@@ -791,7 +815,10 @@ impl EirModule {
                     if instruction.operands.len() != 1 {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
-                    let t = reg_types.get(&instruction.operands[0]).copied();
+                    let t = reg_types
+                        .get(instruction.operands[0] as usize)
+                        .copied()
+                        .flatten();
                     if t != Some(ValueType::F64) {
                         return Err(error(Status::EirInvalid, 13, index));
                     }
@@ -812,8 +839,14 @@ impl EirModule {
                     if instruction.operands.len() != 2 {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
-                    let a = reg_types.get(&instruction.operands[0]).copied();
-                    let b = reg_types.get(&instruction.operands[1]).copied();
+                    let a = reg_types
+                        .get(instruction.operands[0] as usize)
+                        .copied()
+                        .flatten();
+                    let b = reg_types
+                        .get(instruction.operands[1] as usize)
+                        .copied()
+                        .flatten();
                     if a != Some(ValueType::F64) || b != Some(ValueType::F64) {
                         return Err(error(Status::EirInvalid, 13, index));
                     }
@@ -841,7 +874,12 @@ impl EirModule {
                     if instruction.operands.len() != 1 {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
-                    if reg_types.get(&instruction.operands[0]).copied() != Some(ValueType::F64) {
+                    if reg_types
+                        .get(instruction.operands[0] as usize)
+                        .copied()
+                        .flatten()
+                        != Some(ValueType::F64)
+                    {
                         return Err(error(Status::EirInvalid, 13, index));
                     }
                     Some(ValueType::F64)
@@ -986,8 +1024,14 @@ impl EirModule {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
                     // Result type follows the selected operands.
-                    let a = reg_types.get(&instruction.operands[1]).copied();
-                    let b = reg_types.get(&instruction.operands[2]).copied();
+                    let a = reg_types
+                        .get(instruction.operands[1] as usize)
+                        .copied()
+                        .flatten();
+                    let b = reg_types
+                        .get(instruction.operands[2] as usize)
+                        .copied()
+                        .flatten();
                     if a != b || a.is_none() {
                         return Err(error(Status::EirInvalid, 13, index));
                     }
@@ -1021,7 +1065,11 @@ impl EirModule {
                     }
                     continue;
                 }
-                let defined = defs.get(&operand).is_some_and(|(_, d)| *d);
+                let defined = defs
+                    .get(operand as usize)
+                    .and_then(|o| *o)
+                    .map(|(_, d)| d)
+                    .unwrap_or(false);
                 if !defined {
                     return Err(error(Status::EirInvalid, 5, index));
                 }
@@ -1030,7 +1078,7 @@ impl EirModule {
             // Record this instruction's result definition.
             if let Some(result_id) = non_zero(instruction.result_id) {
                 let ty = declared_type.ok_or(error(Status::EirInvalid, 6, index))?;
-                if let Some((_, already)) = defs.get(&result_id) {
+                if let Some(Some((_, already))) = defs.get(result_id as usize) {
                     if *already {
                         return Err(error(Status::EirInvalid, 7, index));
                     }
@@ -1042,7 +1090,9 @@ impl EirModule {
                         return Err(error(Status::EirInvalid, 8, index));
                     }
                 }
-                defs.insert(result_id, (ty, true));
+                if let Some(slot) = defs.get_mut(result_id as usize) {
+                    *slot = Some((ty, true));
+                }
                 result_count += 1;
             }
         }
@@ -1129,6 +1179,11 @@ impl EirModule {
             // Only argument-less functions are entry points; functions that take
             // arguments are reached exclusively via `CALL`.
             if self.functions[entry].argument_count == 0 {
+                // A system boundary: publish the previous systems' writes so this
+                // system's committed (start-of-system) reads observe them.
+                if self.functions[entry].effect_mask & EIR_EFFECT_BARRIER != 0 {
+                    rt.commit_barrier();
+                }
                 self.run_call_tree(rt, env, &self.functions, &index_of, entry, &mut writes)?;
             }
         }

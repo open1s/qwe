@@ -1,0 +1,13 @@
+# cargo-deny policy (supply chain / licenses / advisories).
+[graph]
+all-features = true
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+[licenses]
+allow = ["Apache-2.0", "MIT", "Unicode-3.0", "Unicode-DFS-2016", "BSD-3-Clause"]
+confidence-threshold = 0.9
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
