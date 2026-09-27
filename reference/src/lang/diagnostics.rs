@@ -102,6 +102,7 @@ pub fn detail_name(detail: u32) -> &'static str {
         86 => "unstable solver setting (CFL / diffusion limit)",
         87 => "conserved quantity drifted beyond tolerance",
         88 => "non-finite state (simulation diverged)",
+        89 => "type mismatch in a `let` annotation",
         _ => "unspecified compile error",
     }
 }

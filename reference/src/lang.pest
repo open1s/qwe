@@ -148,7 +148,9 @@ slot_lhs = { "s" ~ "[" ~ expr ~ "]" }
 // Dotted rule LHS for struct fields: `pos.x = expr`.
 dot_lhs = { ident ~ ("." ~ (ident | ASCII_DIGIT+))+ }
 // `let name = expr` binds a reusable local in an `update` rule.
-let_stmt = { "let" ~ ident ~ "=" ~ expr }
+let_stmt = { "let" ~ ident ~ (":" ~ type_name)? ~ "=" ~ expr }
+// Optional `let name: <type>` annotation (checked; `bool` vs numeric).
+type_name = @{ "f64" | "i64" | "i32" | "u64" | "u32" | "bool" }
 // `repeat n { let … }` unrolls at lowering time (bounded) with per-loop
 // break/continue gating, enabling fixed-point / Newton-style iteration within
 // one step. Optional `until (cond)` exits after an iteration when cond is

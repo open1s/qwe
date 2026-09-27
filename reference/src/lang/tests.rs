@@ -2756,3 +2756,25 @@ fn derived_units_are_supported() {
         Err(e) => assert_eq!(e.detail, 77, "detail = {}", e.detail),
     }
 }
+
+#[test]
+fn let_type_annotations_are_checked() {
+    let src = |body: &str| {
+        format!(
+            "world {{ gravity=(0,0,0) entity e {{ state=(x=1.0, y=0.0) }} }} \
+             systems {{ update {{ on=e; dt=1.0
+{body}
+ y = x }} }}"
+        )
+    };
+    // Boolean and numeric annotations that agree compile.
+    LangRuntime::compile(&src("let flag: bool = x > 0.0")).unwrap();
+    LangRuntime::compile(&src("let v: f64 = x * 2.0")).unwrap();
+    // Mismatches are detail 89.
+    for bad in ["let n: f64 = x > 0.0", "let b: bool = 1.0"] {
+        match LangRuntime::compile(&src(bad)) {
+            Ok(_) => panic!("`{bad}` must be rejected"),
+            Err(e) => assert_eq!(e.detail, 89, "detail = {}", e.detail),
+        }
+    }
+}

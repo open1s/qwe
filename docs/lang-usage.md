@@ -643,6 +643,9 @@ tanh asin acos atan`; 2-arg: `pow atan2 hypot min max`; `if(c,a,b)`; `random()`,
 ## 2.10 `funcs`, units, loops
 
 * `funcs { f(a,b) { expr } }` — pure scalar functions; no world access.
+* `let name: <type> = expr` — optional type annotation (`f64`/`i64`/
+  `i32`/`u64`/`u32`/`bool`); comparisons and `and`/`or`/`not` are `bool`, other
+  expressions are numeric. A mismatch is detail 89.
 * Units: annotate `state`/params with `[m]`, `[m/s]`, `[1/s^2]`; mismatches are
   detail 77; unannotated values are wildcards. Base units are
   `m kg s A K mol cd`; named coherent-SI **derived** units are also accepted
@@ -808,6 +811,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 86 | Unstable solver setting (CFL / diffusion limit). |
 | 87 | Conserved quantity drifted beyond `tolerance`. |
 | 88 | Non-finite state (simulation diverged) — with `pwe run --check`. |
+| 89 | `let` type annotation mismatch. |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the

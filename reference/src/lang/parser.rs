@@ -71,16 +71,65 @@ pub(crate) fn numeric_param_keys(kind: &str) -> &'static [&'static str] {
 
 /// Parses an `ident = rhs` parameter pair and stores it in the appropriate
 /// bucket (scalar / vector / expression) of a `SystemDecl`.
+/// The two value kinds the surface language distinguishes at `let` bindings:
+/// comparisons/logical ops are boolean; everything else is numeric.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum LangType {
+    Float,
+    Bool,
+}
+
+/// The surface type of an expression (used for `let`-annotation checks).
+pub(crate) fn expr_lang_type(e: &Expr) -> LangType {
+    match e {
+        Expr::Cmp(..) | Expr::And(..) | Expr::Or(..) | Expr::Not(..) => LangType::Bool,
+        _ => LangType::Float,
+    }
+}
+
+/// Parses a `let` binding: `let name[: type] = expr`, checking the optional
+/// annotation (detail 89). Returns `(name, expr_text)`.
+pub(crate) fn parse_let_parts(first: Pair<'_, Rule>, offset: usize) -> Result<(String, String)> {
+    let mut li = first.into_inner();
+    let name = next_pair(&mut li)?.as_str().to_string();
+    check_let_name(&name, offset)?;
+    let mut nxt = next_pair(&mut li)?;
+    if nxt.as_rule() == Rule::type_name {
+        let ty = nxt.as_str().to_string();
+        nxt = next_pair(&mut li)?;
+        let expr = nxt.as_str().trim().to_string();
+        let actual = expr_lang_type(&parse_expr_str(&expr)?);
+        let ok = match ty.as_str() {
+            "bool" => actual == LangType::Bool,
+            "f64" | "i64" | "i32" | "u64" | "u32" => actual == LangType::Float,
+            _ => false,
+        };
+        if !ok {
+            let got = if actual == LangType::Bool {
+                "bool"
+            } else {
+                "number"
+            };
+            return Err(error_at(
+                Status::Invalid,
+                89,
+                offset,
+                format!("`let {name}: {ty}` but the expression is {got}"),
+            ));
+        }
+        return Ok((name, expr));
+    }
+    Ok((name, nxt.as_str().trim().to_string()))
+}
+
 pub(crate) fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
     let mut inner = param.into_inner();
     let first = next_pair(&mut inner)?;
     // `let name = expr` is a local binding; otherwise `ident = rhs`.
     if first.as_rule() == Rule::let_stmt {
-        // The literal `let` is transparent; children are [ident(name), expr].
-        let mut li = first.into_inner();
-        let name = next_pair(&mut li)?.as_str().to_string();
-        check_let_name(&name, decl.byte_offset)?;
-        let expr = next_pair(&mut li)?.as_str().trim().to_string();
+        // The literal `let` is transparent; children are [ident(name),
+        // (type_name)?, expr].
+        let (name, expr) = parse_let_parts(first, decl.byte_offset)?;
         decl.update_stmts.push(UpdateStmt::Let(name, expr));
         return Ok(());
     }
@@ -1255,10 +1304,8 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             while i < children.len() {
                                 match children[i].as_rule() {
                                     Rule::let_stmt => {
-                                        let mut li = children[i].clone().into_inner();
-                                        let lname = next_pair(&mut li)?.as_str().to_string();
-                                        check_let_name(&lname, 0)?;
-                                        let text = next_pair(&mut li)?.as_str().trim().to_string();
+                                        let (lname, text) =
+                                            parse_let_parts(children[i].clone(), 0)?;
                                         stmts.push(UpdateStmt::Let(lname, text));
                                         i += 1;
                                     }
