@@ -23,9 +23,9 @@ const SOURCE: &str = r#"
         # Mass-action kinetics:  dA/dt = -k_f·A·B + k_r·C, etc.
         # k_f = 1.0, k_r = 0.5  ->  equilibrium K_eq = k_f/k_r = 2.
         update { dt = 0.01
-            s0 = -1.0 * s0 * s1 + 0.5 * s2     # d[A]/dt
-            s1 = -1.0 * s0 * s1 + 0.5 * s2     # d[B]/dt
-            s2 =  1.0 * s0 * s1 - 0.5 * s2     # d[C]/dt
+            s0 = s0 + inte(  -1.0 * s0 * s1 + 0.5 * s2 )  # d[A]/dt
+            s1 = s1 + inte(  -1.0 * s0 * s1 + 0.5 * s2 )  # d[B]/dt
+            s2 = s2 + inte(   1.0 * s0 * s1 - 0.5 * s2 )  # d[C]/dt
         }
     }
 "#;

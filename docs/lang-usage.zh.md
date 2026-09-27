@@ -132,8 +132,8 @@ systems {
   update { on = m; dt = 0.01
     let k = 12.0       # 弹簧常数
     let c = 0.4        # 阻尼
-    vx = vx + dt*(0.0 - k*x - c*vx)  # vx' = -k·x - c·vx
-    x  = x + dt*(vx)                  # x'  = vx
+    vx = vx + inte(0.0 - k*x - c*vx)  # vx' = -k·x - c·vx
+    x  = x + inte(vx)                 # x'  = vx
   }
 }
 ```
@@ -144,11 +144,13 @@ systems {
 **最关键的一条规则**：`slot = expr` 就是普通的**赋值** —— 每步该槽取这个值。
 要*积分*导数，用 `dt` 把步长写出来：
 
-* `vx = vx + dt*(0.0 - k*x - c*vx)` ⇒ `vx += dt·(−k·x − c·vx)`（加速度）。
-* `x = x + dt*(vx)` ⇒ `x += dt·vx`（速度）。
+* `vx = vx + inte(0.0 - k*x - c*vx)` ⇒ `vx += dt·(−k·x − c·vx)`（加速度）。
+* `x = x + inte(vx)` ⇒ `x += dt·vx`（速度）。
 
-`deriv slot = rate` 是 `slot += dt·rate` 的简写（`integrate`、`+=` 同义）；
-而 `deriv(E)` 算子即增量 `dt·E`，故 `x = x + deriv(vx)` 与 `x = x + dt*(vx)` 等价。
+**`inte(E)` 算子**即增量 `dt·E`，故 `x = x + inte(vx)` 与 `x = x + dt*(vx)` 等价；
+**`inte slot = rate`** 语句（`integrate`、`+=` 同义）无需写出 `dt` 即完成积分。
+**`deriv(E)` 算子**是后向差商 `(E − E_prev)/dt` —— 它做*微分*（首步为 0）。
+`rk4` 系统用 `deriv slot = rate` 声明导数。
 
 **赋值 vs 积分**：既然 `=` 是赋值，写常量就是 `slot = target`，无需任何惯用法。
 
@@ -639,7 +641,7 @@ systems {
 # 第 3 部分 —— 语义与坑点
 
 * **时间是显式的**：每条规则的表达式都乘以 `dt`；`t` 每步前进 `dt`。
-* **`slot = expr` 是赋值**。积分用 `slot = slot + dt*(rate)` 或 `deriv slot = rate`（即 `slot += dt·rate`）。
+* **`slot = expr` 是赋值**。积分用 `slot = slot + inte(rate)`（或 `inte slot = rate` / `+=` 语句）；`deriv slot = rate` 为 `rk4` 声明导数。`inte(E) = dt·E`，`deriv(E) = (E−E_prev)/dt`。
 * **系统参数按名称识别**（针对该系统种类）；其它任何 `name = <表达式>`（含 `name = 1.0`）都是规则。
 * **读取**：同一系统函数内，所有读取在（子）步开始处采样一次（规则同时）；跨系统时，
   后跑的系统能看到先跑系统的写入——故顺序重要。场读取能看到同一步写入。

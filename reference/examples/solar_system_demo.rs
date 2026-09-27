@@ -30,10 +30,10 @@ const SOURCE: &str = r#"
         # Planar orbital dynamics about the fixed sun (2D: x, y, vx, vy).
         #   r = sqrt(dx² + dy²),  a⃗ = −A·r⃗ / r³   (A = 1)
         update { dt = 0.0005
-            s0 = s2
-            s1 = s3
-            s2 = -1 * (s0 - @sun.s0) / ( sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) * sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) * sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) )
-            s3 = -1 * (s1 - @sun.s1) / ( sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) * sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) * sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) )
+            s0 = s0 + inte(  s2 )
+            s1 = s1 + inte(  s3 )
+            s2 = s2 + inte(  -1 * (s0 - @sun.s0) / ( sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) * sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) * sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) ) )
+            s3 = s3 + inte(  -1 * (s1 - @sun.s1) / ( sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) * sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) * sqrt((s0 - @sun.s0)*(s0 - @sun.s0) + (s1 - @sun.s1)*(s1 - @sun.s1)) ) )
         }
     }
 "#;

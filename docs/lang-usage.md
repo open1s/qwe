@@ -140,8 +140,8 @@ systems {
   update { on = m; dt = 0.01
     let k = 12.0       # spring constant
     let c = 0.4        # damping
-    vx = vx + dt*(0.0 - k*x - c*vx)  # vx' = -k·x - c·vx
-    x  = x + dt*(vx)                  # x'  = vx
+    vx = vx + inte(0.0 - k*x - c*vx)  # vx' = -k·x - c·vx
+    x  = x + inte(vx)                 # x'  = vx
   }
 }
 ```
@@ -153,12 +153,14 @@ and slowly loses energy (damped), converging to 0.
 slot takes that value. To *integrate* a derivative, make the step explicit with
 `dt`:
 
-* `vx = vx + dt*(0.0 - k*x - c*vx)` ⇒ `vx += dt·(−k·x − c·vx)` (acceleration).
-* `x = x + dt*(vx)` ⇒ `x += dt·vx` (velocity).
+* `vx = vx + inte(0.0 - k*x - c*vx)` ⇒ `vx += dt·(−k·x − c·vx)` (acceleration).
+* `x = x + inte(vx)` ⇒ `x += dt·vx` (velocity).
 
-`deriv slot = rate` is shorthand for `slot += dt·rate` (`integrate` and `+=` are
-synonyms), and the `deriv(E)` operator is the increment `dt·E`, so
-`x = x + deriv(vx)` is the same as `x = x + dt*(vx)`.
+The **`inte(E)` operator** is the increment `dt·E`, so `x = x + inte(vx)` equals
+`x = x + dt*(vx)`; the **`inte slot = rate`** statement (also `integrate` and
+`+=`) integrates without spelling out `dt`. The **`deriv(E)` operator** is the
+backward difference `(E − E_prev)/dt` — it *differentiates* (0 on the first
+step). `rk4` systems declare their derivatives with `deriv slot = rate`.
 
 **Assign vs integrate.** Since `=` assigns, a constant write is just
 `slot = target` — no idiom needed.
@@ -670,8 +672,9 @@ systems {
 
 * **Time is explicit**: every rule's expression is multiplied by `dt`; `t`
   advances by `dt` each step.
-* **`slot = expr` assigns**. Integrate with `slot = slot + dt*(rate)` or
-  `deriv slot = rate` (i.e. `slot += dt·rate`).
+* **`slot = expr` assigns**. Integrate with `slot = slot + inte(rate)` (or the
+  `inte slot = rate` / `+=` statement); `deriv slot = rate` declares a
+  derivative for `rk4`. `inte(E) = dt·E`, `deriv(E) = (E−E_prev)/dt`.
 * **System parameters are recognised by name** per kind; any other
   `name = <expr>` (including `name = 1.0`) is a rule.
 * **Reads**: within one system's function, all reads are sampled once at the

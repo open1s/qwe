@@ -23,19 +23,19 @@ const SOURCE: &str = r#"
     systems {
         # x'' = -ωx²·x, y'' = -ωy²·y  =>  Lissajous ωx:ωy. RK4 keeps them closed.
         rk4 { on = a; dt = 0.02
-            s0 = s1;  s1 = -4 * s0        # ωx:ωy = 2:3
-            s2 = s3;  s3 = -9 * s2
-            s7 = 0.3
+            deriv s0 =  s1  deriv s1 =  -4 * s0  # ωx:ωy = 2:3
+            deriv s2 =  s3  deriv s3 =  -9 * s2
+            deriv s7 =  0.3
         }
         rk4 { on = b; dt = 0.02
-            s0 = s1;  s1 = -1 * s0        # 1:2
-            s2 = s3;  s3 = -4 * s2
-            s7 = -0.4
+            deriv s0 =  s1  deriv s1 =  -1 * s0  # 1:2
+            deriv s2 =  s3  deriv s3 =  -4 * s2
+            deriv s7 =  -0.4
         }
         rk4 { on = c; dt = 0.02
-            s0 = s1;  s1 = -9 * s0        # 3:1
-            s2 = s3;  s3 = -1 * s2
-            s7 = 0.2
+            deriv s0 =  s1  deriv s1 =  -9 * s0  # 3:1
+            deriv s2 =  s3  deriv s3 =  -1 * s2
+            deriv s7 =  0.2
         }
     }
 "#;

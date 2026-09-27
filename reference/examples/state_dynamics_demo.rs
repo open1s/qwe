@@ -60,7 +60,7 @@ fn main() -> pwe_api::Result<()> {
     let logistic = r#"
         world { gravity = (0,0,0) entity pop { state = (0.1, 0) } }
         systems { update { dt = 0.01
-            s0 = 1 * s0 * (1 - s0) } }
+            s0 = s0 + inte(  1 * s0 * (1 - s0) ) } }
     "#;
     let mut rt = LangRuntime::compile(logistic)?;
     let mut last = 0.0;
@@ -83,8 +83,8 @@ fn main() -> pwe_api::Result<()> {
     let pend = r#"
         world { gravity = (0,0,0) entity pend { state = (1.2, 0) } }
         systems { update { dt = 0.0005
-            s0 = s1
-            s1 = -9.81 * sin(s0) } }
+            s0 = s0 + inte(  s1 )
+            s1 = s1 + inte(  -9.81 * sin(s0) ) } }
     "#;
     let mut rt = LangRuntime::compile(pend)?;
     let mut theta = 0.0;
@@ -111,7 +111,7 @@ fn main() -> pwe_api::Result<()> {
     let expo = r#"
         world { gravity = (0,0,0) entity n { state = (1, 0) } }
         systems { update { dt = 0.001
-            s0 = 0.5 * s0 } }
+            s0 = s0 + inte(  0.5 * s0 ) } }
     "#;
     let mut rt = LangRuntime::compile(expo)?;
     rt.step_cross_n(1000).unwrap(); // t = 1.0
@@ -128,8 +128,8 @@ fn main() -> pwe_api::Result<()> {
     let driven = r#"
         world { gravity = (0,0,0) entity osc { state = (0, 0) } }
         systems { update { dt = 0.001
-            s0 = s1
-            s1 = -4 * s0 + 1.0 * sin(1.7 * t) } }
+            s0 = s0 + inte(  s1 )
+            s1 = s1 + inte(  -4 * s0 + 1.0 * sin(1.7 * t) ) } }
     "#;
     let mut rt = LangRuntime::compile(driven)?;
     let mut x = 0.0;

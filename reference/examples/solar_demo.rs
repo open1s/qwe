@@ -28,7 +28,7 @@ const SOLAR: &str = r#"
         # Revolution (公转): mutual gravity among the Sun, 8 planets, and Moon.
         nbody { G = 1.0; dt = 0.0001 }
         # Self-rotation (自转): every body spins about Z (visible as it revolves).
-        update { dt = 0.0001; s7 = s7 + 0.3 }
+        update { dt = 0.0001; s7 = s7 + inte(  s7 + 0.3 ) }
     }
 "#;
 

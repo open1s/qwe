@@ -895,16 +895,10 @@ fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
     for a in it {
         args.push(build_expr(a)?);
     }
-    // `deriv(E)` is an internal operator: the integration increment `dt * E`.
-    if name == "deriv" {
-        if args.len() != 1 {
-            return Err(error(Status::Invalid, 59));
-        }
-        let inner = args.pop().unwrap();
-        return Ok(Expr::Mul(
-            Box::new(Expr::Name("dt".to_string())),
-            Box::new(inner),
-        ));
+    // The `inte`/`deriv` operators are special-cased in lowering; keep their
+    // names so `lower_inte_deriv` can distinguish them.
+    if (name == "inte" || name == "deriv") && args.len() != 1 {
+        return Err(error(Status::Invalid, 59));
     }
     let static_name = match name.as_str() {
         "sin" => "sin",
@@ -2658,6 +2652,66 @@ struct LowerCtx<'a> {
 }
 
 /// Lowers an `Expr` into EIR instructions, returning the result register id.
+/// Lowers the `inte(E)` / `deriv(E)` operators.
+///
+/// `inte(E)` is the integration increment `dt · E`. `deriv(E)` is the backward
+/// difference `(E − E_prev)/dt`, where `E_prev` is the value `E` took at the
+/// previous (sub)step, remembered per call site in the runtime's history
+/// (`HistRead`/`HistWrite`). On the first step (no history) `deriv` is 0.
+fn lower_inte_deriv(
+    name: &str,
+    args: &[Expr],
+    ctx: &LowerCtx<'_>,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> u32 {
+    use crate::eir::{Immediate, Opcode, ValueType};
+    let e = lower_expr(&args[0], ctx, next_id, out);
+    let dt_reg = match ctx.locals.get("dt").copied() {
+        Some(r) => r,
+        None => const_reg(1.0, next_id, out),
+    };
+    if name == "inte" {
+        return binary(Opcode::Mul, e, dt_reg, next_id, out);
+    }
+    // deriv(E) = (E - prev)/dt, with the site's previous value remembered.
+    // `has` gates the difference so the first (sub)step yields 0.
+    let site = out.iter().filter(|i| i.opcode == Opcode::HistRead).count() as u64;
+    let raw = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        Opcode::HistRead,
+        raw,
+        Some(ValueType::F64),
+        vec![],
+        Some(Immediate::U64(site)),
+        None,
+    ));
+    let has = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        Opcode::HistHas,
+        has,
+        Some(ValueType::F64),
+        vec![],
+        Some(Immediate::U64(site)),
+        None,
+    ));
+    let diff = binary(Opcode::Sub, e, raw, next_id, out);
+    let gated = binary(Opcode::Mul, diff, has, next_id, out);
+    let res = binary(Opcode::Div, gated, dt_reg, next_id, out);
+    // Remember this (sub)step's E for the next one.
+    out.push(crate::physics_eir::instr(
+        Opcode::HistWrite,
+        0,
+        None,
+        vec![e],
+        Some(Immediate::U64(site)),
+        None,
+    ));
+    res
+}
+
 fn lower_expr(
     expr: &Expr,
     ctx: &LowerCtx<'_>,
@@ -2935,6 +2989,9 @@ fn lower_expr(
             select_bool(bool_reg, next_id, out)
         }
         Expr::Call(name, args) => {
+            if *name == "inte" || *name == "deriv" {
+                return lower_inte_deriv(name, args, ctx, next_id, out);
+            }
             // A user-defined function (not a builtin) lowers to an EIR `CALL`.
             // Unqualified names resolve within the system's module first.
             let qualified = if ctx.namespace.is_empty() {
@@ -8685,6 +8742,39 @@ mod tests {
         assert!(st.values[1].is_finite() && st.values[1] > 0.0);
         // Cross-backend agreement is enforced on every step by step_cross.
         assert!(rt.clock == 500);
+    }
+
+    #[test]
+    fn inte_and_deriv_operators() {
+        // `inte(E)` is the increment dt·E; `deriv(E)` is the backward
+        // difference (E - E_prev)/dt (0 on the first step).
+        let src = r#"
+            world { gravity=(0,0,0) entity e { state=(x=0.0, v=1.0, a=0.0) } }
+            systems { update { on = e; dt = 0.1
+                x = x + inte(v)
+                a = deriv(x)
+            } }
+        "#;
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(5).unwrap();
+        let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+        assert!((st.values[0] - 0.5).abs() < 1e-9, "x = {}", st.values[0]);
+        assert!((st.values[2] - 1.0).abs() < 1e-9, "a = {}", st.values[2]);
+    }
+
+    #[test]
+    fn inte_statement_integrates() {
+        // `inte slot = rate` integrates (slot += dt·rate) without spelling dt.
+        let src = r#"
+            world { gravity=(0,0,0) entity e { state=(x=0.0, v=2.0) } }
+            systems { update { on = e; dt = 0.1
+                inte x = v
+            } }
+        "#;
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(5).unwrap();
+        let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+        assert!((st.values[0] - 1.0).abs() < 1e-9, "x = {}", st.values[0]);
     }
 
     #[test]

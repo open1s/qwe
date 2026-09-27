@@ -28,9 +28,9 @@ world {
 
 systems {
   update { on = shooter; dt = 0.02
-    vel.y = vel.y + dt*(  (0.0 - 9.81) + 0.0 )  # v.y' = -g
-    pos.x = pos.x + dt*(  vel.x )  # x'  = vx
-    pos.y = pos.y + dt*(  vel.y )  # y'  = vy
+    vel.y = vel.y + inte(  (0.0 - 9.81) )  # v.y' = -g
+    pos.x = pos.x + inte(  vel.x )  # x'  = vx
+    pos.y = pos.y + inte(  vel.y )  # y'  = vy
   }
   update { on = probe; dt = 1.0
     height = @shooter.pos.y  # exact snap (dt=1) to the projectile's y

@@ -26,8 +26,8 @@ const SOURCE: &str = r#"
         # dP/dt = clamp( smoothstep(P) + logistic(P), 0.08 ) — a saturating,
         # noise-free population update whose step is bounded by a helper.
         update { dt = 0.02
-            s0 = clamp(smoothstep(s0) + logistic(s0), 0.08)
-            s1 = s0
+            s0 = s0 + inte(  clamp(smoothstep(s0) + logistic(s0), 0.08) )
+            s1 = s1 + inte(  s0 )
         }
     }
 "#;

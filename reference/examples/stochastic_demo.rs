@@ -29,10 +29,10 @@ const SOURCE: &str = r#"
     systems {
         # Stochastic logistic growth: dP/dt = r·P·(1 − P/K) + demographic noise.
         update { dt = 0.01
-            s0 = (1.0 * s0 * (1 - s0)) + 0.2 * random()
-            s1 = s0
-            s2 = t
-            s3 = emit(1, 0)
+            s0 = s0 + inte(  (1.0 * s0 * (1 - s0)) + 0.2 * random() )
+            s1 = s1 + inte(  s0 )
+            s2 = s2 + inte(  t )
+            s3 = s3 + inte(  emit(1, 0) )
         }
     }
 "#;

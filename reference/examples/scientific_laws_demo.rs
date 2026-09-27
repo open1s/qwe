@@ -54,31 +54,31 @@ const SOURCE: &str = r#"
     systems {
         # 1. Harmonic oscillator: x'' = -4 (x + 12), i.e. centre at -12.
         rk4 { on = hosc; dt = 0.002
-            x  = vx
-            vx = -4.0 * (x + 12.0) }
+            deriv x =  vx
+            deriv vx =  -4.0 * (x + 12.0) }
         # 2. Kepler: planet accelerates toward the sun (-4, 0) as -GM r / r^3.
         rk4 { on = planet; dt = 0.002
             let rx = x + 4.0
             let r  = hypot(rx, y)
             let r3 = r * r * r
-            x  = vx
-            vx = -4.0 * rx / r3
-            y  = vy
-            vy = -4.0 * y / r3 }
+            deriv x =  vx
+            deriv vx =  -4.0 * rx / r3
+            deriv y =  vy
+            deriv vy =  -4.0 * y / r3 }
         # 3. Reversible kinetics A <-> B, mass conserved (a + b = 1).
         rk4 { on = chem; dt = 0.002
-            a = -0.5 * a + 0.4 * b
-            b =  0.5 * a - 0.4 * b }
+            deriv a =  -0.5 * a + 0.4 * b
+            deriv b =   0.5 * a - 0.4 * b }
         update { on = chemA; dt = 0.002
-            s6 = 300.0 * (@chem.a - s6) }
+            s6 = s6 + inte(  300.0 * (@chem.a - s6) ) }
         update { on = chemB; dt = 0.002
-            s6 = 300.0 * (@chem.b - s6) }
+            s6 = s6 + inte(  300.0 * (@chem.b - s6) ) }
         # 4. Logistic growth to carrying capacity K = 2.
         rk4 { on = pop; dt = 0.002
-            s6 = 0.8 * s6 * (1.0 - s6 / 2.0) }
+            deriv s6 =  0.8 * s6 * (1.0 - s6 / 2.0) }
         # 5. Radioactive decay N' = -0.15 N.
         rk4 { on = iso; dt = 0.002
-            s6 = -0.15 * s6 }
+            deriv s6 =  -0.15 * s6 }
         # 6. Thermostat: hysteresis band 18..20, heating lifts toward 36.
         # `h` flips instantly (dt*10 compensates dt) so the band is a true
         # Schmitt trigger; a lagged h would freeze mid-band and limit-cycle.
@@ -86,11 +86,11 @@ const SOURCE: &str = r#"
             let newh = if(temp < 18.0, 1.0, if(temp > 20.0, 0.0, h))
             let heating = newh and not (temp > 30.0)
             let window = (temp < 15.0) or (temp > 25.0)
-            temp = heating * 1.2 - (temp - 16.0) * 0.06
-            h = (newh - h) * 10.0
+            temp = temp + inte(  heating * 1.2 - (temp - 16.0) * 0.06 )
+            h = h + inte(  (newh - h) * 10.0 )
         }
         update { on = alarm; dt = 0.1
-            s6 = 300.0 * (@thermo.h - s6) }
+            s6 = s6 + inte(  300.0 * (@thermo.h - s6) ) }
     }
 "#;
 

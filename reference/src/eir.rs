@@ -217,6 +217,18 @@ pub enum Opcode {
     /// Result: the slot id, or 0 when the pool is full. Emits the activation and
     /// state writes.
     SpawnInto = 228,
+    /// `deriv(E)` history: read the previous (sub)step's value stored for a
+    /// call site. The site id rides in `constant` (`Immediate::U64`). Result:
+    /// the stored f64, or NaN when the site has no history yet.
+    HistRead = 229,
+    /// Store the current (sub)step's value for a `deriv(E)` call site so the
+    /// next (sub)step can difference against it. Operand 0 = value; the site id
+    /// rides in `constant` (`Immediate::U64`). Yields no SSA value.
+    HistWrite = 230,
+    /// Whether a `deriv(E)` call site has history yet (1.0) or not (0.0). The
+    /// site id rides in `constant`; result is F64. `deriv` gates its difference
+    /// on this so the first (sub)step yields 0 instead of a NaN sentinel.
+    HistHas = 231,
     Return = 0x8000,
     /// Unconditional branch to an instruction index (block target). Single
     /// operand = target index.
@@ -402,6 +414,10 @@ pub struct ExecEnv {
     /// Dynamic event queue (see [`ScheduledEvent`]); due events are moved into
     /// `events` at the start of each step, in time order.
     pub queue: Vec<ScheduledEvent>,
+    /// Per-call-site history for the `deriv(E)` operator (site id -> previous
+    /// (sub)step value). Persists across steps within a runtime; cleared on
+    /// `reset`, so the first step's `deriv` is 0.
+    pub hist: std::collections::BTreeMap<u64, f64>,
 }
 impl Default for ExecEnv {
     fn default() -> Self {
@@ -413,6 +429,7 @@ impl Default for ExecEnv {
             step: 0,
             step_dt: 0.0,
             queue: Vec::new(),
+            hist: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -552,6 +569,9 @@ fn infer_instruction_type(i: &Instruction) -> Option<ValueType> {
         | Opcode::FiredAt
         | Opcode::FiredEvery => Some(ValueType::F64),
         Opcode::Step => Some(ValueType::F64),
+        Opcode::HistRead => Some(ValueType::F64),
+        Opcode::HistWrite => None,
+        Opcode::HistHas => Some(ValueType::F64),
         Opcode::ReadSlotDyn => Some(ValueType::F64),
         Opcode::ReadFieldCell | Opcode::FieldLaplacian | Opcode::ReadEvent => Some(ValueType::F64),
         Opcode::Const => i.constant.map(Immediate::ty),
@@ -873,6 +893,24 @@ impl EirModule {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
                     None
+                }
+                Opcode::HistRead => {
+                    if !instruction.operands.is_empty() || instruction.constant.is_none() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::HistWrite => {
+                    if instruction.operands.len() != 1 || instruction.constant.is_none() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    None
+                }
+                Opcode::HistHas => {
+                    if !instruction.operands.is_empty() || instruction.constant.is_none() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
                 }
                 Opcode::ReadSlotDyn => {
                     if instruction.operands.len() != 1 || instruction.target.is_none() {
@@ -1486,6 +1524,42 @@ impl EirModule {
                         .map(|e| f64::from_bits(e.payload))
                         .unwrap_or(0.0);
                     stacks[depth - 1].insert(instruction.result_id, Immediate::F64(payload));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::HistRead => {
+                    let site = match instruction.constant {
+                        Some(Immediate::U64(site)) => site,
+                        _ => return Err(error(Status::EirInvalid, 23, 0)),
+                    };
+                    let v = env.hist.get(&site).copied().unwrap_or(0.0);
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(v));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::HistWrite => {
+                    let site = match instruction.constant {
+                        Some(Immediate::U64(site)) => site,
+                        _ => return Err(error(Status::EirInvalid, 23, 0)),
+                    };
+                    let value = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[0])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 17, 0))?,
+                    );
+                    env.hist.insert(site, value);
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::HistHas => {
+                    let site = match instruction.constant {
+                        Some(Immediate::U64(site)) => site,
+                        _ => return Err(error(Status::EirInvalid, 23, 0)),
+                    };
+                    let has = if env.hist.contains_key(&site) {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(has));
                     pcs[depth - 1] += 1;
                 }
                 Opcode::ReadSlotDyn => {
@@ -2189,6 +2263,9 @@ fn opcode_from_u16(raw: u16) -> Result<Opcode> {
         x if x == Opcode::FieldPoisson as u16 => Opcode::FieldPoisson,
         x if x == Opcode::FindFreeSlot as u16 => Opcode::FindFreeSlot,
         x if x == Opcode::SpawnInto as u16 => Opcode::SpawnInto,
+        x if x == Opcode::HistRead as u16 => Opcode::HistRead,
+        x if x == Opcode::HistWrite as u16 => Opcode::HistWrite,
+        x if x == Opcode::HistHas as u16 => Opcode::HistHas,
         _ => return Err(error(Status::EirInvalid, 28, 0)),
     })
 }

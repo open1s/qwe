@@ -35,10 +35,10 @@ const SOURCE: &str = r#"
         # Coulomb binding toward the nucleus at the origin (A=1):
         #   ax = -x / r³, ay = -y / r³,  x' = vx, y' = vy
         update { dt = 0.001
-            s0 = s2
-            s1 = s3
-            s2 = -1 * s0 / ((s0*s0 + s1*s1) * sqrt(s0*s0 + s1*s1))
-            s3 = -1 * s1 / ((s0*s0 + s1*s1) * sqrt(s0*s0 + s1*s1))
+            s0 = s0 + inte(  s2 )
+            s1 = s1 + inte(  s3 )
+            s2 = s2 + inte(  -1 * s0 / ((s0*s0 + s1*s1) * sqrt(s0*s0 + s1*s1)) )
+            s3 = s3 + inte(  -1 * s1 / ((s0*s0 + s1*s1) * sqrt(s0*s0 + s1*s1)) )
         }
     }
 "#;

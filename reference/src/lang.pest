@@ -128,7 +128,8 @@ param = { (let_stmt | repeat_stmt | for_stmt | ode_stmt | add_stmt
          | slot_lhs ~ "=" ~ expr | dot_lhs ~ "=" ~ expr | call
          | ident ~ "=" ~ (vecN | expr | ident) ~ unit_expr?) ~ ";"? }
 // ODE rule: the RHS is the derivative/rate (integrated as slot += dt·rate).
-ode_kw = @{ ("deriv" | "integrate") ~ !(ASCII_ALPHANUMERIC | "_") }
+// `inte`/`integrate` read as integration; `deriv` as a derivative declaration.
+ode_kw = @{ ("deriv" | "integrate" | "inte") ~ !(ASCII_ALPHANUMERIC | "_") }
 ode_stmt = { ode_kw ~ (dot_lhs | slot_lhs | ident) ~ "=" ~ expr }
 // Sugar for an ODE rule: `slot += rate`.
 add_stmt = { (dot_lhs | slot_lhs | ident) ~ "+=" ~ expr }

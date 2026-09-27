@@ -29,18 +29,18 @@ const SOURCE: &str = r#"
         # Target orbits the origin (perpendicular velocity => circular motion).
         update { on = target; dt = 0.02
             let omega = 0.5
-            tx = -@self.ty * omega
-            ty = @self.tx * omega
+            tx = tx + inte(  -@self.ty * omega )
+            ty = ty + inte(  @self.tx * omega )
         }
         # Glider chases the target, speed-limited.
         update { on = glider; dt = 0.02
             let dx = @target.tx - @self.x
             let dy = @target.ty - @self.y
             let gain = 1.4
-            vx = clamp(dx * gain, -2.5, 2.5)
-            vy = clamp(dy * gain, -2.5, 2.5)
-            x = @self.vx
-            y = @self.vy
+            vx = vx + inte(  clamp(dx * gain, -2.5, 2.5) )
+            vy = vy + inte(  clamp(dy * gain, -2.5, 2.5) )
+            x = x + inte(  @self.vx )
+            y = y + inte(  @self.vy )
         }
     }
 "#;

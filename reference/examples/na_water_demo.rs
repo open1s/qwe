@@ -42,31 +42,31 @@ const SOURCE: &str = r#"
         # Master kinetics on the NaOH body: mass action, Arrhenius, exotherm.
         update { on = naoh; dt = 0.0005
             let k = 1.2 * exp(-900.0 / temp)
-            na    = -k * na * water
-            water = -k * na * water
-            naoh  =  k * na * water
-            h2    = 0.5 * k * na * water
-            temp  = 260.0 * k * na * water
+            na = na + inte(  -k * na * water )
+            water = water + inte(  -k * na * water )
+            naoh = naoh + inte(   k * na * water )
+            h2 = h2 + inte(  0.5 * k * na * water )
+            temp = temp + inte(  260.0 * k * na * water )
         }
         # Sodium atom: converge to the centre (fuse) and shrink as [Na] falls.
         update { on = na; dt = 0.0005
             let conv = -40.0
-            x = conv * x
-            y = conv * y
-            z = conv * z
-            s6 = 500.0 * (@naoh.na * 0.5 - s6) }
+            x = x + inte(  conv * x )
+            y = y + inte(  conv * y )
+            z = z + inte(  conv * z )
+            s6 = s6 + inte(  500.0 * (@naoh.na * 0.5 - s6) ) }
         # Water molecule: converge to the centre (fuse), stays large (excess).
         update { on = water; dt = 0.0005
             let conv = -40.0
-            x = conv * x
-            y = conv * y
-            z = conv * z
-            s6 = 500.0 * (@naoh.water * 0.014 - s6) }
+            x = x + inte(  conv * x )
+            y = y + inte(  conv * y )
+            z = z + inte(  conv * z )
+            s6 = s6 + inte(  500.0 * (@naoh.water * 0.014 - s6) ) }
         # Hydrogen bubble: rise out of the scene, sized by [H2], recycle at top.
         update { on = h2; dt = 0.0005
             let up = 3.0
-            y = if(y > 5.0, -3.0 - y, up)
-            s6 = 500.0 * (@naoh.h2 * 0.5 - s6) }
+            y = y + inte(  if(y > 5.0, -3.0 - y, up) )
+            s6 = s6 + inte(  500.0 * (@naoh.h2 * 0.5 - s6) ) }
     }
 "#;
 

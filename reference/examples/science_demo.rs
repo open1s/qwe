@@ -17,7 +17,7 @@ fn main() -> pwe_api::Result<()> {
     let cooling = r#"
         world { gravity = (0,0,0) entity body { state = (90, 0) } }
         systems { update { dt = 0.01
-            s0 = -0.1 * (s0 - 20) } }
+            s0 = s0 + inte(  -0.1 * (s0 - 20) ) } }
     "#;
     let mut rt = LangRuntime::compile(cooling)?;
     rt.step_cross_n(100).unwrap(); // t = 1.0
@@ -34,7 +34,7 @@ fn main() -> pwe_api::Result<()> {
     let decay = r#"
         world { gravity = (0,0,0) entity n { state = (100, 0) } }
         systems { update { dt = 1
-            s0 = -0.05 * s0 } }
+            s0 = s0 + inte(  -0.05 * s0 ) } }
     "#;
     let mut rt = LangRuntime::compile(decay)?;
     rt.step_cross_n(20).unwrap();
@@ -51,7 +51,7 @@ fn main() -> pwe_api::Result<()> {
     let logistic = r#"
         world { gravity = (0,0,0) entity pop { state = (0.5, 0) } }
         systems { update { dt = 0.01
-            s0 = 1 * s0 * (1 - s0) } }
+            s0 = s0 + inte(  1 * s0 * (1 - s0) ) } }
     "#;
     let mut rt = LangRuntime::compile(logistic)?;
     rt.step_cross_n(100).unwrap(); // t = 1.0
@@ -68,8 +68,8 @@ fn main() -> pwe_api::Result<()> {
     let spring = r#"
         world { gravity = (0,0,0) entity m { state = (1, 0) } }
         systems { update { dt = 0.001
-            s0 = s1
-            s1 = -10 * s0 } }
+            s0 = s0 + inte(  s1 )
+            s1 = s1 + inte(  -10 * s0 ) } }
     "#;
     let mut rt = LangRuntime::compile(spring)?;
     rt.step_cross_n(1000).unwrap();
@@ -104,9 +104,9 @@ fn main() -> pwe_api::Result<()> {
     let reaction = r#"
         world { gravity = (0,0,0) entity r { state = (1, 1, 0) } }
         systems { update { dt = 0.01
-            s0 = -s0*s1 + 0.5*s2
-            s1 = -s0*s1 + 0.5*s2
-            s2 =  s0*s1 - 0.5*s2 } }
+            s0 = s0 + inte(  -s0*s1 + 0.5*s2 )
+            s1 = s1 + inte(  -s0*s1 + 0.5*s2 )
+            s2 = s2 + inte(   s0*s1 - 0.5*s2 ) } }
     "#;
     let mut rt = LangRuntime::compile(reaction)?;
     rt.step_cross_n(1000).unwrap();

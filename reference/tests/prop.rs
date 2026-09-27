@@ -315,7 +315,10 @@ fn random_instruction(rng: &mut Rng, next: &mut u32) -> Instruction {
         | Opcode::FieldWave
         | Opcode::FieldPoisson
         | Opcode::FindFreeSlot
-        | Opcode::SpawnInto => Instruction {
+        | Opcode::SpawnInto
+        | Opcode::HistRead
+        | Opcode::HistWrite
+        | Opcode::HistHas => Instruction {
             opcode,
             result_id: 0,
             result_type: None,
