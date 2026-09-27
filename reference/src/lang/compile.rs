@@ -1468,6 +1468,11 @@ pub(crate) fn merge_modules(
 pub(crate) struct DimEnv<'a> {
     /// Byte offset of the system being checked (for diagnostics).
     pub(crate) offset: usize,
+    /// User-function signatures: name -> (per-param unit, return unit).
+    pub(crate) funcs: &'a std::collections::BTreeMap<
+        String,
+        (Vec<crate::units::MaybeDim>, crate::units::MaybeDim),
+    >,
     slot_dims: &'a [crate::units::MaybeDim],
     name_to_slot: &'a std::collections::BTreeMap<String, usize>,
     params: &'a std::collections::BTreeMap<String, crate::units::Dim>,
@@ -1552,7 +1557,17 @@ impl DimEnv<'_> {
                         unify(arg(1)?, arg(2)?).map_err(|_| err())?
                     }
                     "print" => arg(0)?,
-                    _ => None,
+                    // A user function: unify each argument with its declared
+                    // parameter unit; the call's dimension is the return unit.
+                    _ => match self.funcs.get(*name) {
+                        Some((params, ret)) => {
+                            for (i, u) in params.iter().enumerate() {
+                                unify(arg(i)?, *u).map_err(|_| err())?;
+                            }
+                            *ret
+                        }
+                        None => None,
+                    },
                 }
             }
         })
@@ -1623,12 +1638,25 @@ pub(crate) fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
     if !any_units {
         return Ok(());
     }
+    // User-function signatures (bare and namespace-qualified names).
+    let mut func_sigs: std::collections::BTreeMap<
+        String,
+        (Vec<crate::units::MaybeDim>, crate::units::MaybeDim),
+    > = Default::default();
+    for f in &parsed.funcs {
+        let sig = (f.param_units.clone(), f.ret_unit);
+        func_sigs.insert(f.name.clone(), sig.clone());
+        if !f.namespace.is_empty() {
+            func_sigs.insert(format!("{}.{}", f.namespace, f.name), sig);
+        }
+    }
     for sys in &parsed.systems {
         // Check every declared expression for internal consistency: rule bodies
         // and `let`s (update/rk4), the `when` gate, `invariant`/`watch` exprs.
         {
             let env = DimEnv {
                 offset: sys.byte_offset,
+                funcs: &func_sigs,
                 slot_dims: &slot_dims,
                 name_to_slot: &name_to_slot,
                 params: &parsed.model.param_units,
@@ -1688,6 +1716,7 @@ pub(crate) fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
             };
             let mut env = DimEnv {
                 offset: sys.byte_offset,
+                funcs: &func_sigs,
                 slot_dims: &slot_dims,
                 name_to_slot: &name_to_slot,
                 params: &parsed.model.param_units,
@@ -1738,6 +1767,7 @@ right-hand side (`dt·expr`) has `{rhs_name}`"
             };
             let mut env = DimEnv {
                 offset: sys.byte_offset,
+                funcs: &func_sigs,
                 slot_dims: &slot_dims,
                 name_to_slot: &name_to_slot,
                 params: &parsed.model.param_units,

@@ -2778,3 +2778,26 @@ fn let_type_annotations_are_checked() {
         }
     }
 }
+
+#[test]
+fn func_signature_units_are_checked() {
+    // `func f(x: [m]) : [m/s]` — arguments and the result are checked at calls.
+    let ok = r#"
+        world { gravity=(0,0,0)
+            entity e { state=(x = 1.0 [m], t = 1.0 [s], v = 0.0 [m/s]) } }
+        funcs { speed(d: [m], dt: [s]) : [m/s] { d / dt } }
+        systems { update { on = e; dt = 1.0 [s]  v = speed(x, t) } }
+    "#;
+    LangRuntime::compile(ok).unwrap();
+    // Swapped arguments (s vs m) must be rejected.
+    let bad = r#"
+        world { gravity=(0,0,0)
+            entity e { state=(x = 1.0 [m], t = 1.0 [s], v = 0.0 [m/s]) } }
+        funcs { speed(d: [m], dt: [s]) : [m/s] { d / dt } }
+        systems { update { on = e; dt = 1.0 [s]  v = speed(t, x) } }
+    "#;
+    match LangRuntime::compile(bad) {
+        Ok(_) => panic!("swapped units must be rejected"),
+        Err(e) => assert_eq!(e.detail, 77, "detail = {}", e.detail),
+    }
+}

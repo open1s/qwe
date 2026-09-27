@@ -79,6 +79,15 @@ impl Dim {
         if self.is_dimensionless() {
             return "1".to_string();
         }
+        // Prefer a named coherent-SI derived unit when the dimensions match.
+        for sym in [
+            "N", "J", "W", "Pa", "Hz", "C", "V", "F", "Oh", "S", "Wb", "T", "H", "lm", "lx", "Bq",
+            "Gy", "Sv", "kat",
+        ] {
+            if unit_dim(sym) == Some(*self) {
+                return sym.to_string();
+            }
+        }
         let mut num = Vec::new();
         let mut den = Vec::new();
         for (i, &e) in self.0.iter().enumerate() {
@@ -257,7 +266,8 @@ mod tests {
     #[test]
     fn parses_units() {
         assert_eq!("m".parse::<Dim>().unwrap(), Dim::base(0));
-        assert_eq!("kg*m/s^2".parse::<Dim>().unwrap().name(), "m*kg/s^2");
+        // `kg*m/s^2` is the newton; `name()` prefers the derived symbol.
+        assert_eq!("kg*m/s^2".parse::<Dim>().unwrap().name(), "N");
         assert_eq!(
             "m/s^2".parse::<Dim>().unwrap(),
             Dim::base(0).over(Dim::base(2).pow(2))
@@ -290,5 +300,13 @@ mod tests {
         assert_eq!(d("V"), d("W/A"));
         assert_eq!(d("F"), d("C/V"));
         assert_eq!(d("T"), d("Wb/m^2"));
+    }
+
+    #[test]
+    fn derived_unit_names_are_printed() {
+        let d = |x: &str| x.parse::<Dim>().unwrap();
+        assert_eq!(d("kg*m/s^2").name(), "N");
+        assert_eq!(d("kg*m^2/s^2").name(), "J");
+        assert_eq!(d("1/s").name(), "Hz");
     }
 }

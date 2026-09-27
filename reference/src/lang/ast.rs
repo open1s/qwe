@@ -129,6 +129,10 @@ pub struct FuncDecl {
     /// body resolves unqualified parameter/slot names within it first.
     pub namespace: String,
     pub params: Vec<String>,
+    /// Declared unit of each parameter (aligned with `params`), if annotated.
+    pub param_units: Vec<Option<crate::units::Dim>>,
+    /// Declared unit of the return value, if annotated (`: [unit]`).
+    pub ret_unit: Option<crate::units::Dim>,
     /// Statements before the `return` (lets / loops), in order.
     pub stmts: Vec<UpdateStmt>,
     pub body: Expr,

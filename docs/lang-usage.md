@@ -643,6 +643,9 @@ tanh asin acos atan`; 2-arg: `pow atan2 hypot min max`; `if(c,a,b)`; `random()`,
 ## 2.10 `funcs`, units, loops
 
 * `funcs { f(a,b) { expr } }` — pure scalar functions; no world access.
+* `funcs` parameters and the return value may be unit-annotated
+  (`f(x: [m]) : [m/s] { … }`); call sites unify argument/result dimensions
+  (detail 77).
 * `let name: <type> = expr` — optional type annotation (`f64`/`i64`/
   `i32`/`u64`/`u32`/`bool`); comparisons and `and`/`or`/`not` are `bool`, other
   expressions are numeric. A mismatch is detail 89.

@@ -1276,13 +1276,25 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                     let mut inner = func.into_inner();
                     let name = next_pair(&mut inner)?.as_str().to_string();
                     let mut params = Vec::new();
+                    let mut param_units = Vec::new();
+                    let mut ret_unit = None;
                     let mut body_child: Option<Pair<'_, Rule>> = None;
                     for child in inner {
                         match child.as_rule() {
-                            Rule::param_list => {
-                                params =
-                                    child.into_inner().map(|p| p.as_str().to_string()).collect();
+                            Rule::param_decl_list => {
+                                for pd in child.into_inner() {
+                                    let mut pdi = pd.into_inner();
+                                    params.push(next_pair(&mut pdi)?.as_str().to_string());
+                                    let u = match pdi.next() {
+                                        Some(ue) if ue.as_rule() == Rule::unit_expr => {
+                                            Some(parse_unit_expr(ue)?)
+                                        }
+                                        _ => None,
+                                    };
+                                    param_units.push(u);
+                                }
                             }
+                            Rule::unit_expr => ret_unit = Some(parse_unit_expr(child)?),
                             Rule::func_stmts | Rule::expr => body_child = Some(child),
                             _ => {}
                         }
@@ -1364,6 +1376,8 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         name,
                         namespace: String::new(),
                         params,
+                        param_units,
+                        ret_unit,
                         stmts,
                         body,
                     });

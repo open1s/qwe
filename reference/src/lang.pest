@@ -17,7 +17,7 @@ funcs_section = { "funcs" ~ "{" ~ func_def* ~ "}" }
 // The body is either a bare scalar expression (its return value) or a
 // sequence of statements (lets and bounded loops) ending with an explicit
 // `return expr`.
-func_def = { ident ~ "(" ~ param_list? ~ ")" ~ "{" ~ func_body ~ "}" }
+func_def = { ident ~ "(" ~ param_decl_list? ~ ")" ~ (":" ~ unit_expr)? ~ "{" ~ func_body ~ "}" }
 func_body = _{ func_stmts | expr }
 func_stmts = { (func_item ~ ";"?)+ ~ func_return? }
 // Function-body statements. `if_stmt` is a control-flow branch (its branches
@@ -28,7 +28,9 @@ if_stmt = { if_kw ~ expr ~ "{" ~ if_body ~ "}" ~ (else_kw ~ "{" ~ if_body ~ "}")
 if_body = _{ func_return }
 else_kw = @{ "else" ~ !(ASCII_ALPHANUMERIC | "_") }
 func_return = _{ return_kw ~ expr ~ ";"? }
-param_list = { ident ~ ("," ~ ident)* }
+param_decl_list = { param_decl ~ ("," ~ param_decl)* }
+// A function parameter with an optional unit annotation (`x`, `x: [m]`).
+param_decl = { ident ~ (":" ~ unit_expr)? }
 
 // -- world model -------------------------------------------------------------
 world_section = { "world" ~ "{" ~ world_item* ~ "}" }
