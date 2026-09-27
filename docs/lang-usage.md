@@ -600,7 +600,7 @@ field name; cell writes are visible to later reads in the same step.
 | `ground_contact` | `restitution` | component | resolve the `y=0` plane |
 | `linear` | `slots`,`dt`,`row0=(…)`,… | state | `s_N' = Σ a_j s_j + c` |
 | `nbody` (velocity-Verlet) | `G`,`dt` | state | inverse-square; `state=(px,py,pz,vx,vy,vz,m)` |
-| `send`/`recv` | `chan`,`value` / `chan`,`slot` | channel | channel send/receive |
+| `send`/`recv` | `on`(req),`chan`,`value` / `on`(req),`chan`,`slot` | channel | channel send/receive (scoped to `on`) |
 
 > **Channels are a single-cell mailbox, not a Go-style queue.** A `chan` holds one
 > value in `state[0]`; `send` overwrites it (**last writer wins**) and `recv` reads

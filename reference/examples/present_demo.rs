@@ -27,7 +27,7 @@ const SOURCE: &str = r#"
         force { ax = 0.5; ay = 0; az = 0; dt = 1 / 60 }
         integrate { dt = 1 / 60 }
         ground_contact { restitution = 0.5 }
-        send { chan = telemetry; value = s0 + s1 }
+        send { on = vehicle; chan = telemetry; value = s0 + s1 }
     }
 "#;
 

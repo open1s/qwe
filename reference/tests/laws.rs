@@ -199,7 +199,7 @@ fn chan_system_round_trips_value() {
         world { gravity = (0,0,0)
             chan wire { value = 0 }
             entity probe { state = (3, 0) } }
-        systems { send { chan = wire; value = s0 } recv { chan = wire; slot = 1 } }
+        systems { send { on = probe; chan = wire; value = s0 } recv { on = probe; chan = wire; slot = 1 } }
         "#,
     );
     rt.step_cross_n(1).unwrap();

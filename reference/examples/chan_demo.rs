@@ -15,8 +15,8 @@ const SOURCE: &str = r#"
         entity probe { state = (10, 0) }    # publishes state[0], reads into state[1]
     }
     systems {
-        send { chan = wire; value = s0 }
-        recv { chan = wire; slot = 1 }
+        send { on = probe; chan = wire; value = s0 }
+        recv { on = probe; chan = wire; slot = 1 }
     }
 "#;
 

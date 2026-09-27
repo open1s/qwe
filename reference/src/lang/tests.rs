@@ -557,8 +557,8 @@ fn chan_system_sends_and_receives_across_entities() {
                 entity probe { state = (3, 0) }
             }
             systems {
-                send { chan = wire; value = s0 }
-                recv { chan = wire; slot = 1 }
+                send { on = probe; chan = wire; value = s0 }
+                recv { on = probe; chan = wire; slot = 1 }
             }
         "#;
     let mut rt = LangRuntime::compile(src).unwrap();
@@ -598,7 +598,8 @@ fn chan_system_round_trips_cross_backend() {
                 entity a { state = (1, 0) }
                 entity b { state = (7, 0) }
             }
-            systems { send { chan = wire; value = s0 } }
+            systems { send { on = a; chan = wire; value = s0 }
+                       send { on = b; chan = wire; value = s0 } }
         "#;
     let mut rt = LangRuntime::compile(src).unwrap();
     rt.step_cross_n(1).unwrap();
@@ -624,14 +625,14 @@ fn chan_system_communicates_across_runtimes() -> pwe_api::Result<()> {
                 chan wire { value = 0 }
                 entity producer { state = (42, 0) }
             }
-            systems { send { chan = wire; value = s0 } }
+            systems { send { on = producer; chan = wire; value = s0 } }
         "#;
     let src_b = r#"
             world { gravity = (0,0,0)
                 chan wire { value = 0 }
                 entity consumer { state = (0, 0) }
             }
-            systems { recv { chan = wire; slot = 1 } }
+            systems { recv { on = consumer; chan = wire; slot = 1 } }
         "#;
     let mut a = LangRuntime::compile_in_region(src_a, RegionId(1))?;
     let mut b = LangRuntime::compile_in_region(src_b, RegionId(2))?;
@@ -2918,5 +2919,29 @@ fn reviewed_bugs_0018_0019_0022_0023_0024_0027_0028() {
     assert_eq!(
         detail("world { gravity=(0,0,0) entity e { state=(dt=0.0, x=0.0) } } systems { update { on=e; dt=1.0 x = x + 1.0 } }"),
         0
+    );
+}
+
+#[test]
+fn send_recv_require_on() {
+    let detail = |src: &str| match LangRuntime::compile(src) {
+        Ok(_) => 0,
+        Err(e) => e.detail,
+    };
+    // `on` is required: an `on`-less `send`/`recv` would broadcast and the
+    // last-writer payload is undefined.
+    assert_eq!(
+        detail(
+            "world { gravity=(0,0,0) chan c { value=0.0 } entity e { state=(v=1.0) } } \
+             systems { send { chan = c; value = v } }"
+        ),
+        48
+    );
+    assert_eq!(
+        detail(
+            "world { gravity=(0,0,0) chan c { value=0.0 } entity e { state=(v=1.0) } } \
+             systems { recv { chan = c; slot = 0 } }"
+        ),
+        48
     );
 }

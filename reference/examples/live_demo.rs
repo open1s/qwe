@@ -39,7 +39,7 @@ const SOURCE: &str = r#"
         # The wall clamps the vehicle *center*. The box half-width is 0.5, so use
         # 8.5 so the box's edge (9.0) stays inside the visible wall at 9.
         wall { x = 8.5; z = 8.5; restitution = 0.7 }
-        send { chan = telemetry; value = s0 + s1 }
+        send { on = vehicle; chan = telemetry; value = s0 + s1 }
     }
 "#;
 

@@ -133,12 +133,19 @@ pub fn build_systems(
                     .get(&chan_name)
                     .copied()
                     .ok_or(error(Status::Invalid, 62))?;
-                let only = match s.string_params.get("on") {
-                    Some(name) => {
-                        let id = *entity_ids.get(name).ok_or(error(Status::Invalid, 62))?;
-                        Some(std::iter::once(id).collect())
-                    }
-                    None => None,
+                // `on` is required: broadcast-to-all is never what mailbox
+                // semantics want (last-writer-wins would be undefined).
+                let only = {
+                    let name = s.string_params.get("on").ok_or_else(|| {
+                        error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            format!("`{}` requires `on = <entity>`", s.kind),
+                        )
+                    })?;
+                    let id = *entity_ids.get(name).ok_or(error(Status::Invalid, 62))?;
+                    Some(std::iter::once(id).collect())
                 };
                 let mut chan = ChanSystem {
                     op,
