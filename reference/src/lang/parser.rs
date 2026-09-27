@@ -269,6 +269,25 @@ fn fold_int(e: &Expr) -> Option<i64> {
     }
 }
 
+/// Whether an expression tree contains a numeric literal with a fractional
+/// part (used to reject `let i: i64 = 1.5`, detail 89).
+fn contains_fractional_const(e: &Expr) -> bool {
+    match e {
+        Expr::Const(c) => c.is_finite() && c.fract() != 0.0,
+        Expr::SlotDyn(a) | Expr::Neg(a) | Expr::Not(a) => contains_fractional_const(a),
+        Expr::Add(a, b)
+        | Expr::Sub(a, b)
+        | Expr::Mul(a, b)
+        | Expr::Div(a, b)
+        | Expr::Rem(a, b)
+        | Expr::Cmp(_, a, b)
+        | Expr::And(a, b)
+        | Expr::Or(a, b) => contains_fractional_const(a) || contains_fractional_const(b),
+        Expr::Call(_, args) => args.iter().any(contains_fractional_const),
+        _ => false,
+    }
+}
+
 /// Parses a `let` binding: `let name[: type] = expr`. Returns
 /// `(name, expr_text, annotation)` where the annotation is `Some(true)` for
 /// `: bool`, `Some(false)` for a numeric type (`f64`/`i64`/`i32`/`u64`/`u32`),
@@ -301,8 +320,17 @@ pub(crate) fn parse_let_parts(
         let expr = nxt.as_str().trim().to_string();
         // Integer-annotated bindings take integer semantics for constant exprs.
         if matches!(ty.as_str(), "i64" | "i32" | "u64" | "u32") {
-            if let Some(v) = fold_int(&parse_expr_str(&expr)?) {
+            let parsed = parse_expr_str(&expr)?;
+            if let Some(v) = fold_int(&parsed) {
                 return Ok((name, v.to_string(), Some(false)));
+            }
+            if contains_fractional_const(&parsed) {
+                return Err(error_at(
+                    Status::Invalid,
+                    89,
+                    offset,
+                    format!("`let {name}: {ty}` but the expression is not an integer constant"),
+                ));
             }
         }
         return Ok((name, expr, Some(is_bool)));

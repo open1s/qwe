@@ -3077,3 +3077,37 @@ fn optimizer_fuses_fma_and_preserves_semantics() {
     let got = rt.present_frame(None);
     assert_eq!(expect.entities.len(), got.entities.len());
 }
+
+#[test]
+fn orient_slot_write_warning() {
+    let warns = |src: &str| -> Vec<u32> {
+        clear_diagnostics();
+        let _ = LangRuntime::compile(src).unwrap();
+        take_diagnostics()
+            .iter()
+            .map(|d| d.detail)
+            .filter(|d| *d == 96)
+            .collect()
+    };
+    // #6: a rule writing slot 7 without `orient = true` warns (detail 96).
+    assert_eq!(
+        warns("world { entity e { state=(x=1.0,y=0.,z=0.,a=0.,b=0.,c=0.,d=0.,s7=0.) } }                systems { update { on=e; dt=1.0  s7 = 0.5 } }"),
+        vec![96]
+    );
+    // With `orient = true` (and slots 7/8/9 present) no warning.
+    assert!(
+        warns("world { entity e { orient = true; state=(x=1.,y=0.,z=0.,a=0.,b=0.,c=0.,d=0.,rx=0.,ry=0.,rz=0.) } }                systems { update { on=e; dt=1.0  ry = 0.5 } }")
+            .is_empty()
+    );
+    // Writing only slots < 7 never warns.
+    assert!(
+        warns("world { entity e { state=(x=1.0,y=0.,z=0.,a=0.,b=0.,c=0.,d=0.,s7=0.) } }                systems { update { on=e; dt=1.0  x = 2.0 } }")
+            .is_empty()
+    );
+    // `orient = true` with too few slots warns.
+    assert_eq!(
+        warns("world { entity e { orient = true; state=(x=1.0,y=0.,z=0.) } }                systems { update { on=e; dt=1.0  x = 2.0 } }"),
+        vec![96]
+    );
+    clear_diagnostics();
+}

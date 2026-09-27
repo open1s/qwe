@@ -1984,6 +1984,56 @@ fn check_solver_stability(
 /// Warns (detail 94) when a state slot name collides with one of the system
 /// kind's numeric parameter names — the assignment would silently configure the
 /// parameter instead of writing the slot (issue #18).
+/// #6: warns (detail 96) when a rule writes state slots 7/8/9 of an entity that
+/// does not set `orient = true`, or when `orient = true` but the entity has
+/// fewer than 9 slots (the euler convention needs slots 7/8/9).
+fn warn_orient_slot_writes(
+    parsed: &ParsedProgram,
+    entity_ids: &std::collections::BTreeMap<String, u128>,
+    state_names_by_id: &std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
+) {
+    for sys in &parsed.systems {
+        let Some(on_name) = sys.string_params.get("on") else {
+            continue;
+        };
+        let Some(&id) = entity_ids.get(on_name) else {
+            continue;
+        };
+        let Some(e) = parsed.model.entities.get((id - 1) as usize) else {
+            continue;
+        };
+        let orient = e.render.as_ref().map(|r| r.orient).unwrap_or(false);
+        let slots = e.state.as_ref().map(|v| v.len()).unwrap_or(0);
+        let names = state_names_by_id.get(&id);
+        for key in sys.assigns.keys().chain(sys.update.keys()) {
+            let idx = crate::lang::parser::numeric_slot(key)
+                .or_else(|| names.and_then(|m| m.get(key.as_str()).copied()));
+            if let Some(idx) = idx {
+                if (7..=9).contains(&idx) && !orient {
+                    push_diag(
+                        96,
+                        sys.byte_offset,
+                        format!(
+                            "rule writes state slot {idx} of `{on_name}` but `orient` is not true; \
+slots 7/8/9 are euler angles only with `orient = true` (otherwise slot 7 is a Z-spin)"
+                        ),
+                    );
+                }
+            }
+        }
+        if orient && slots < 9 {
+            push_diag(
+                96,
+                sys.byte_offset,
+                format!(
+                    "`{on_name}` sets `orient = true` but has only {slots} state slots; euler \
+orientation needs slots 7/8/9"
+                ),
+            );
+        }
+    }
+}
+
 fn warn_state_param_collisions(
     s: &SystemDecl,
     state_names_by_id: &std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
@@ -2302,6 +2352,9 @@ they are read as a Z-spin, not euler angles",
         })
         .collect();
     check_solver_stability(&parsed, &field_info)?;
+    // #6: warn when a rule writes state slots 7/8/9 of an entity that does not
+    // set `orient = true` (the slots are read as a Z-spin, not euler angles).
+    warn_orient_slot_writes(&parsed, &entity_ids, &state_names_by_id);
     // Every declared parameter name (qualified), for namespace fallback.
     let param_names: std::collections::BTreeSet<String> =
         parsed.model.params.keys().cloned().collect();
