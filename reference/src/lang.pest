@@ -34,10 +34,12 @@ param_decl = { ident ~ (":" ~ unit_expr)? }
 
 // -- world model -------------------------------------------------------------
 world_section = { "world" ~ "{" ~ world_item* ~ "}" }
-world_item = _{ gravity_stmt | chan_stmt | struct_stmt | entity_stmt | pool_stmt | soft_stmt | field_stmt | params_stmt | title_stmt | lang_version_stmt | shape_stmt }
+world_item = _{ gravity_stmt | chan_stmt | struct_stmt | entity_stmt | pool_stmt | soft_stmt | field_stmt | params_stmt | title_stmt | lang_version_stmt | units_stmt | shape_stmt }
 gravity_stmt = { "gravity" ~ "=" ~ vec3 }
 // A human-readable title for the run (shown by `pwe present`).
 title_stmt = { "title" ~ "=" ~ string }
+// `units = "strict"` requires every state slot and param to be unit-annotated.
+units_stmt = { "units" ~ "=" ~ string }
 // Optional language-semantics version, e.g. `lang_version = "0.3"` (see RFC).
 lang_version_stmt = { "lang_version" ~ "=" ~ string }
 // `params { G = 1.0; k = 3.0 }` declares runtime-settable model parameters.

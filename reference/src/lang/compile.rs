@@ -1313,6 +1313,9 @@ pub(crate) fn merge_modules(
         if model.lang_version.is_none() {
             model.lang_version = m.parsed.model.lang_version.clone();
         }
+        if !model.units_strict {
+            model.units_strict = m.parsed.model.units_strict;
+        }
         for e in &m.parsed.model.entities {
             if let Some(prev) = entity_seen.get(&e.name) {
                 return Err(error_at(
@@ -1634,6 +1637,44 @@ pub(crate) fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
     }
     if !parsed.model.param_units.is_empty() {
         any_units = true;
+    }
+    // `units = "strict"`: every state slot and param must be annotated, and the
+    // dimensional checks are always active.
+    if parsed.model.units_strict {
+        any_units = true;
+        for e in &parsed.model.entities {
+            let n = e.state.as_ref().map(|v| v.len()).unwrap_or(0);
+            for i in 0..n {
+                let annotated = e
+                    .state_units
+                    .as_ref()
+                    .and_then(|u| u.get(i))
+                    .copied()
+                    .flatten()
+                    .is_some();
+                if !annotated {
+                    return Err(error_at(
+                        Status::Invalid,
+                        90,
+                        0,
+                        format!(
+                            "entity `{}` slot {i} needs a unit annotation (units = \"strict\")",
+                            e.name
+                        ),
+                    ));
+                }
+            }
+        }
+        for k in parsed.model.params.keys() {
+            if !parsed.model.param_units.contains_key(k) {
+                return Err(error_at(
+                    Status::Invalid,
+                    90,
+                    0,
+                    format!("parameter `{k}` needs a unit annotation (units = \"strict\")"),
+                ));
+            }
+        }
     }
     if !any_units {
         return Ok(());

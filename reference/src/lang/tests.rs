@@ -2801,3 +2801,42 @@ fn func_signature_units_are_checked() {
         Err(e) => assert_eq!(e.detail, 77, "detail = {}", e.detail),
     }
 }
+
+#[test]
+fn int_let_uses_integer_semantics() {
+    let src = r#"
+        world { gravity=(0,0,0) entity e { state=(x = 0.0, y = 0.0) } }
+        systems { update { on = e; dt = 1.0
+            let n: i64 = 7 / 2
+            let r: i64 = 7 % 3
+            x = n + 0.0
+            y = r + 0.0
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 3.0, "7/2 must be 3 (integer)");
+    assert_eq!(st.values[1], 1.0, "7%3 must be 1");
+}
+
+#[test]
+fn units_strict_requires_annotations() {
+    let miss = r#"
+        world { gravity=(0,0,0) units = "strict"
+            params { k = 1.0 }
+            entity e { state=(x = 1.0 [m]) } }
+        systems { update { on = e; dt = 1.0 [s]  x = k * x } }
+    "#;
+    match LangRuntime::compile(miss) {
+        Ok(_) => panic!("strict units must require annotations"),
+        Err(e) => assert_eq!(e.detail, 90, "detail = {}", e.detail),
+    }
+    let ok = r#"
+        world { gravity=(0,0,0) units = "strict"
+            params { k = 1.0 [1/s] }
+            entity e { state=(x = 1.0 [m], v = 0.0 [m/s]) } }
+        systems { update { on = e; dt = 1.0 [s]  v = k * x } }
+    "#;
+    LangRuntime::compile(ok).unwrap();
+}

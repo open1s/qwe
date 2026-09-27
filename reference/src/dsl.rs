@@ -154,6 +154,8 @@ pub struct WorldModel {
     /// Optional language-semantics version (`lang_version = "0.3"`). Absent =
     /// the current version; a present-but-unsupported value is rejected.
     pub lang_version: Option<String>,
+    /// `units = "strict"`: every state slot and param must be unit-annotated.
+    pub units_strict: bool,
     /// Runtime-settable model parameters (`params { G = 1.0 }`), overridable
     /// with `pwe run --param G=2`.
     pub params: std::collections::BTreeMap<String, f64>,
@@ -181,6 +183,7 @@ impl WorldModel {
             gravity,
             title: None,
             lang_version: None,
+            units_strict: false,
             params: std::collections::BTreeMap::new(),
             param_units: std::collections::BTreeMap::new(),
             param_alias: std::collections::BTreeMap::new(),

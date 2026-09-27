@@ -655,6 +655,8 @@ tanh asin acos atan`; 2-arg: `pow atan2 hypot min max`; `if(c,a,b)`; `random()`,
   (`N J W Pa Hz C V F Oh S Wb T H lm lx Bq Gy Sv kat`), expanded to base
   dimensions — e.g. `a = F / mass` with `F` in `[N]`, `mass` in `[kg]` checks as
   `m/s^2`.
+  Add `units = "strict"` to the `world` block to **require** an annotation on
+  every state slot and parameter (missing ones are detail 90).
 * `s[i]` read / `s[i] = expr` write (runtime index; **`update` only**).
 * `repeat n {…}` (≤1000), `for i in lo..hi {…}` (ascending), `break`/`continue`
   (`break if (…)`), unrolled (≤10000 statements). Loop bodies: `let`, nested
@@ -815,6 +817,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 87 | Conserved quantity drifted beyond `tolerance`. |
 | 88 | Non-finite state (simulation diverged) — with `pwe run --check`. |
 | 89 | `let` type annotation mismatch. |
+| 90 | Missing unit annotation (`units = "strict"`). |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the

@@ -87,6 +87,36 @@ pub(crate) fn expr_lang_type(e: &Expr) -> LangType {
     }
 }
 
+/// Evaluates a purely-integer constant expression with **integer** semantics
+/// (truncating `/` and `%`), used for `<int>`-annotated `let`s so that e.g.
+/// `let n: i64 = 7 / 2` yields 3, not 3.5. Non-constant expressions return None.
+fn fold_int(e: &Expr) -> Option<i64> {
+    match e {
+        Expr::Const(c) if c.is_finite() && c.fract() == 0.0 && c.abs() < 9.0e15 => Some(*c as i64),
+        Expr::Add(a, b) => Some(fold_int(a)?.checked_add(fold_int(b)?)?),
+        Expr::Sub(a, b) => Some(fold_int(a)?.checked_sub(fold_int(b)?)?),
+        Expr::Mul(a, b) => Some(fold_int(a)?.checked_mul(fold_int(b)?)?),
+        Expr::Div(a, b) => {
+            let d = fold_int(b)?;
+            if d == 0 {
+                None
+            } else {
+                Some(fold_int(a)? / d)
+            }
+        }
+        Expr::Rem(a, b) => {
+            let d = fold_int(b)?;
+            if d == 0 {
+                None
+            } else {
+                Some(fold_int(a)? % d)
+            }
+        }
+        Expr::Neg(a) => Some(-fold_int(a)?),
+        _ => None,
+    }
+}
+
 /// Parses a `let` binding: `let name[: type] = expr`, checking the optional
 /// annotation (detail 89). Returns `(name, expr_text)`.
 pub(crate) fn parse_let_parts(first: Pair<'_, Rule>, offset: usize) -> Result<(String, String)> {
@@ -116,6 +146,12 @@ pub(crate) fn parse_let_parts(first: Pair<'_, Rule>, offset: usize) -> Result<(S
                 offset,
                 format!("`let {name}: {ty}` but the expression is {got}"),
             ));
+        }
+        // Integer-annotated bindings take integer semantics for constant exprs.
+        if matches!(ty.as_str(), "i64" | "i32" | "u64" | "u32") {
+            if let Some(v) = fold_int(&parse_expr_str(&expr)?) {
+                return Ok((name, v.to_string()));
+            }
         }
         return Ok((name, expr));
     }
@@ -980,6 +1016,11 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     .trim_end_matches('"')
                                     .to_string(),
                             );
+                        }
+                        Rule::units_stmt => {
+                            let inner = next_pair(&mut item.into_inner())?;
+                            model.units_strict =
+                                inner.as_str().trim().trim_matches('"') == "strict";
                         }
                         Rule::chan_stmt => {
                             let mut inner = item.into_inner();
