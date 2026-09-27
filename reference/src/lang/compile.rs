@@ -1992,6 +1992,39 @@ pub fn compile_program(mut parsed: ParsedProgram) -> Result<CompiledProgram> {
                     .unwrap_or(true)
         })
         .collect();
+    // `nbody` reads (px,py,pz,vx,vy,vz,m) from state slots 0..6. A body with too
+    // few slots would silently misbehave (detail 91); a `mass` field is ignored
+    // (advisory, detail 92). Only relevant when the model has an `nbody` system.
+    if parsed.systems.iter().any(|s| s.kind == "nbody") {
+        for &id in &nbody_entities {
+            if let Some(e) = parsed.model.entities.get((id - 1) as usize) {
+                let slots = e.state.as_ref().map(|v| v.len()).unwrap_or(0);
+                if slots < 7 {
+                    return Err(error_at(
+                        Status::Invalid,
+                        91,
+                        0,
+                        format!(
+                            "nbody body `{}` needs at least 7 state slots \
+(px,py,pz,vx,vy,vz,m); it has {slots}",
+                            e.name
+                        ),
+                    ));
+                }
+                if e.mass.is_some() {
+                    push_diag(
+                        92,
+                        0,
+                        format!(
+                            "nbody body `{}` reads mass from state[6]; its `mass` field is ignored",
+                            e.name
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
     // User-defined functions get reserved high EIR ids (no collision with the
     // per-system/per-entity function ids that start at 1).
     let mut func_ids: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();

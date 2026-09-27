@@ -601,6 +601,12 @@ field name; cell writes are visible to later reads in the same step.
 | `linear` | `slots`,`dt`,`row0=(…)`,… | state | `s_N' = Σ a_j s_j + c` |
 | `nbody` (velocity-Verlet) | `G`,`dt` | state | inverse-square; `state=(px,py,pz,vx,vy,vz,m)` |
 | `send`/`recv` | `chan`,`value` / `chan`,`slot` | channel | channel send/receive |
+
+> **Channels are a single-cell mailbox, not a Go-style queue.** A `chan` holds one
+> value in `state[0]`; `send` overwrites it (**last writer wins**) and `recv` reads
+> it into a slot. There is no queueing or blocking. Because systems run in
+> declaration order, a `recv` placed *before* its `send` sees the **previous**
+> step's value; place it after for same-step delivery.
 | `update` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | explicit Euler |
 | `rk4` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | Runge–Kutta 4 |
 | `invariant` | `expr`,`on?` | — | per-step assertion |
@@ -698,6 +704,8 @@ systems {
 
 * **Time is explicit**: every rule's expression is multiplied by `dt`; `t`
   advances by `dt` each step.
+* **Divide-by-zero traps** (detail 18) for integers **and** floats
+  (RFC-0021) — never silent `inf`/`NaN`.
 * **`slot = expr` assigns**. Integrate with `slot = slot + inte(rate)` (or the
   `inte slot = rate` / `+=` statement); in `rk4`, `inte slot = rate`
   integrates with 4th-order Runge–Kutta. `inte(E) = dt·E`, `deriv(E) = (E−E_prev)/dt`.
@@ -818,6 +826,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 88 | Non-finite state (simulation diverged) — with `pwe run --check`. |
 | 89 | `let` type annotation mismatch. |
 | 90 | Missing unit annotation (`units = "strict"`). |
+| 91 | `nbody` body has fewer than 7 state slots. |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the

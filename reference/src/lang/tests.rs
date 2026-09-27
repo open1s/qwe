@@ -2840,3 +2840,30 @@ fn units_strict_requires_annotations() {
     "#;
     LangRuntime::compile(ok).unwrap();
 }
+
+#[test]
+fn nbody_layout_is_validated() {
+    let bad = r#"
+        world { gravity=(0,0,0)
+            entity a { state=(1.0, 0.0, 0.0, 0.0, 0.5, 0.0) }
+            entity b { state=(-1.0, 0.0, 0.0, 0.0, -0.5, 0.0) } }
+        systems { nbody { G = 1.0; dt = 0.001 } }
+    "#;
+    match LangRuntime::compile(bad) {
+        Ok(_) => panic!("nbody needs 7 slots (m at index 6)"),
+        Err(e) => assert_eq!(e.detail, 91, "detail = {}", e.detail),
+    }
+}
+
+#[test]
+fn f64_divide_by_zero_traps() {
+    let src = r#"
+        world { gravity=(0,0,0) entity e { state=(x = 0.0) } }
+        systems { update { on = e; dt = 1.0  x = 1.0 / 0.0 } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    match rt.step_cross() {
+        Ok(_) => panic!("1.0/0.0 must trap (RFC-0021)"),
+        Err(e) => assert_eq!(e.detail, 18, "detail = {}", e.detail),
+    }
+}

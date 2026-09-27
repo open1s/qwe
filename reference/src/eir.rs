@@ -2500,11 +2500,13 @@ fn divrem(op: Opcode, a: Immediate, b: Immediate) -> Option<Immediate> {
             }
         }
         (Opcode::Rem, I64(a), I64(b)) => (b != 0).then(|| I64(a % b)),
-        (Opcode::Div, F32(a), F32(b)) => Some(F32(a / b)),
-        (Opcode::Div, F64(a), F64(b)) => Some(F64(a / b)),
+        // RFC-0021: divide-by-zero is a **defined trap** for every width, so
+        // F32/F64 division by (exactly) zero traps too — not silent inf/NaN.
+        (Opcode::Div, F32(a), F32(b)) => (b != 0.0).then_some(F32(a / b)),
+        (Opcode::Div, F64(a), F64(b)) => (b != 0.0).then_some(F64(a / b)),
         // fmod semantics; exact for integer-valued f64 (step % n).
-        (Opcode::Rem, F32(a), F32(b)) => Some(F32(a % b)),
-        (Opcode::Rem, F64(a), F64(b)) => Some(F64(a % b)),
+        (Opcode::Rem, F32(a), F32(b)) => (b != 0.0).then_some(F32(a % b)),
+        (Opcode::Rem, F64(a), F64(b)) => (b != 0.0).then_some(F64(a % b)),
         _ => None,
     }
 }

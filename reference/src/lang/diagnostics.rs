@@ -104,6 +104,8 @@ pub fn detail_name(detail: u32) -> &'static str {
         88 => "non-finite state (simulation diverged)",
         89 => "type mismatch in a `let` annotation",
         90 => "unit annotation required (units = \"strict\")",
+        91 => "nbody body needs at least 7 state slots (px,py,pz,vx,vy,vz,m)",
+        92 => "nbody ignores the `mass` field (reads state[6])",
         _ => "unspecified compile error",
     }
 }
