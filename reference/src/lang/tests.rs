@@ -2733,3 +2733,26 @@ fn conserved_quantity_is_tracked_and_enforced() {
     }
     assert!(caught, "damping must break the conserved quantity");
 }
+
+#[test]
+fn derived_units_are_supported() {
+    // Named coherent-SI units expand to base dimensions (N = kg·m/s²).
+    let ok = r#"
+        world { gravity=(0,0,0)
+            params { F = 10.0 [N] }
+            entity e { state = (mass = 1.0 [kg], a = 0.0 [m/s^2]) } }
+        systems { update { on = e; dt = 0.1 [s]  a = F / mass } }
+    "#;
+    LangRuntime::compile(ok).unwrap();
+    // `a = F` mismatches (m/s² vs N).
+    let bad = r#"
+        world { gravity=(0,0,0)
+            params { F = 10.0 [N] }
+            entity e { state = (a = 0.0 [m/s^2]) } }
+        systems { update { on = e; dt = 0.1 [s]  a = F } }
+    "#;
+    match LangRuntime::compile(bad) {
+        Ok(_) => panic!("N vs m/s^2 must be rejected"),
+        Err(e) => assert_eq!(e.detail, 77, "detail = {}", e.detail),
+    }
+}

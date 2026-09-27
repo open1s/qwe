@@ -644,7 +644,11 @@ tanh asin acos atan`; 2-arg: `pow atan2 hypot min max`; `if(c,a,b)`; `random()`,
 
 * `funcs { f(a,b) { expr } }` — pure scalar functions; no world access.
 * Units: annotate `state`/params with `[m]`, `[m/s]`, `[1/s^2]`; mismatches are
-  detail 77; unannotated values are wildcards.
+  detail 77; unannotated values are wildcards. Base units are
+  `m kg s A K mol cd`; named coherent-SI **derived** units are also accepted
+  (`N J W Pa Hz C V F Oh S Wb T H lm lx Bq Gy Sv kat`), expanded to base
+  dimensions — e.g. `a = F / mass` with `F` in `[N]`, `mass` in `[kg]` checks as
+  `m/s^2`.
 * `s[i]` read / `s[i] = expr` write (runtime index; **`update` only**).
 * `repeat n {…}` (≤1000), `for i in lo..hi {…}` (ascending), `break`/`continue`
   (`break if (…)`), unrolled (≤10000 statements). Loop bodies: `let`, nested

@@ -111,8 +111,37 @@ impl Dim {
     }
 }
 
-fn base_index(name: &str) -> Option<usize> {
-    BASE.iter().position(|b| *b == name)
+/// The dimension of a unit symbol, base or named coherent-SI derived unit.
+fn unit_dim(name: &str) -> Option<Dim> {
+    let m = |i: usize| Dim::base(i);
+    Some(match name {
+        "m" => m(0),
+        "kg" => m(1),
+        "s" => m(2),
+        "A" => m(3),
+        "K" => m(4),
+        "mol" => m(5),
+        "cd" => m(6),
+        // Named coherent SI derived units, expanded to base dimensions.
+        "Hz" | "Bq" => m(2).pow(-1),
+        "N" => m(1).times(m(0)).over(m(2).pow(2)),
+        "Pa" => m(1).over(m(0).times(m(2).pow(2))),
+        "J" => m(1).times(m(0).pow(2)).over(m(2).pow(2)),
+        "W" => m(1).times(m(0).pow(2)).over(m(2).pow(3)),
+        "C" => m(3).times(m(2)),
+        "V" => m(1).times(m(0).pow(2)).over(m(2).pow(3).times(m(3))),
+        "F" => m(3).pow(2).times(m(2).pow(4)).over(m(1).times(m(0).pow(2))),
+        "Oh" | "ohm" => m(1).times(m(0).pow(2)).over(m(2).pow(3).times(m(3).pow(2))),
+        "S" => m(3).pow(2).times(m(2).pow(3)).over(m(1).times(m(0).pow(2))),
+        "Wb" => m(1).times(m(0).pow(2)).over(m(2).pow(2).times(m(3))),
+        "T" => m(1).over(m(2).pow(2).times(m(3))),
+        "H" => m(1).times(m(0).pow(2)).over(m(2).pow(2).times(m(3).pow(2))),
+        "lm" => m(6),
+        "lx" => m(6).over(m(0).pow(2)),
+        "Gy" | "Sv" => m(0).pow(2).over(m(2).pow(2)),
+        "kat" => m(5).over(m(2)),
+        _ => return None,
+    })
 }
 
 impl std::str::FromStr for Dim {
@@ -160,7 +189,7 @@ impl std::str::FromStr for Dim {
                     while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
                         i += 1;
                     }
-                    let idx = base_index(&text[start..i]).ok_or(())?;
+                    let atom = unit_dim(&text[start..i]).ok_or(())?;
                     let mut exp = 1i32;
                     if i < bytes.len() && bytes[i] == b'^' {
                         i += 1;
@@ -178,7 +207,7 @@ impl std::str::FromStr for Dim {
                         let v: i32 = text[ds..i].parse().map_err(|_| ())?;
                         exp = if neg { -v } else { v };
                     }
-                    dim.0[idx] = dim.0[idx].saturating_add((sign * exp) as i8);
+                    dim = dim.times(atom.pow(sign * exp));
                     expect_atom = false;
                 }
                 _ => return Err(()),
@@ -247,5 +276,19 @@ mod tests {
         assert!(unify(Some(Dim::base(0)), Some(Dim::base(2))).is_err());
         assert!(unify(Some(Dim::base(0)), None).is_ok());
         assert!(unify(None, None).is_ok());
+    }
+
+    #[test]
+    fn derived_si_units_expand_to_bases() {
+        let d = |x: &str| x.parse::<Dim>().unwrap();
+        assert_eq!(d("N"), d("kg*m/s^2"));
+        assert_eq!(d("J"), d("N*m"));
+        assert_eq!(d("W"), d("J/s"));
+        assert_eq!(d("Pa"), d("N/m^2"));
+        assert_eq!(d("Hz"), d("1/s"));
+        assert_eq!(d("C"), d("A*s"));
+        assert_eq!(d("V"), d("W/A"));
+        assert_eq!(d("F"), d("C/V"));
+        assert_eq!(d("T"), d("Wb/m^2"));
     }
 }

@@ -46,7 +46,7 @@ string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 // to identifiers and slot accesses like `s[0]`.
 unit_expr = @{ "[" ~ unit_atom ~ (unit_op ~ unit_atom)* ~ "]" }
 unit_atom = @{ unit_name ~ ("^" ~ unit_exp)? | ASCII_DIGIT+ }
-unit_name = @{ "mol" | "kg" | "cd" | "K" | "A" | "s" | "m" }
+unit_name = @{ "kat" | "cd" | "mol" | "ohm" | "Pa" | "Hz" | "Wb" | "Gy" | "Sv" | "lm" | "lx" | "Oh" | "kg" | "W" | "J" | "N" | "C" | "V" | "F" | "T" | "S" | "H" | "Bq" | "K" | "A" | "s" | "m" }
 unit_exp = @{ "-"? ~ ASCII_DIGIT+ }
 unit_op = @{ "*" | "/" }
 chan_stmt = { "chan" ~ ident ~ "{" ~ "value" ~ "=" ~ value ~ ";"? ~ "}" }
