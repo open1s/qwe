@@ -4,7 +4,10 @@ Findings from two passes: (1) a language-design review of `lang.pest`,
 `reference/src/lang/*`, `docs/lang-usage.md`, and the READMEs (0001–0010);
 (2) a black-box testing pass with compile/run probes (0011–0017). Every
 finding carries `file:line` evidence and a reproduction. All are filed
-upstream at github.com/open1s/qwe/issues.
+upstream at github.com/open1s/qwe/issues. (3) a verification pass against
+the developer fix commit `1df656bb`: 0001–0015 verified fixed except
+0011 (reopened: `on`-less `send`/`recv` still corrupts, docs omit `on`) and
+the 0003 residual, filed as 0018; 0016 verified; 0017 still open by design.
 
 | # | Severity | Title | File |
 | --- | --- | --- | --- |
@@ -25,6 +28,7 @@ upstream at github.com/open1s/qwe/issues.
 | [0015](https://github.com/open1s/qwe/issues/15) | Low | `pwe run` reports the wrong failing step (batch start) | cli/src/main.rs:402 |
 | [0016](https://github.com/open1s/qwe/issues/16) | Low | Most detail-77 errors print without source location | reference/src/lang/compile.rs:1408 |
 | [0017](https://github.com/open1s/qwe/issues/17) | Medium | F64 ÷0 is silent inf/NaN vs RFC-0021 "defined trap" | reference/src/eir.rs:2503 |
+| [0018](https://github.com/open1s/qwe/issues/18) | Low | Slot named `dt` unwritable; rule silently rebinds the timestep | reference/src/lang/parser.rs |
 
 ## Suggested order
 
@@ -40,4 +44,4 @@ upstream at github.com/open1s/qwe/issues.
 6. 0004, 0007, 0008, 0010 — documentation passes; 0005 — stale-limits sweep
    (include wiki FAQ and `docs/book/faq.md`).
 
-Local copies of the bodies live next to this file (`0001-…` … `0017-…`).
+Local copies of the bodies live next to this file (`0001-…` … `0018-…`).
