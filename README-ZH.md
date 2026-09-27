@@ -141,8 +141,10 @@ systems {
 }
 ```
 
-* **规则即方程**：`slot = expr` 表示 `slot += dt·expr`（欧拉）；`rk4` 对相同规则做
-  4 阶积分。
+* **规则是赋值；积分要显式**：`slot = expr` 是普通**赋值**；积分用
+  `slot = slot + inte(rate)`、`inte slot = rate` 或 `slot += rate`（显式欧拉）。
+  `rk4 { inte slot = rate }` 做 4 阶积分。`inte(E) = dt·E`；`deriv(E)` 是后向差商
+  `(E−E_prev)/dt`。
 * **是状态，不是脚本**：命名槽、跨实体读取（`@other.state.x`）、属性
   （`@other.mass`）、空间查询（`neighbor_count`、`nearest_dist`、`neighbor_mean`）。
 * **Python 式模块**：`import "std/forces"`、`import "m" as x`、

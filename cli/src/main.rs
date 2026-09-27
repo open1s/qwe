@@ -324,6 +324,7 @@ fn cmd_compile(args: &[String]) -> i32 {
             return 1;
         }
     };
+    lang::clear_diagnostics();
     match lang::compile_program(parsed) {
         Ok(compiled) => {
             let bytes = match pack(&compiled.eir, &sources) {
@@ -340,6 +341,10 @@ fn cmd_compile(args: &[String]) -> i32 {
             println!("compiled {input} -> {output}");
             println!("  EIR functions: {}", compiled.eir.functions.len());
             println!("  artifact hash: {}", hex(&digest(&bytes).0));
+            // Surface non-fatal warnings (e.g. unknown identifiers that read 0.0).
+            for d in lang::take_diagnostics() {
+                eprintln!("warning [{}]: {}", d.detail, d.message);
+            }
             0
         }
         Err(e) => {
@@ -451,9 +456,19 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
             let mut done = 0u64;
             while remaining > 0 {
                 let k = remaining.min(CROSS_BATCH as u64) as u32;
-                if let Err(e) = rt.step_cross_batched(k) {
-                    eprintln!("pwe: step {done} failed: {e}");
-                    return 1;
+                // Batched: interpreter-only steps, with one cross-verified step at
+                // the end of each batch. Step one at a time so a failure reports
+                // the exact failing step (not the batch start).
+                for j in 0..k {
+                    let one = if j == k - 1 {
+                        rt.step_cross()
+                    } else {
+                        rt.step_interpreter()
+                    };
+                    if let Err(e) = one {
+                        eprintln!("pwe: step {} failed: {e}", done + j as u64);
+                        return 1;
+                    }
                 }
                 remaining -= k as u64;
                 done += k as u64;
@@ -625,7 +640,7 @@ fn auto_frame_camera(rt: &LangRuntime) -> CameraVisual {
 
 /// Reports the final state of a batch run.
 fn report(rt: &LangRuntime, steps: u64) {
-    println!("ran {steps} steps (interpreter == JIT, every step)");
+    println!("ran {steps} steps (interpreter == JIT, cross-checked every {CROSS_BATCH} steps)");
     println!("  sim time:  {:.6} s", rt.scene.sim_time);
     println!("  entities:  {}", rt.scene.entities.len());
     for e in &rt.present_frame(None).entities {

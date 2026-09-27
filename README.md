@@ -147,8 +147,10 @@ systems {
 }
 ```
 
-* **Rules are equations.** `slot = expr` means `slot += dt·expr` (Euler); `rk4`
-  integrates the same rules at 4th order.
+* **Rules assign; integrate explicitly.** `slot = expr` is a plain **assignment**;
+  integrate with `slot = slot + inte(rate)`, `inte slot = rate`, or `slot += rate`
+  (explicit Euler). `rk4 { inte slot = rate }` integrates at 4th order.
+  `inte(E) = dt·E`; `deriv(E)` is the backward difference `(E−E_prev)/dt`.
 * **State, not scripts.** Named slots, cross-entity reads (`@other.state.x`),
   properties (`@other.mass`), spatial queries (`neighbor_count`, `nearest_dist`,
   `neighbor_mean`).
@@ -266,8 +268,9 @@ Bounded, deliberate gaps behind the kernel boundary — **not** missing contract
   NPU / SIMD plug in at `AotProgram.target` and are **on the roadmap**. The
   reference "JIT" locks the JIT *contract* rather than emitting native code.
 * **Rigid bodies**: AABB, sphere, convex-hull (exact SAT), compound and
-  heightfield colliders, impulses, friction, distance joints, a ground plane. No
-  soft bodies or a full joint family yet.
+  heightfield colliders, impulses, friction, and distance/spring/weld/hinge/ball/
+  prismatic joints, plus soft bodies (cloth/jelly, RFC-0040) and a ground plane.
+  A broader joint family (cone/universal/gear) is still growing.
 * **Dynamic entity sets are fixed at compile time** (object-pool activation is
   planned).
 

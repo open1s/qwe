@@ -515,12 +515,18 @@ unambiguous.
 * shapes `point` `sphere` `box` `capsule` `svg` `hull` `poly` `at` `depth`
   `scale` `faces`
 * control `return` `let` `repeat` `until` `while` `for` `in` `break` `continue`
-  `if`
+  `if` `else`
+* rules `inte` `integrate` `+=` (and the operators `inte(…)`, `deriv(…)`)
+* systems `send` `recv` `spawn` `despawn` `joint` `invariant` `watch`
+* world `lang_version`
 * logic `and` `or` `not` `&&` `||` `!` `true` `false`
 * atoms `pi` `e` `t`
 
 System *kinds* and *params* are ordinary identifiers matched at build time (an
 unknown kind is detail 49). Builtins are ordinary calls special-cased in lowering.
+
+`print(x)` is a debugging builtin: it records `x` in the run log (shown by
+`pwe run` / the live viewer) and returns `x` unchanged — write `let _ = print(x)`.
 
 Precedence (high → low): unary `-`, `not`/`!` → `* / %` → `+ -` → comparisons →
 `and` → `or`.
@@ -628,7 +634,7 @@ An unresolved bare name reads `0.0`. System params are not in expression scope
 
 1-arg math: `sin cos exp ln sqrt abs floor ceil round sign log10 log2 sinh cosh
 tanh asin acos atan`; 2-arg: `pow atan2 hypot min max`; `if(c,a,b)`; `random()`,
-`noise()`; `print(x)`, `emit(kind,payload)`, `last_event(kind)`; `at(T)`,
+`noise()`; `at(T)`,
 `periodic(P[,phase])`, `schedule(gate,delay,kind,payload)`; `active()`;
 `vlen vdot vdist`; spatial `neighbor_count(r)`, `nearest_dist()`,
 `neighbor_mean(slot,r)`, `nearest_dx/dy/dz()`; field `fget fset flap`. No `tan`

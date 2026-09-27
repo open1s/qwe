@@ -2390,6 +2390,9 @@ pub struct ChanSystem {
     pub value: Option<Expr>,
     /// For `recv`: the local state slot to receive into.
     pub slot: usize,
+    /// Optional `on = <entity>`: restrict the send/recv to that entity (default:
+    /// every dynamic entity, the historical behavior).
+    pub only: Option<std::collections::BTreeSet<u128>>,
     pub slots: usize,
     pub entity_map: std::collections::BTreeMap<String, u128>,
     pub func_ids: std::collections::BTreeMap<String, u64>,
@@ -2410,6 +2413,19 @@ impl EirSystem for ChanSystem {
         "physics.chan"
     }
     fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
+        if let Some(only) = &self.only {
+            if !only.contains(&entity) {
+                out.push(crate::physics_eir::instr(
+                    crate::eir::Opcode::Return,
+                    0,
+                    None,
+                    vec![],
+                    None,
+                    None,
+                ));
+                return;
+            }
+        }
         // Read all self state slots into registers (for a send value expr).
         let mut slot_regs: Vec<u32> = Vec::with_capacity(self.slots);
         for i in 0..self.slots {

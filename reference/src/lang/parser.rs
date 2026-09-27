@@ -172,17 +172,25 @@ pub(crate) fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Resul
     // Optional trailing unit annotation (`dt = 0.01 s`): compile-time only.
     if let Some(unit) = inner.next() {
         if unit.as_rule() == Rule::unit_expr {
-            if let Ok(d) = unit
-                .as_str()
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<crate::units::Dim>()
-            {
-                decl.param_units.insert(first.as_str().to_string(), d);
-            }
+            let d = parse_unit_expr(unit)?;
+            decl.param_units.insert(first.as_str().to_string(), d);
         }
     }
     Ok(())
+}
+
+/// Parses a bracketed unit annotation `[m/s^2]`, erroring (detail 84) when the
+/// text is not a valid unit — a typo must not silently disable dimension checks.
+pub(crate) fn parse_unit_expr(pair: Pair<'_, Rule>) -> Result<crate::units::Dim> {
+    let text = pair.as_str().trim_start_matches('[').trim_end_matches(']');
+    text.parse::<crate::units::Dim>().map_err(|_| {
+        error_at(
+            Status::Invalid,
+            84,
+            pair.as_span().start(),
+            format!("malformed unit annotation `{}`", pair.as_str()),
+        )
+    })
 }
 
 /// Maximum iteration count of one loop.
@@ -1085,22 +1093,18 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 match pair.as_rule() {
                                     Rule::ident => pending_key = Some(pair.as_str().to_string()),
                                     Rule::value => {
+                                        // Keep `pending_key` for the optional
+                                        // trailing `unit_expr` (do not consume it).
                                         if let (Some(k), Some(v)) = (
-                                            pending_key.take(),
+                                            pending_key.clone(),
                                             parse_scalar_number(pair.as_str().trim()),
                                         ) {
                                             model.params.insert(k, v);
                                         }
                                     }
                                     Rule::unit_expr => {
-                                        if let (Some(k), Ok(d)) = (
-                                            pending_key.clone(),
-                                            pair.as_str()
-                                                .trim_start_matches('[')
-                                                .trim_end_matches(']')
-                                                .parse::<crate::units::Dim>(),
-                                        ) {
-                                            model.param_units.insert(k, d);
+                                        if let Some(k) = pending_key.clone() {
+                                            model.param_units.insert(k, parse_unit_expr(pair)?);
                                         }
                                     }
                                     _ => {}

@@ -115,11 +115,19 @@ pub fn build_systems(
                     .get(&chan_name)
                     .copied()
                     .ok_or(error(Status::Invalid, 62))?;
+                let only = match s.string_params.get("on") {
+                    Some(name) => {
+                        let id = *entity_ids.get(name).ok_or(error(Status::Invalid, 62))?;
+                        Some(std::iter::once(id).collect())
+                    }
+                    None => None,
+                };
                 let mut chan = ChanSystem {
                     op,
                     channel_entity,
                     value: None,
                     slot: 0,
+                    only,
                     slots: crate::components::State::MAX_STATE_SLOTS,
                     entity_map: entity_ids.clone(),
                     func_ids: func_ids.clone(),
@@ -215,12 +223,15 @@ pub fn build_systems(
                     && dyn_rules.is_empty()
                     && assigns.is_empty()
                     && dyn_assigns.is_empty()
+                    && s.update_stmts.is_empty()
                 {
                     return Err(error_at(
                         Status::Invalid,
                         55,
                         s.byte_offset,
-                        "update system has no rules; add `slot = <expr>`".to_string(),
+                        "update system has no rules or statements; add `slot = <expr>` or a \
+side-effecting `let`/call"
+                            .to_string(),
                     ));
                 }
                 // `let name = expr` local bindings, in order.
@@ -1396,6 +1407,8 @@ pub(crate) fn merge_modules(
 /// Dimensional-analysis environment: declared slot/parameter units and the
 /// inferred units of `let` locals.
 pub(crate) struct DimEnv<'a> {
+    /// Byte offset of the system being checked (for diagnostics).
+    pub(crate) offset: usize,
     slot_dims: &'a [crate::units::MaybeDim],
     name_to_slot: &'a std::collections::BTreeMap<String, usize>,
     params: &'a std::collections::BTreeMap<String, crate::units::Dim>,
@@ -1405,7 +1418,14 @@ pub(crate) struct DimEnv<'a> {
 impl DimEnv<'_> {
     fn of_expr(&self, expr: &Expr) -> Result<crate::units::MaybeDim> {
         use crate::units::{div, mul, unify, Dim, MaybeDim};
-        let err = || error(Status::Invalid, 77);
+        let err = || {
+            error_at(
+                Status::Invalid,
+                77,
+                self.offset,
+                "dimension mismatch within an expression".to_string(),
+            )
+        };
         Ok(match expr {
             Expr::Const(_) => None,
             Expr::Time => Some(Dim::seconds()),
@@ -1549,6 +1569,7 @@ pub(crate) fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
         // and `let`s (update/rk4), the `when` gate, `invariant`/`watch` exprs.
         {
             let env = DimEnv {
+                offset: sys.byte_offset,
                 slot_dims: &slot_dims,
                 name_to_slot: &name_to_slot,
                 params: &parsed.model.param_units,
@@ -1607,6 +1628,7 @@ pub(crate) fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
                 Err(_) => continue, // rule parse errors surface elsewhere
             };
             let mut env = DimEnv {
+                offset: sys.byte_offset,
                 slot_dims: &slot_dims,
                 name_to_slot: &name_to_slot,
                 params: &parsed.model.param_units,
@@ -1656,6 +1678,7 @@ right-hand side (`dt·expr`) has `{rhs_name}`"
                 Err(_) => continue,
             };
             let mut env = DimEnv {
+                offset: sys.byte_offset,
                 slot_dims: &slot_dims,
                 name_to_slot: &name_to_slot,
                 params: &parsed.model.param_units,

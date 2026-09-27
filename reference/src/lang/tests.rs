@@ -2579,3 +2579,69 @@ systems {
     assert!(m2.source.contains("a = a + inte(v)"), "{}", m2.source);
     LangRuntime::compile(&m2.source).unwrap();
 }
+
+#[test]
+fn send_recv_honor_on() {
+    // `recv { on = dst; … }` must write only `dst`, not every entity.
+    let src = r#"
+        world { gravity=(0,0,0)
+            chan c { value = 0.0 }
+            entity src { state=(v = 0.0) }
+            entity dst { state=(r = 0.0) } }
+        systems {
+            send { on = src; chan = c; value = 42.0 }
+            recv { on = dst; chan = c; slot = 0 }
+        }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    // ids: src = 1, dst = 2 (the channel entity follows the bodies).
+    let v = rt
+        .scene
+        .get(EntityId(1))
+        .unwrap()
+        .state
+        .as_ref()
+        .unwrap()
+        .values[0];
+    let r = rt
+        .scene
+        .get(EntityId(2))
+        .unwrap()
+        .state
+        .as_ref()
+        .unwrap()
+        .values[0];
+    assert_eq!(v, 0.0, "src must be untouched by recv: {v}");
+    assert_eq!(r, 42.0, "dst receives the channel value: {r}");
+}
+
+#[test]
+fn side_effect_only_update_compiles() {
+    // A `let`/bare-call-only `update` runs for its side effect (no slot rules).
+    let src = r#"
+        world { gravity=(0,0,0) entity e { state=(x = 1.0) } }
+        systems { update { on = e; dt = 1.0
+            let _ = print(x)
+        } }
+    "#;
+    LangRuntime::compile(src).unwrap();
+}
+
+#[test]
+fn params_units_are_checked() {
+    // Parameter unit annotations are recorded and enforced (detail 77).
+    let bad = r#"
+        world { gravity=(0,0,0)
+            params { k = 4.0 [1/s^2] }
+            entity e { state = (x = 1.0 [m]) } }
+        systems { update { on = e; dt = 0.1 [s]  x = k } }
+    "#;
+    match LangRuntime::compile(bad) {
+        Ok(_) => panic!("param/state unit mismatch must be rejected"),
+        Err(e) => assert_eq!(e.detail, 77, "detail = {}", e.detail),
+    }
+    // A malformed unit annotation is a diagnostic (not silently ignored).
+    let malformed = "world { gravity=(0,0,0) params { k = 4.0 [1/s^] } }";
+    assert!(LangRuntime::compile(malformed).is_err());
+}

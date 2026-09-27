@@ -221,10 +221,18 @@ pub(crate) fn lower_expr(
                 ));
                 return r;
             }
-            // Cross-entity named state slot.
+            // A dotted name that is not a parameter is a cross-entity reference
+            // (`@name.slot`) whose leading segment must be a declared entity.
             if let Some((ent, rest)) = name.split_once('.') {
                 let slot_name = rest.strip_prefix("state.").unwrap_or(rest);
-                let id = ctx.entity_map.get(ent).copied().unwrap_or(u128::MAX);
+                let Some(&id) = ctx.entity_map.get(ent) else {
+                    push_diag(
+                        85,
+                        0,
+                        format!("unknown entity `{ent}` in `{name}` — reads 0.0"),
+                    );
+                    return 0;
+                };
                 let slot = ctx
                     .state_names_by_id
                     .get(&id)
@@ -233,7 +241,13 @@ pub(crate) fn lower_expr(
                     .unwrap_or(0);
                 return ctx.ref_regs.get(&(id, slot)).copied().unwrap_or(0);
             }
-            // An undeclared bare name: read 0.0 (via an unset parameter).
+            // An undeclared bare name: read 0.0, but record a diagnostic (a typo
+            // must not silently do nothing).
+            push_diag(
+                85,
+                0,
+                format!("unknown identifier `{name}` — reads 0.0 (typo?)"),
+            );
             let r = *next_id;
             *next_id += 1;
             out.push(crate::physics_eir::instr(

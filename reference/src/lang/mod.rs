@@ -52,7 +52,7 @@ mod diagnostics;
 pub use diagnostics::{
     clear_diagnostics, detail_name, diagnose, render_diagnostic, take_diagnostics, Diagnostic,
 };
-pub(crate) use diagnostics::{error, error_at};
+pub(crate) use diagnostics::{error, error_at, push_diag};
 use pwe_api::{Access, EntityId, Error, Hash256, RegionId, Result, Status, WorldId, WorldVersion};
 
 mod ast;
