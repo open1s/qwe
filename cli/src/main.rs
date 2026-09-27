@@ -458,6 +458,11 @@ fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
         // reader (and delay a closing tab waiting on its last request).
         let frame = rt.present_frame(Some(cam));
         let info = info_lines(&rt, model, step);
+        // The `print(...)` log is a debugging side-channel that persists across
+        // steps; drain it each frame so a program that prints every step cannot
+        // grow memory without bound during a live session (the frame above has
+        // already captured the lines for the viewer).
+        let _ = rt.drain_logs();
         {
             let mut g = live.write().unwrap();
             g.step = step;

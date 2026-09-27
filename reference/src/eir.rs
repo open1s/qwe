@@ -438,6 +438,11 @@ impl Default for ExecEnv {
 /// or cyclic recursion).
 pub const MAX_CALL_DEPTH: usize = 256;
 
+/// Upper bound on retained `print(...)` log lines. The log persists across steps
+/// (a debugging side-channel); older lines are dropped once the cap is reached
+/// so a per-step `print` cannot grow memory without bound during a long run.
+pub const MAX_LOG_LINES: usize = 65_536;
+
 /// Moves every queued event whose time has been reached into `events`, in
 /// time order. Called by the host at the start of each step (matching the
 /// scheduled-event window semantics).
@@ -1798,6 +1803,13 @@ impl EirModule {
                         .copied()
                         .ok_or(error(Status::EirInvalid, 16, 0))?;
                     let x = as_f64(v);
+                    // `log` is a debugging side-channel that persists across
+                    // steps; cap it so a program that prints every step cannot
+                    // grow memory without bound in a long (live) run.
+                    if env.log.len() >= MAX_LOG_LINES {
+                        let drop = env.log.len() + 1 - MAX_LOG_LINES;
+                        env.log.drain(0..drop);
+                    }
                     env.log.push(format!("{x}"));
                     stacks[depth - 1].insert(instruction.result_id, Immediate::F64(x));
                     pcs[depth - 1] += 1;
