@@ -1,0 +1,20 @@
+# Keep the book to its sources: everything else is ignored.
+*
+!README.md
+!README-ZH.md
+!CHANGELOG.md
+!LICENSE
+!SUMMARY.md
+!book.json
+!docs/
+!docs/**
+!rfc/
+!rfc/**
+!std/
+!std/README.md
+!tasks/
+!tasks/todo.md
+.git/
+.jj/
+.opencode/
+.zvec-grep/

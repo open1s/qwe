@@ -1,0 +1,10 @@
+{
+  "name": "honkit-plugin-pwe-highlight",
+  "version": "1.0.0",
+  "description": "Registers the `pwe` language with highlight.js so PWE code blocks highlight without warnings",
+  "main": "index.js",
+  "engines": {
+    "honkit": ">=6.0.0"
+  },
+  "license": "Apache-2.0"
+}

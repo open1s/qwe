@@ -1,0 +1,21 @@
+{
+    "title": "PWE — Program the physical world in 4D",
+    "author": "Open1s",
+    "language": "en",
+    "description": "A Rust microkernel runtime + language for deterministic, distributed simulation of a 4D world — 3D space, plus time.",
+    "plugins": ["pwe-highlight"],
+    "links": {
+        "sidebar": {
+            "GitHub": "https://github.com/open1s/qwe",
+            "Wiki": "https://github.com/open1s/qwe/wiki",
+            "Issues": "https://github.com/open1s/qwe/issues"
+        }
+    },
+    "pluginsConfig": {
+        "fontsettings": {
+            "theme": "white",
+            "family": "sans",
+            "size": 2
+        }
+    }
+}

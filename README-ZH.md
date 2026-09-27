@@ -238,7 +238,7 @@ cargo run -p pwe-reference --example language_demo
 完整的冻结 v0.2 契约（RFC-0019 … RFC-0036）：模式与规范化、WIR、EIR（类型化 SSA +
 支配性）、内存与栅栏、世界事务、分布式所有权、快照与增量、运行时 ABI
 （`include/pwe_abi.h`）、JIT/AOT、渲染帧、符合性与最小剖面、组件 ABI、Domain IR、
-能力、错误/限制、工件身份、交换信封。见 [`rfc/`](rfc) 与
+能力、错误/限制、工件身份、交换信封。见 [`rfc/`](rfc/README-v0.2.md) 与
 [`docs/rfc-alignment.md`](docs/rfc-alignment.md)。
 
 ---

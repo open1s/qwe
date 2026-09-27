@@ -1,0 +1,19 @@
+{
+  "name": "pwe-book",
+  "private": true,
+  "version": "0.1.0",
+  "description": "HonKit (GitBook-compatible) toolchain for the PWE book",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "scripts": {
+    "build": "honkit build .. book/_book",
+    "serve": "honkit serve .. book/_book",
+    "pdf": "honkit pdf .. book/_book/pwe.pdf"
+  },
+  "dependencies": {
+    "honkit-plugin-pwe-highlight": "file:plugins/pwe-highlight"
+  },
+  "devDependencies": {
+    "honkit": "^6.2.2"
+  }
+}

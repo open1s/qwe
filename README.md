@@ -253,7 +253,7 @@ WIR, EIR (typed SSA + dominance), memory & fences, world transactions,
 distributed ownership, snapshots & deltas, the runtime ABI (`include/pwe_abi.h`),
 JIT/AOT, render frames, conformance & the minimal profile, component ABI,
 Domain IR, capabilities, errors/limits, artifact identity, and the interchange
-envelope. See [`rfc/`](rfc) and [`docs/rfc-alignment.md`](docs/rfc-alignment.md).
+envelope. See [`rfc/`](rfc/README-v0.2.md) and [`docs/rfc-alignment.md`](docs/rfc-alignment.md).
 
 ---
 

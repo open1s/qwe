@@ -1,6 +1,11 @@
 /target/
 /.opencode/
+/book/node_modules/
+/book/_book/
+/_probe_out/
 /.zvec-grep/
 /graphify-out/
 **/*.rs.bk
 **/*.pweb
+**/node_modules/**
+/interaction_viewer.html
