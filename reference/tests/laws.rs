@@ -420,3 +420,45 @@ fn water_sodium_reaction_conserves_stoichiometry() {
     // Exothermic: temperature rises well above the 300 K start.
     assert!(temp > 700.0, "exotherm should heat the reactor: {temp}");
 }
+
+/// Three mutually gravitating bodies conserve total linear momentum: every body
+/// reads the same start-of-system snapshot (the engine's synchronized-read
+/// barrier), so the pairwise forces obey Newton's third law and cancel exactly.
+#[test]
+fn nbody_three_body_conserves_momentum() {
+    fn momentum(rt: &LangRuntime) -> [f64; 3] {
+        let mut p = [0.0f64; 3];
+        for id in 1..=3u128 {
+            let st = rt
+                .scene
+                .get(EntityId(id))
+                .and_then(|e| e.state.as_ref())
+                .unwrap();
+            let m = st.values[6];
+            p[0] += m * st.values[3];
+            p[1] += m * st.values[4];
+            p[2] += m * st.values[5];
+        }
+        p
+    }
+    let mut rt = compile(
+        r#"
+        world { gravity = (0,0,0)
+            entity a { state = ( 10,   0, 0, 0.0,  0.30, 0, 1.0) }
+            entity b { state = (  0,  10, 0, -0.30, 0.0,  0, 2.0) }
+            entity c { state = (-10,   0, 0, 0.0, -0.20, 0, 3.0) } }
+        systems { nbody { G = 1.0; dt = 0.0005 } }
+        "#,
+    );
+    let p0 = momentum(&rt);
+    rt.step_cross_n(4000).unwrap();
+    let p1 = momentum(&rt);
+    for k in 0..3 {
+        assert!(
+            (p1[k] - p0[k]).abs() < 1e-6,
+            "momentum axis {k}: {} -> {}",
+            p0[k],
+            p1[k]
+        );
+    }
+}
