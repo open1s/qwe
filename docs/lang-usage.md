@@ -525,6 +525,10 @@ unambiguous.
 System *kinds* and *params* are ordinary identifiers matched at build time (an
 unknown kind is detail 49). Builtins are ordinary calls special-cased in lowering.
 
+Casts: `i64(x)`/`i32(x)`/`u64(x)`/`u32(x)` truncate toward zero,
+`f64(x)` is the identity, `bool(x)` is `x != 0`. They make value-kind
+boundaries explicit (desugared to existing ops).
+
 `print(x)` is a debugging builtin: it records `x` in the run log (shown by
 `pwe run` / the live viewer) and returns `x` unchanged — write `let _ = print(x)`.
 

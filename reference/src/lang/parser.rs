@@ -718,6 +718,29 @@ pub(crate) fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
     if (name == "inte" || name == "deriv") && args.len() != 1 {
         return Err(error(Status::Invalid, 59));
     }
+    // Explicit numeric casts, desugared to existing ops (no new opcodes):
+    // `i64(x)` truncates toward zero; `f64(x)` is the identity; `bool(x)` is
+    // `x != 0`. They make the value-kind boundaries explicit in source.
+    if let Some(ty) = matches!(
+        name.as_str(),
+        "i64" | "i32" | "u64" | "u32" | "f64" | "bool"
+    )
+    .then_some(name.clone())
+    {
+        if args.len() != 1 {
+            return Err(error(Status::Invalid, 59));
+        }
+        let x = args.into_iter().next().ok_or(error(Status::Invalid, 59))?;
+        return Ok(match ty.as_str() {
+            "f64" => x,
+            "bool" => Expr::Cmp("!=", Box::new(x), Box::new(Expr::Const(0.0))),
+            // trunc(x) = sign(x) * floor(abs(x))
+            _ => Expr::Mul(
+                Box::new(Expr::Call("sign", vec![x.clone()])),
+                Box::new(Expr::Call("floor", vec![Expr::Call("abs", vec![x])])),
+            ),
+        });
+    }
     let static_name = match name.as_str() {
         "sin" => "sin",
         "cos" => "cos",

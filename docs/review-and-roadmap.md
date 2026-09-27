@@ -81,7 +81,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 
 ### Phase 2 — 类型系统与科学正确性
 - [x] 系统内同步屏障（`Barrier` = 系统边界；committed = start-of-system）
-- [ ] 值类型下沉（int/bool/数组）、单位升级为一等量纲检查
+- [~] 值类型：`let` 类型标注（89）、整型常量语义、显式转换 `i64/f64/bool(…)` 已交付；**int/bool 直达 EIR 寄存器**见 RFC-0043（Proposed）
 - [ ] 物理合理性运行时（守恒/CFL 诊断、内建已验证积分器）
 - [ ] 物理 demo 断言纳入 CI
 

@@ -2945,3 +2945,22 @@ fn send_recv_require_on() {
         48
     );
 }
+
+#[test]
+fn explicit_numeric_casts() {
+    // `i64` truncates toward zero; `f64` is identity; `bool` is x != 0.
+    let src = r#"
+        world { gravity=(0,0,0) entity e { state=(x = 0.0, y = 0.0, b = 0.0) } }
+        systems { update { on = e; dt = 1.0
+            x = i64( 3.9 ) + 0.0
+            y = i64( -3.9 ) + 0.0
+            b = bool( 5.0 ) + 0.0
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 3.0, "i64(3.9) = 3");
+    assert_eq!(st.values[1], -3.0, "i64(-3.9) = -3 (toward zero)");
+    assert_eq!(st.values[2], 1.0, "bool(5.0) = 1");
+}
