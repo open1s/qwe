@@ -8,6 +8,10 @@ upstream at github.com/open1s/qwe/issues. (3) a verification pass against
 the developer fix commit `1df656bb`: 0001–0015 verified fixed except
 0011 (reopened: `on`-less `send`/`recv` still corrupts, docs omit `on`) and
 the 0003 residual, filed as 0018; 0016 verified; 0017 still open by design.
+(4) a deep robustness/diagnostics/docs-conformance battery (0019–0026):
+283 probes across syntax/semantics/CLI with 0 panics — robustness passes;
+the findings below are diagnostics, semantic traps, and docs drift, all
+re-verified on main `9d6277fe`.
 
 | # | Severity | Title | File |
 | --- | --- | --- | --- |
@@ -29,6 +33,14 @@ the 0003 residual, filed as 0018; 0016 verified; 0017 still open by design.
 | [0016](https://github.com/open1s/qwe/issues/16) | Low | Most detail-77 errors print without source location | reference/src/lang/compile.rs:1408 |
 | [0017](https://github.com/open1s/qwe/issues/17) | Medium | F64 ÷0 is silent inf/NaN vs RFC-0021 "defined trap" | reference/src/eir.rs:2503 |
 | [0018](https://github.com/open1s/qwe/issues/18) | Low | Slot named `dt` unwritable; rule silently rebinds the timestep | reference/src/lang/parser.rs |
+| [0019](https://github.com/open1s/qwe/issues/19) | High | `schedule()` documented builtin never compiles (always detail 6) | reference/src/lang/lower.rs:547 |
+| [0020](https://github.com/open1s/qwe/issues/20) | Medium | EIR validation errors leak as bogus line-1 carets, "unspecified compile error" | reference/src/eir.rs:13,1075 |
+| [0021](https://github.com/open1s/qwe/issues/21) | Medium | `pwe run` drops the rich diagnostics pushed for details 88/69 | cli/src/main.rs:476,530 |
+| [0022](https://github.com/open1s/qwe/issues/22) | Medium | User `funcs` calls never arity-checked (silent extra args / runtime 17) | reference/src/lang/lower.rs:394 |
+| [0023](https://github.com/open1s/qwe/issues/23) | High | `rk4` silently drops plain assignments — wrong physics, 55 advice loop | reference/src/lang/compile.rs:286 |
+| [0024](https://github.com/open1s/qwe/issues/24) | Medium | Slot-index bounds bypassed by assign path; OOB reads silently 0.0 | reference/src/lang/compile.rs:210 |
+| [0025](https://github.com/open1s/qwe/issues/25) | Low | Docs conformance batch (L1 number, Appendix B, section order, color) | docs/lang-usage.md:149 |
+| [0026](https://github.com/open1s/qwe/issues/26) | Low | Misleading param diagnostics (watch `into`, send `chan`) | reference/src/lang/compile.rs:124 |
 
 ## Suggested order
 
@@ -44,4 +56,18 @@ the 0003 residual, filed as 0018; 0016 verified; 0017 still open by design.
 6. 0004, 0007, 0008, 0010 — documentation passes; 0005 — stale-limits sweep
    (include wiki FAQ and `docs/book/faq.md`).
 
-Local copies of the bodies live next to this file (`0001-…` … `0018-…`).
+Deep-battery batch (0019–0026):
+
+1. 0023 — silent wrong physics in the accuracy integrator; decide
+   assign-in-rk4 semantics before anything else touches rk4.
+2. 0019 — fully documented builtin is dead code; needs a contract decision
+   (yields nothing vs yields a handle), then a test.
+3. 0020 + 0021 — the two diagnostic pipelines (EIR compile errors, runtime
+   step failures) both throw away their messages; one fix each restores
+   every detail code that flows through them.
+4. 0022 + 0024 — arity and bounds checks exist but are wired to only one
+   path each; small, testable extensions of 52/59/85.
+5. 0025 + 0026 — docs sweep and message wording; can ride along with any
+   touch of the cited files.
+
+Local copies of the bodies live next to this file (`0001-…` … `0026-…`).
