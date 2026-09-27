@@ -11,7 +11,8 @@ the 0003 residual, filed as 0018; 0016 verified; 0017 still open by design.
 (4) a deep robustness/diagnostics/docs-conformance battery (0019–0026):
 283 probes across syntax/semantics/CLI with 0 panics — robustness passes;
 the findings below are diagnostics, semantic traps, and docs drift, all
-re-verified on main `9d6277fe`.
+re-verified on main `9d6277fe`; (5) a review of the typed-`let` commit
+`b682e692` (0027–0028, re-verified on that commit).
 
 | # | Severity | Title | File |
 | --- | --- | --- | --- |
@@ -41,6 +42,8 @@ re-verified on main `9d6277fe`.
 | [0024](https://github.com/open1s/qwe/issues/24) | Medium | Slot-index bounds bypassed by assign path; OOB reads silently 0.0 | reference/src/lang/compile.rs:210 |
 | [0025](https://github.com/open1s/qwe/issues/25) | Low | Docs conformance batch (L1 number, Appendix B, section order, color) | docs/lang-usage.md:149 |
 | [0026](https://github.com/open1s/qwe/issues/26) | Low | Misleading param diagnostics (watch `into`, send `chan`) | reference/src/lang/compile.rs:124 |
+| [0027](https://github.com/open1s/qwe/issues/27) | Medium | Annotated `let` in loop bodies swallowed: initializer replaced by type name, detail 89 bypassed | reference/src/lang/parser.rs:444 |
+| [0028](https://github.com/open1s/qwe/issues/28) | Low | `let` type check never types names: bool alias wrongly rejected (89), integer annotations vacuous | reference/src/lang/parser.rs:81 |
 
 ## Suggested order
 
@@ -70,4 +73,12 @@ Deep-battery batch (0019–0026):
 5. 0025 + 0026 — docs sweep and message wording; can ride along with any
    touch of the cited files.
 
-Local copies of the bodies live next to this file (`0001-…` … `0026-…`).
+Typed-`let` review batch (0027–0028):
+
+1. 0027 — the new feature is broken in loop bodies (silent wrong value +
+   check bypassed); one `parse_let_parts` call fixes it, needs loop/funcs
+   regression tests.
+2. 0028 — binding-aware annotation checking, `type_name` word boundary,
+   integer-annotation honesty; can follow 0027.
+
+Local copies of the bodies live next to this file (`0001-…` … `0028-…`).
