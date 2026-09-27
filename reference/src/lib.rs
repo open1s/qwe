@@ -22,6 +22,7 @@ pub mod jit;
 pub mod lang;
 pub mod math;
 pub mod module;
+pub mod native;
 pub mod ownership;
 pub mod physics;
 pub mod physics_eir;

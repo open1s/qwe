@@ -88,8 +88,9 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 ### Phase 3 — 高性能与多后端
 - [x] 解释器读路径优化：缓存规范组件 id（免 OnceLock 原子）、`pending`/`committed` 空覆盖快路径、覆盖表 BTreeMap→HashMap；缓存调用索引（`CallIndex`，免每步排序+哈希）。既有形态本已是"预译码"（扁平 `Vec<Instruction>` + 稠密寄存器 + 跳表分派）。
 - [x] 优化执行层（AOT/JIT 共用）：`EirModule::optimize` 做**常量折叠 + `Mul/Add→Fma` 超指令融合**（新增 opcode `Fma=235`，语义 = `(a*b)+c` 两次舍入，**位等价**）。`AotProgram::compile` 于编译期优化；`LangRuntime` 用优化模块执行、`jit` 保持通用 → `step_cross` 差分验证优化器。nbody-64 步进 ~7%；`Fma` 融合使算术指令 2048→784。
-- [ ] 真原生 JIT/AOT（Cranelift 或系统 `cc` 原生代码；`AotProgram.target` 处的后端边界）——需按 §12 评审依赖后实施
-- [ ] GPU/NPU 计算后端（WGSL）
+- [x] 真原生 AOT/JIT（纯 `funcs`，`native.rs` + `NATIVE_TARGET`）：把无世界访问、无副作用的 EIR 函数生成 C、用系统 `cc -O2 -ffp-contract=off` 编译成 `.dylib`/`.so`、`dlopen` 加载后直接调用。**逐位一致**差分测试通过（`native_pure_function_matches_interpreter`，64 组随机输入）。依赖：仅系统 C 编译器（缺失时返回错误，不作硬依赖）。
+- [ ] 世界访问型原生内核（`ReadView`/`WriteView` 经 C-ABI vtable 回调进 `SceneRuntime`）——原生支持的下一步
+- [ ] GPU/NPU 计算后端（WGSL）：本机浏览器无 WebGPU 宿主（`navigator.gpu` 缺失），无法在本环境执行验证；需要有 WebGPU 的宿主或离线校验器（naga/tint）后才能实施并验证
 
 ### Phase 4 — 普适性与生态
 - [ ] 语义化模块系统；fmt/REPL/LSP；doctest
@@ -108,6 +109,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 
 ## 4b. Phase 3 进展（本次迭代）
 - 解释器读路径 + 调用索引优化；优化层的常量折叠与 FMA 融合（`Fma` opcode）。
+- 真原生后端（纯函数）：C 代码生成 + `cc` + `dlopen`，与解释器逐位一致（差分测试）。
 - 基准（release，本机）：`step_interpreter(nbody 64)` ≈ 2.21 ms（优化前 2.28），`step_cross` ≈ 4.5 ms，`compile(nbody 64)` ≈ 93 ms（优化在编译期，代价 +~24%）。
 - 差分验证：全部 `step_cross`/conformance 用例通过（优化模块 ≡ 通用模块，字节一致）。
 
