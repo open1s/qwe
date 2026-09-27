@@ -20,7 +20,10 @@ of `4483cf46`/`c7ef2a65`/`9bfc38b4`/`8b892c1c` on main `8b892c1c` —
 of `ea8caf6e` (closures of 0006/0020/0022/0025/0026/0028/0029) on main
 `ea8caf6e` — #20/#22/#25/#26/#29 verified fixed and left closed (gates
 green: fmt, clippy, 308 tests, conformance 18/18); #6/#28 reopened again
-as partial with evidence comments.
+as partial with evidence comments; (8) a review of the native backend
+commit `7cc2d5a5` — gates green at the commit (fmt, clippy, 311 tests,
+conformance 18/18), but probe-verified semantic/crash findings filed as
+0030–0034 and an RFC-0027 contract finding as 0035.
 
 | # | Severity | Title | File |
 | --- | --- | --- | --- |
@@ -53,6 +56,12 @@ as partial with evidence comments.
 | [0027](https://github.com/open1s/qwe/issues/27) | Medium | Annotated `let` in loop bodies swallowed: initializer replaced by type name, detail 89 bypassed | reference/src/lang/parser.rs:444 |
 | [0028](https://github.com/open1s/qwe/issues/28) | Low | `let` type check never types names: bool alias wrongly rejected (89), integer annotations vacuous | reference/src/lang/parser.rs:81 |
 | [0029](https://github.com/open1s/qwe/issues/29) | Low | Mailbox blockquote wedged mid-table breaks the system-parameter table rendering | docs/lang-usage.md:603 |
+| [0030](https://github.com/open1s/qwe/issues/30) | High | `NativeProgram::call` has no arity validation: safe API SIGSEGVs on wrong-length args | reference/src/native.rs:181 |
+| [0031](https://github.com/open1s/qwe/issues/31) | High | Same-process recompile silently executes the first program's code (fixed temp path + dlopen cache) | reference/src/native.rs:132 |
+| [0032](https://github.com/open1s/qwe/issues/32) | Medium | Native f64 Div/Rem by zero returns inf/NaN instead of the RFC-0021 trap (interpreter detail 18) | reference/src/native.rs:241 |
+| [0033](https://github.com/open1s/qwe/issues/33) | Medium | Native `Sign` diverges from interpreter `signum` at 0.0, −0.0, NaN | reference/src/native.rs:317 |
+| [0034](https://github.com/open1s/qwe/issues/34) | Medium | Native CondBr/Select conditions: IEEE `!= 0.0` vs interpreter bit-test (`-0.0` diverges); differential-test coverage gap | reference/src/native.rs:326 |
+| [0035](https://github.com/open1s/qwe/issues/35) | Medium | Native backend bypasses RFC-0027 normative lifecycle (no Validate/CapabilityCheck/manifest/artifact identity) | reference/src/native.rs:122 |
 
 ## Suggested order
 
@@ -121,4 +130,17 @@ Fix-verification pass 2 (`ea8caf6e`, pass 7 — closures of 0006/0020/0022/
    with byte offset 0 (no caret), wrong-section-order parse error still
    names the grammar rule (order is now documented).
 
-Local copies of the bodies live next to this file (`0001-…` … `0029-…`).
+Native-backend review batch (0030–0035, commit `7cc2d5a5`):
+
+1. 0030 + 0031 — safety/staleness first: arity guard on the safe
+   `call()` API; unique hash-keyed artifact path + cleanup (also
+   delivers the artifact-identity part of 0035).
+2. 0032 + 0033 + 0034 — interpreter equivalence: trap channel or
+   `Div`/`Rem` exclusion, exact `sign` semantics, bit-level condition
+   tests; grow the differential test into an opcode × input-class
+   matrix (zeros, `±0.0`, NaN, inf, branches).
+3. 0035 — settle RFC-0027 conformance (implement the lifecycle or
+   amend the RFC deliberately) before wiring the backend into any
+   production entry point.
+
+Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
