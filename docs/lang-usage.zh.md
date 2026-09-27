@@ -138,7 +138,7 @@ systems {
 }
 ```
 
-运行：`pwe run osc.pweb --steps 200` → `state = [0.7226, -1.1813]`。质量块来回摆动，
+运行：`pwe run osc.pweb --steps 200` → `state = [0.6302, -1.5751]`。质量块来回摆动，
 能量缓慢衰减（阻尼），最终趋于 0。
 
 **最关键的一条规则**：`slot = expr` 就是普通的**赋值** —— 每步该槽取这个值。
@@ -360,7 +360,7 @@ systems {
 entity ball { position = (0, 5, 0) sphere = 0.3; color = 0xFF6B4A; opacity = 1.0; glow = 0.3; label = true }
 ```
 
-* `color = 0xRRGGBB`、`opacity` `[0,1]`、`glow`（自发光）、`label = false` 隐藏名称、
+* `color = 0xRRGGBB`（恰好 6 位十六进制）、`opacity` `[0,1]`、`glow`（自发光）、`label = false` 隐藏名称、
   `size = v | (dx,dy,dz)` 设定标记/盒尺寸。
 * `shape = point | sphere | box | capsule | <自定义>` 覆盖碰撞体形状。
 * **自定义形状**可组合基本体、`hull`/`poly` 多面体、SVG，乃至彼此：
@@ -471,7 +471,7 @@ update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 | `value` | `number`（`/ number`）? | 字面量**或比值**（`1/60`） |
 | `boolean` | `true` \| `false` | |
 | `string` | `"…"`（无转义） | 标题、SVG 数据 |
-| `color` | `0x` 十六进制 | `0xRRGGBB` |
+| `color` | `0x` + 6 位十六进制 | `0xRRGGBB` |
 | `unit` | `[ m/s^2 ]` | 基本单位 `m kg s A K mol cd`；`* / ^`；仅编译期 |
 | `slot` | `s` 数字 | 按位置引用自身状态槽 |
 | 常量 | `t`、`pi`、`e` | 时钟（秒）、π、自然常数 |
@@ -565,9 +565,9 @@ update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 | `force` | `ax`,`ay`,`az`,`dt` | 分量 | `velocity += (ax,ay,az)·dt` |
 | `wall` | `x`,`z`,`y_min?`,`restitution?` | 分量 | 在 `±x`、`±z` 反射 |
 | `ground_contact` | `restitution` | 分量 | 解算 `y=0` 平面 |
-| `linear` | `slots`,`dt`,`row0=(…)`,… | 状态 | `s_N' = Σ a_j s_j + c` |
-| `nbody` | `G`,`dt` | 状态 | 平方反比；`state=(px,py,pz,vx,vy,vz,m)` |
-| `send`/`recv` | `chan`,`value` / `chan`,`slot` | 通道 | 通道收发 |
+| `linear` | `slots`,`dt`,`row0=(…)`,… | 状态 | `ds/dt = A·s + c`（欧拉） |
+| `nbody`（velocity-Verlet） | `G`,`dt` | 状态 | 平方反比；`state=(px,py,pz,vx,vy,vz,m)` |
+| `send`/`recv` | `on`(必需),`chan`,`value` / `on`(必需),`chan`,`slot` | 通道 | 通道收发（限定 `on`） |
 | `update` | `dt`,`on?`,`when?`,`every?`,`substeps?`,规则 | 状态 | 显式欧拉 |
 | `rk4` | `dt`,`on?`,`when?`,`every?`,`substeps?`,规则 | 状态 | 4 阶 RK |
 | `invariant` | `expr`,`on?` | — | 每步断言 |
@@ -606,6 +606,8 @@ asin acos atan`；2 元：`pow atan2 hypot min max`；`if(c,a,b)`；`random()`�
 场 `fget fset flap`。没有 `tan`（用 `sin/cos`）。其它名字是 `funcs` 函数。
 
 ## 2.10 `funcs`、单位、循环
+
+* 各段必须按顺序出现：`world`（必需）→ `funcs`（可选）→ `systems`（可选）。
 
 * `funcs { f(a,b) { expr } }` —— 纯标量函数；不能访问世界。
 * 单位：给 `state`/参数标注 `[m]`、`[m/s]`、`[1/s^2]`；不一致为 detail 77；未标注即
@@ -749,6 +751,19 @@ error 48: system 'update' is missing required parameter 'dt'
 | 78 | 未知池名（`spawn`/`despawn`）。 |
 | 79 | 未知形状 / 形状引用环。 |
 | 80 | 未知结构体类型 / 结构体环 / 状态过大。 |
+| 83 | 不支持的 `lang_version`。 |
+| 84 | 单位注解格式错误。 |
+| 85 | 未知标识符（读作 0.0）—— 警告。 |
+| 86 | 求解器设置不稳定（CFL / 扩散极限）。 |
+| 87 | 守恒量漂移超过 `tolerance`。 |
+| 88 | 状态非有限（仿真发散）—— 配合 `pwe run --check`。 |
+| 89 | `let` 类型标注不符。 |
+| 90 | 缺少单位注解（`units = "strict"`）。 |
+| 91 | `nbody` 物体状态槽不足 7 个。 |
+| 92 | `nbody` 物体同时有 `mass` 字段（被忽略；质量为 `state[6]`）—— 警告。 |
+| 93 | `rk4` 中使用普通赋值（请用 `inte slot = rate` 积分）。 |
+| 94 | 状态槽名与系统参数名冲突 —— 警告。 |
+| 95 | `nbody` 物体暴露槽 7/8/9 但未设 `orient = true` —— 警告。 |
 
 **调试流程**：缩减到一个实体 + 一个系统；核对模型（§0.6）；核对积分/赋值陷阱；加
 `invariant`；`run … --steps N` 读打印状态。
@@ -837,7 +852,7 @@ systems {
 ## 附录 B —— 稳定性检查清单
 
 * [ ] 每个物体只用一种模型（§0.6）。
-* [ ] 规则是 `slot = <表达式>`；赋值用 `slot = (target - slot)`。
+* [ ] 规则是 `slot = <表达式>`（**赋值**）；用 `slot = slot + inte(rate)` 或 `inte slot = rate` 积分。
 * [ ] 需要处设置了 `on = <实体|池>`。
 * [ ] 系统顺序：力/重力 → 积分 → 约束/边界。
 * [ ] 求解器稳定条件满足（`diffuse` rate、`wave` Courant）。
@@ -845,4 +860,5 @@ systems {
 * [ ] 空间查询仅在规则内；场操作第一个参数是字面量场名。
 * [ ] 状态 ≤ 16 槽；循环在上限内；动态槽左侧仅 `update`。
 * [ ] 除非 `orient = true`，槽 7 保留。
+* [ ] `nbody` 物体声明 `state=(px,py,pz,vx,vy,vz,m)`（detail 91）。
 * [ ] `random()`/`noise()` 可接受（有种子、确定性）。

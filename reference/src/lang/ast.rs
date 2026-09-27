@@ -33,8 +33,10 @@ pub struct SystemDecl {
 /// (enforced by the grammar).
 #[derive(Clone, Debug, PartialEq)]
 pub enum UpdateStmt {
-    /// `let name = expr` — a reusable local computed before the slot rules run.
-    Let(String, String),
+    /// `let name[: type] = expr` — a reusable local computed before the slot
+    /// rules run. The third field is the optional annotation: `Some(true)` for
+    /// `: bool`, `Some(false)` for a numeric type, `None` when unannotated.
+    Let(String, String, Option<bool>),
     /// `repeat n { … }` / `repeat n until (cond) { … }` — unrolled at lowering
     /// time, bounded.
     Repeat(usize, Vec<UpdateStmt>),

@@ -2964,3 +2964,77 @@ fn explicit_numeric_casts() {
     assert_eq!(st.values[1], -3.0, "i64(-3.9) = -3 (toward zero)");
     assert_eq!(st.values[2], 1.0, "bool(5.0) = 1");
 }
+
+#[test]
+fn reviewed_bugs_0020_0022_0026_0028_followup() {
+    let detail = |src: &str| match LangRuntime::compile(src) {
+        Ok(_) => 0,
+        Err(e) => e.detail,
+    };
+    let sys = |body: &str| {
+        format!("world {{ gravity=(0,0,0) entity e {{ state=(x=1.0) }} }} systems {{ update {{ on=e; dt=0.01 {body} }} }}")
+    };
+    // #20: 1-arg math builtins are arity-checked (detail 59), not deferred to EIR.
+    assert_eq!(detail(&sys("x = sin(1.0, 2.0)")), 59, "sin arity");
+    assert_eq!(detail(&sys("x = min(1.0)")), 59, "min arity");
+    // #20: an unknown function name is a clear error, not EIR detail 6.
+    assert_eq!(detail(&sys("x = tan(1.0)")), 59, "tan unknown");
+    // #22: user `funcs` calls are arity-checked.
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=1.0) } } funcs { f(a) { a*2.0 } } systems { update { on=e; dt=0.01 x = f(1.0, 2.0) } }"),
+        59
+    );
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=1.0) } } funcs { f(a,b) { a*b } } systems { update { on=e; dt=0.01 x = f(5.0) } }"),
+        59
+    );
+    // #26: `watch { into = flag }` is reported as wrong-kind, not "missing".
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=1.0) } } systems { watch { on=e; expr=1.0; mem=0; into=flag } }"),
+        48
+    );
+    // #26: `send` without `chan` is a missing-parameter error (detail 48).
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=1.0) } } systems { send { on=e; value=1.0 } }"),
+        48
+    );
+    // #28: a bool-typed binding may be aliased by a `bool` let.
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=1.0, y=0.0) } } systems { update { on=e; dt=1.0 let a: bool = x > 0.0  let b: bool = a  y = b } }"),
+        0
+    );
+    // #28: a bool used as a number is rejected (detail 89).
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=1.0, y=0.0) } } systems { update { on=e; dt=1.0 let b: bool = x > 0.0  let c: f64 = b + 1.0  y = c } }"),
+        89
+    );
+    // #25: a color literal must be exactly `0xRRGGBB` (detail 64).
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=0.0); color=0x12345 } } systems { update { on=e; dt=1.0 x = x } }"),
+        64
+    );
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=0.0); color=0xFF6B4ACC } } systems { update { on=e; dt=1.0 x = x } }"),
+        64
+    );
+    // #28: an unknown type annotation is detail 89, not a grammar error.
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=1.0, y=0.0) } } systems { update { on=e; dt=1.0 let a: boolean = x > 0.0  y = a } }"),
+        89
+    );
+}
+
+#[test]
+fn nbody_orient_slot_warning() {
+    // #6: an nbody body exposing slot 7 without `orient = true` is advisory
+    // (detail 95): slot 7 is read as a Z-spin, not a euler angle.
+    clear_diagnostics();
+    let src = "world { gravity=(0,0,0) entity b { state=(px=0.,py=0.,pz=0.,vx=0.,vy=0.,vz=0.,m=1.,s7=0.) } }                systems { nbody { G=1.0; dt=0.1 } }";
+    LangRuntime::compile(src).unwrap();
+    let ds = take_diagnostics();
+    assert!(
+        ds.iter().any(|d| d.detail == 95),
+        "expected detail 95 warning, got {ds:?}"
+    );
+    clear_diagnostics();
+}

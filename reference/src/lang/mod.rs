@@ -329,6 +329,16 @@ fn apply_entity_field(
         }
         Rule::color_field => {
             let hex = next_pair(&mut field.into_inner())?.as_str();
+            // `0xRRGGBB` exactly (6 hex digits); only 24 bits are rendered
+            // (`present::EntityVisual` masks to `0xFF_FFFF`).
+            if hex.len() != 8 {
+                return Err(error_at(
+                    Status::Invalid,
+                    64,
+                    0,
+                    format!("color literal `{hex}` must be 0xRRGGBB (exactly 6 hex digits)"),
+                ));
+            }
             let v = u32::from_str_radix(&hex[2..], 16).map_err(|_| error(Status::Invalid, 64))?;
             decl.color = Some(v);
         }

@@ -79,10 +79,10 @@ pub(crate) enum LangType {
     Bool,
 }
 
-/// The known surface type of an expression, if any: comparisons/logical ops are
-/// `bool`, numeric literals/arithmetic are `float`, and a bare name is *unknown*
-/// (it may alias a bool-typed local), so annotation checks accept it.
-pub(crate) fn expr_lang_type(e: &Expr) -> Option<LangType> {
+/// The known surface kind of an expression: comparisons/logical ops are `bool`,
+/// everything else numeric, and a bare name takes the kind of the earlier `let`
+/// that bound it (if any). Used by [`check_let_types`].
+fn infer_kind(e: &Expr, env: &std::collections::HashMap<String, LangType>) -> Option<LangType> {
     match e {
         Expr::Cmp(..) | Expr::And(..) | Expr::Or(..) | Expr::Not(..) => Some(LangType::Bool),
         Expr::Const(_)
@@ -92,14 +92,151 @@ pub(crate) fn expr_lang_type(e: &Expr) -> Option<LangType> {
         | Expr::Div(..)
         | Expr::Rem(..)
         | Expr::Neg(..) => Some(LangType::Float),
-        Expr::Name(_)
-        | Expr::Slot(_)
-        | Expr::SlotDyn(_)
-        | Expr::Ref(..)
-        | Expr::PropRef(..)
-        | Expr::Time
-        | Expr::Call(..) => None,
+        Expr::Name(n) => env.get(n).copied(),
+        _ => None,
     }
+}
+
+/// The name of the first `bool`-typed value used in a *numeric* position
+/// (arithmetic/comparison operand), if any. Boolean operators (`and`/`or`/`not`)
+/// take condition operands, so they are not flagged.
+fn bool_in_numeric(e: &Expr, env: &std::collections::HashMap<String, LangType>) -> Option<String> {
+    match e {
+        Expr::Name(n) if env.get(n) == Some(&LangType::Bool) => Some(n.clone()),
+        Expr::Add(a, b)
+        | Expr::Sub(a, b)
+        | Expr::Mul(a, b)
+        | Expr::Div(a, b)
+        | Expr::Rem(a, b)
+        | Expr::Cmp(_, a, b) => bool_in_numeric(a, env).or_else(|| bool_in_numeric(b, env)),
+        Expr::Neg(a) | Expr::SlotDyn(a) => bool_in_numeric(a, env),
+        Expr::Call(_, args) => args.iter().find_map(|a| bool_in_numeric(a, env)),
+        _ => None,
+    }
+}
+
+/// Validates `let` annotations using the kinds of earlier bindings in scope, so
+/// aliasing a bool binding is accepted and a bool used as a number is rejected
+/// (detail 89). Runs per statement list, in order.
+pub(crate) fn check_let_types(stmts: &[UpdateStmt], offset: usize) -> Result<()> {
+    let mut env: std::collections::HashMap<String, LangType> = Default::default();
+    check_let_types_env(stmts, offset, &mut env)
+}
+
+fn check_let_types_env(
+    stmts: &[UpdateStmt],
+    offset: usize,
+    env: &mut std::collections::HashMap<String, LangType>,
+) -> Result<()> {
+    for s in stmts {
+        match s {
+            UpdateStmt::Let(name, text, ann) => {
+                if name == "_" {
+                    continue;
+                }
+                let expr = parse_expr_str(text)?;
+                let inferred = infer_kind(&expr, env);
+                match ann {
+                    Some(true) => {
+                        if inferred == Some(LangType::Float) {
+                            return Err(error_at(
+                                Status::Invalid,
+                                89,
+                                offset,
+                                format!("`let {name}: bool` but the expression is a number"),
+                            ));
+                        }
+                    }
+                    Some(false) => {
+                        if inferred == Some(LangType::Bool) {
+                            return Err(error_at(
+                                Status::Invalid,
+                                89,
+                                offset,
+                                format!(
+                                    "`let {name}` is annotated numeric but the expression is bool"
+                                ),
+                            ));
+                        }
+                        if let Some(bn) = bool_in_numeric(&expr, env) {
+                            return Err(error_at(
+                                Status::Invalid,
+                                89,
+                                offset,
+                                format!("`{bn}` is bool, used as a number in `let {name}`"),
+                            ));
+                        }
+                    }
+                    None => {}
+                }
+                if let Some(k) = inferred {
+                    env.insert(name.clone(), k);
+                }
+            }
+            UpdateStmt::Repeat(_, body) => check_let_types_env(body, offset, env)?,
+            UpdateStmt::For(idx, _, _, body) => {
+                env.insert(idx.clone(), LangType::Float);
+                check_let_types_env(body, offset, env)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The names of built-in call forms (validated in [`build_call`]); anything else
+/// in a call position must be a user-defined `funcs` function.
+pub(crate) fn is_builtin_call(name: &str) -> bool {
+    matches!(
+        name,
+        "sin"
+            | "cos"
+            | "exp"
+            | "ln"
+            | "sqrt"
+            | "pow"
+            | "min"
+            | "max"
+            | "if"
+            | "random"
+            | "print"
+            | "emit"
+            | "active"
+            | "neighbor_count"
+            | "nearest_dist"
+            | "schedule"
+            | "at"
+            | "periodic"
+            | "neighbor_mean"
+            | "nearest_dx"
+            | "nearest_dy"
+            | "nearest_dz"
+            | "noise"
+            | "vlen"
+            | "vdot"
+            | "vdist"
+            | "last_event"
+            | "fget"
+            | "flap"
+            | "fset"
+            | "abs"
+            | "floor"
+            | "ceil"
+            | "round"
+            | "sign"
+            | "log10"
+            | "log2"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "atan2"
+            | "hypot"
+            | "inte"
+            | "deriv"
+    )
 }
 
 /// Evaluates a purely-integer constant expression with **integer** semantics
@@ -132,46 +269,45 @@ fn fold_int(e: &Expr) -> Option<i64> {
     }
 }
 
-/// Parses a `let` binding: `let name[: type] = expr`, checking the optional
-/// annotation (detail 89). Returns `(name, expr_text)`.
-pub(crate) fn parse_let_parts(first: Pair<'_, Rule>, offset: usize) -> Result<(String, String)> {
+/// Parses a `let` binding: `let name[: type] = expr`. Returns
+/// `(name, expr_text, annotation)` where the annotation is `Some(true)` for
+/// `: bool`, `Some(false)` for a numeric type (`f64`/`i64`/`i32`/`u64`/`u32`),
+/// and `None` when unannotated. The annotation is checked later by
+/// [`check_let_types`] (which tracks earlier bindings). Integer-annotated
+/// constant expressions are folded with integer semantics.
+pub(crate) fn parse_let_parts(
+    first: Pair<'_, Rule>,
+    offset: usize,
+) -> Result<(String, String, Option<bool>)> {
     let mut li = first.into_inner();
     let name = next_pair(&mut li)?.as_str().to_string();
     check_let_name(&name, offset)?;
     let mut nxt = next_pair(&mut li)?;
     if nxt.as_rule() == Rule::type_name {
         let ty = nxt.as_str().to_string();
+        let is_bool = match ty.as_str() {
+            "bool" => true,
+            "f64" | "i64" | "i32" | "u64" | "u32" => false,
+            other => {
+                return Err(error_at(
+                    Status::Invalid,
+                    89,
+                    offset,
+                    format!("unknown type `{other}` (expected f64/i64/i32/u64/u32/bool)"),
+                ))
+            }
+        };
         nxt = next_pair(&mut li)?;
         let expr = nxt.as_str().trim().to_string();
-        let actual = expr_lang_type(&parse_expr_str(&expr)?);
-        let ok = match (ty.as_str(), actual) {
-            (_, None) => true, // unknown (e.g. a name) — accept
-            ("bool", Some(LangType::Bool)) => true,
-            ("f64" | "i64" | "i32" | "u64" | "u32", Some(LangType::Float)) => true,
-            _ => false,
-        };
-        if !ok {
-            let got = if actual == Some(LangType::Bool) {
-                "bool"
-            } else {
-                "number"
-            };
-            return Err(error_at(
-                Status::Invalid,
-                89,
-                offset,
-                format!("`let {name}: {ty}` but the expression is {got}"),
-            ));
-        }
         // Integer-annotated bindings take integer semantics for constant exprs.
         if matches!(ty.as_str(), "i64" | "i32" | "u64" | "u32") {
             if let Some(v) = fold_int(&parse_expr_str(&expr)?) {
-                return Ok((name, v.to_string()));
+                return Ok((name, v.to_string(), Some(false)));
             }
         }
-        return Ok((name, expr));
+        return Ok((name, expr, Some(is_bool)));
     }
-    Ok((name, nxt.as_str().trim().to_string()))
+    Ok((name, nxt.as_str().trim().to_string(), None))
 }
 
 pub(crate) fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
@@ -181,8 +317,8 @@ pub(crate) fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Resul
     if first.as_rule() == Rule::let_stmt {
         // The literal `let` is transparent; children are [ident(name),
         // (type_name)?, expr].
-        let (name, expr) = parse_let_parts(first, decl.byte_offset)?;
-        decl.update_stmts.push(UpdateStmt::Let(name, expr));
+        let (name, expr, ann) = parse_let_parts(first, decl.byte_offset)?;
+        decl.update_stmts.push(UpdateStmt::Let(name, expr, ann));
         return Ok(());
     }
     // `repeat` / `for` loops keep their tree structure for gated lowering.
@@ -196,7 +332,7 @@ pub(crate) fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Resul
     if first.as_rule() == Rule::call {
         let text = first.as_str().trim().to_string();
         decl.update_stmts
-            .push(UpdateStmt::Let("_".to_string(), text));
+            .push(UpdateStmt::Let("_".to_string(), text, None));
         return Ok(());
     }
     if first.as_rule() == Rule::ode_stmt || first.as_rule() == Rule::add_stmt {
@@ -464,15 +600,19 @@ pub(crate) fn build_loop_stmt(pair: Pair<'_, Rule>, offset: usize) -> Result<Upd
 
 /// Converts parsed update statements (expr texts) into their resolved `Expr`
 /// form, keeping the loop / break / continue structure for gated lowering.
-pub(crate) fn to_let_stmts(stmts: &[UpdateStmt]) -> Result<Vec<LetStmt>> {
+pub(crate) fn to_let_stmts(stmts: &[UpdateStmt], offset: usize) -> Result<Vec<LetStmt>> {
+    check_let_types(stmts, offset)?;
     stmts
         .iter()
         .map(|s| match s {
-            UpdateStmt::Let(name, text) => Ok(LetStmt::Let(name.clone(), parse_expr_str(text)?)),
-            UpdateStmt::Repeat(n, body) => Ok(LetStmt::Repeat(*n, to_let_stmts(body)?)),
-            UpdateStmt::For(name, lo, hi, body) => {
-                Ok(LetStmt::For(name.clone(), *lo, *hi, to_let_stmts(body)?))
-            }
+            UpdateStmt::Let(name, text, _) => Ok(LetStmt::Let(name.clone(), parse_expr_str(text)?)),
+            UpdateStmt::Repeat(n, body) => Ok(LetStmt::Repeat(*n, to_let_stmts(body, offset)?)),
+            UpdateStmt::For(name, lo, hi, body) => Ok(LetStmt::For(
+                name.clone(),
+                *lo,
+                *hi,
+                to_let_stmts(body, offset)?,
+            )),
             UpdateStmt::Break(cond) => Ok(LetStmt::Break(match cond {
                 Some(text) => Some(parse_expr_str(text)?),
                 None => None,
@@ -503,8 +643,8 @@ pub(crate) fn build_loop_body<'a>(
         let inner = item.into_inner().next().ok_or(error(Status::Invalid, 56))?;
         match inner.as_rule() {
             Rule::let_stmt => {
-                let (name, expr) = parse_let_parts(inner, offset)?;
-                body.push(UpdateStmt::Let(name, expr));
+                let (name, expr, ann) = parse_let_parts(inner, offset)?;
+                body.push(UpdateStmt::Let(name, expr, ann));
             }
             Rule::repeat_stmt | Rule::for_stmt => body.push(build_loop_stmt(inner, offset)?),
             Rule::break_stmt | Rule::continue_stmt => {
@@ -716,7 +856,12 @@ pub(crate) fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
     // The `inte`/`deriv` operators are special-cased in lowering; keep their
     // names so `lower_inte_deriv` can distinguish them.
     if (name == "inte" || name == "deriv") && args.len() != 1 {
-        return Err(error(Status::Invalid, 59));
+        return Err(error_at(
+            Status::Invalid,
+            59,
+            0,
+            format!("`{name}` called with the wrong number of arguments"),
+        ));
     }
     // Explicit numeric casts, desugared to existing ops (no new opcodes):
     // `i64(x)` truncates toward zero; `f64(x)` is the identity; `bool(x)` is
@@ -728,7 +873,12 @@ pub(crate) fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
     .then_some(name.clone())
     {
         if args.len() != 1 {
-            return Err(error(Status::Invalid, 59));
+            return Err(error_at(
+                Status::Invalid,
+                59,
+                0,
+                format!("`{name}` called with the wrong number of arguments"),
+            ));
         }
         let x = args.into_iter().next().ok_or(error(Status::Invalid, 59))?;
         return Ok(match ty.as_str() {
@@ -742,15 +892,42 @@ pub(crate) fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
         });
     }
     let static_name = match name.as_str() {
-        "sin" => "sin",
-        "cos" => "cos",
-        "exp" => "exp",
-        "ln" => "ln",
-        "sqrt" => "sqrt",
-        "pow" => "pow",
+        "sin" | "cos" | "exp" | "ln" | "sqrt" => {
+            if args.len() != 1 {
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
+            }
+            match name.as_str() {
+                "sin" => "sin",
+                "cos" => "cos",
+                "exp" => "exp",
+                "ln" => "ln",
+                _ => "sqrt",
+            }
+        }
+        "pow" => {
+            if args.len() != 2 {
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
+            }
+            "pow"
+        }
         "min" | "max" => {
             if args.len() != 2 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             if name == "min" {
                 "min"
@@ -760,97 +937,172 @@ pub(crate) fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
         }
         "if" => {
             if args.len() != 3 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "if"
         }
         "random" => {
             if !args.is_empty() {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "random"
         }
         "print" => {
             if args.len() != 1 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "print"
         }
         "emit" => {
             if args.len() != 2 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "emit"
         }
         // RFC-0038: the current entity's activation flag.
         "active" => {
             if !args.is_empty() {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "active"
         }
         // Spatial queries: `neighbor_count(radius)` / `nearest_dist()`.
         "neighbor_count" => {
             if args.len() != 1 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "neighbor_count"
         }
         "nearest_dist" => {
             if !args.is_empty() {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "nearest_dist"
         }
         // Scheduled events (discrete-event scheduling on the step grid).
         "schedule" => {
             if args.len() != 4 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "schedule"
         }
         "at" => {
             if args.len() != 1 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "at"
         }
         "periodic" => {
             if args.is_empty() || args.len() > 2 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "periodic"
         }
         // Neighborhood aggregates / directional sensing.
         "neighbor_mean" => {
             if args.len() != 2 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "neighbor_mean"
         }
         "nearest_dx" | "nearest_dy" | "nearest_dz" => {
             if !args.is_empty() {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             Box::leak(name.clone().into_boxed_str())
         }
         // Statistical noise: `noise()` (standard normal, Box–Muller).
         "noise" => {
             if !args.is_empty() {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "noise"
         }
         // Vector helpers over scalar components.
         "vlen" => {
             if args.len() != 3 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "vlen"
         }
         "vdot" | "vdist" => {
             if args.len() != 6 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             Box::leak(name.clone().into_boxed_str())
         }
@@ -858,7 +1110,12 @@ pub(crate) fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
         // of that kind emitted so far in this step.
         "last_event" => {
             if args.len() != 1 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "last_event"
         }
@@ -868,7 +1125,12 @@ pub(crate) fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
             // 2D `fget(f, i, j)` or 3D `fget(f, i, j, k)`.
             if !(args.len() == 3 || args.len() == 4) || !matches!(args.first(), Some(Expr::Name(_)))
             {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             Box::leak(name.clone().into_boxed_str())
         }
@@ -876,7 +1138,12 @@ pub(crate) fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
             // 2D `fset(f, i, j, v)` or 3D `fset(f, i, j, k, v)`.
             if !(args.len() == 4 || args.len() == 5) || !matches!(args.first(), Some(Expr::Name(_)))
             {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             "fset"
         }
@@ -884,14 +1151,24 @@ pub(crate) fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
         "abs" | "floor" | "ceil" | "round" | "sign" | "log10" | "log2" | "sinh" | "cosh"
         | "tanh" | "asin" | "acos" | "atan" => {
             if args.len() != 1 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             Box::leak(name.clone().into_boxed_str())
         }
         // Extended binary math builtins (2 args).
         "atan2" | "hypot" => {
             if args.len() != 2 {
-                return Err(error(Status::Invalid, 59));
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
             }
             Box::leak(name.clone().into_boxed_str())
         }
@@ -1393,9 +1670,9 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             while i < children.len() {
                                 match children[i].as_rule() {
                                     Rule::let_stmt => {
-                                        let (lname, text) =
+                                        let (lname, text, ann) =
                                             parse_let_parts(children[i].clone(), 0)?;
-                                        stmts.push(UpdateStmt::Let(lname, text));
+                                        stmts.push(UpdateStmt::Let(lname, text, ann));
                                         i += 1;
                                     }
                                     Rule::repeat_stmt | Rule::for_stmt => {

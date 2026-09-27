@@ -380,7 +380,7 @@ Presentation never affects the simulation. Attributes:
 entity ball { position = (0, 5, 0) sphere = 0.3; color = 0xFF6B4A; opacity = 1.0; glow = 0.3; label = true }
 ```
 
-* `color = 0xRRGGBB`, `opacity` `[0,1]`, `glow` (emissive), `label = false` hides
+* `color = 0xRRGGBB` (exactly 6 hex digits), `opacity` `[0,1]`, `glow` (emissive), `label = false` hides
   the name, `size = v | (dx,dy,dz)` sets marker/box size.
 * `shape = point | sphere | box | capsule | <custom>` overrides the collider shape.
 * **Custom shapes** compose primitives, `hull`/`poly` polyhedra, SVG, and each
@@ -495,7 +495,7 @@ update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 | `value` | `number` (`/ number`)? | literal **or ratio** (`1/60`) |
 | `boolean` | `true` \| `false` | |
 | `string` | `"…"` (no escapes) | titles, SVG data |
-| `color` | `0x` hex | `0xRRGGBB` |
+| `color` | `0x` + 6 hex digits | `0xRRGGBB` |
 | `unit` | `[ m/s^2 ]` | base `m kg s A K mol cd`; `* / ^`; compile-time only |
 | `slot` | `s` digits | own state slot by position |
 | constants | `t`, `pi`, `e` | clock (s), π, Euler's number |
@@ -602,15 +602,9 @@ field name; cell writes are visible to later reads in the same step.
 | `force` | `ax`,`ay`,`az`,`dt` | component | `velocity += (ax,ay,az)·dt` |
 | `wall` | `x`,`z`,`y_min?`,`restitution?` | component | reflect at `±x`,`±z` |
 | `ground_contact` | `restitution` | component | resolve the `y=0` plane |
-| `linear` | `slots`,`dt`,`row0=(…)`,… | state | `s_N' = Σ a_j s_j + c` |
+| `linear` | `slots`,`dt`,`row0=(…)`,… | state | `ds/dt = A·s + c` (Euler) |
 | `nbody` (velocity-Verlet) | `G`,`dt` | state | inverse-square; `state=(px,py,pz,vx,vy,vz,m)` |
 | `send`/`recv` | `on`(req),`chan`,`value` / `on`(req),`chan`,`slot` | channel | channel send/receive (scoped to `on`) |
-
-> **Channels are a single-cell mailbox, not a Go-style queue.** A `chan` holds one
-> value in `state[0]`; `send` overwrites it (**last writer wins**) and `recv` reads
-> it into a slot. There is no queueing or blocking. Because systems run in
-> declaration order, a `recv` placed *before* its `send` sees the **previous**
-> step's value; place it after for same-step delivery.
 | `update` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | explicit Euler |
 | `rk4` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | Runge–Kutta 4 |
 | `invariant` | `expr`,`on?` | — | per-step assertion |
@@ -622,6 +616,12 @@ field name; cell writes are visible to later reads in the same step.
 | `despawn` | `on`,`when` | pool | deactivate slots |
 | `joint` | `on`,`other`,`type`,… | transform | pairwise constraint |
 | `soft` | `body`,`stiffness?`,`damping?`,`iterations?` | transform | mass-spring grid |
+
+> **Channels are a single-cell mailbox, not a Go-style queue.** A `chan` holds one
+> value in `state[0]`; `send` overwrites it (**last writer wins**) and `recv` reads
+> it into a slot. There is no queueing or blocking. Because systems run in
+> declaration order, a `recv` placed *before* its `send` sees the **previous**
+> step's value; place it after for same-step delivery.
 
 ## 2.8 Expressions
 
@@ -651,6 +651,8 @@ tanh asin acos atan`; 2-arg: `pow atan2 hypot min max`; `if(c,a,b)`; `random()`,
 (use `sin/cos`). Any other name is a `funcs` function.
 
 ## 2.10 `funcs`, units, loops
+
+* Sections must appear in order: `world` (required) → `funcs` (optional) → `systems` (optional).
 
 * `funcs { f(a,b) { expr } }` — pure scalar functions; no world access.
 * `funcs` parameters and the return value may be unit-annotated
@@ -831,6 +833,10 @@ error 48: system 'update' is missing required parameter 'dt'
 | 89 | `let` type annotation mismatch. |
 | 90 | Missing unit annotation (`units = "strict"`). |
 | 91 | `nbody` body has fewer than 7 state slots. |
+| 92 | `nbody` body also has a `mass` field (ignored; mass is `state[6]`) — a warning. |
+| 93 | Plain assignment in `rk4` (integrate with `inte slot = rate`). |
+| 94 | State slot name collides with a system parameter name — a warning. |
+| 95 | `nbody` body exposes slots 7/8/9 without `orient = true` — a warning. |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the
@@ -930,4 +936,5 @@ systems {
 * [ ] Spatial queries in rules only; field ops take literal field names.
 * [ ] ≤ 16 state slots; loops within limits; dynamic LHS only in `update`.
 * [ ] Slot 7 reserved unless `orient = true`.
+* [ ] `nbody` bodies declare `state=(px,py,pz,vx,vy,vz,m)` (detail 91).
 * [ ] `random()`/`noise()` acceptable (seeded, deterministic).

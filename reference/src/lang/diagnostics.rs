@@ -108,6 +108,7 @@ pub fn detail_name(detail: u32) -> &'static str {
         92 => "nbody ignores the `mass` field (reads state[6])",
         93 => "plain assignment is `update`-only (rk4 integrates `inte slot = rate`)",
         94 => "state slot name collides with a system parameter name",
+        95 => "state slots 7/8/9 used but `orient != true` (read as a Z-spin)",
         4 => "EIR operand/type validation failed (compiler bug)",
         6 => "EIR result type unspecified (compiler bug)",
         _ => "unspecified compile error",
@@ -150,12 +151,7 @@ pub fn diagnose(source: &str, err: &Error) -> String {
     match found {
         Some(d) => render_diagnostic(source, d),
         None => {
-            let msg = format!(
-                "{:?} ({}): {}",
-                err.status,
-                err.detail,
-                detail_name(err.detail)
-            );
+            let msg = format!("error {}: {}", err.detail, detail_name(err.detail));
             if err.byte_offset > 0 {
                 let pseudo = Diagnostic {
                     detail: err.detail,

@@ -280,7 +280,7 @@ side-effecting `let`/call"
                     ));
                 }
                 // `let name = expr` local bindings, in order.
-                let lets = to_let_stmts(&s.update_stmts)?;
+                let lets = to_let_stmts(&s.update_stmts, s.byte_offset)?;
                 // Optional `on = <name>` restricts the rule to one entity.
                 let only = match s.string_params.get("on") {
                     Some(name) => {
@@ -357,7 +357,7 @@ side-effecting `let`/call"
                         "rk4 system has no rules; add `inte slot = <rate>`".to_string(),
                     ));
                 }
-                let lets = to_let_stmts(&s.update_stmts)?;
+                let lets = to_let_stmts(&s.update_stmts, s.byte_offset)?;
                 let only = match s.string_params.get("on") {
                     Some(name) => {
                         Some(resolve_on(entity_ids, name).ok_or(error(Status::Invalid, 62))?)
@@ -401,7 +401,7 @@ side-effecting `let`/call"
                         )
                     })?;
                 let expr = parse_expr_str(&expr_text)?;
-                let lets = to_let_stmts(&s.update_stmts)?;
+                let lets = to_let_stmts(&s.update_stmts, s.byte_offset)?;
                 let only = match s.string_params.get("on") {
                     Some(name) => {
                         Some(resolve_on(entity_ids, name).ok_or(error(Status::Invalid, 62))?)
@@ -445,7 +445,7 @@ side-effecting `let`/call"
                         )
                     })?;
                 let expr = parse_expr_str(&expr_text)?;
-                let lets = to_let_stmts(&s.update_stmts)?;
+                let lets = to_let_stmts(&s.update_stmts, s.byte_offset)?;
                 let only = match s.string_params.get("on") {
                     Some(name) => {
                         Some(resolve_on(entity_ids, name).ok_or(error(Status::Invalid, 62))?)
@@ -485,6 +485,25 @@ side-effecting `let`/call"
                         )
                     })?;
                 let expr = parse_expr_str(&expr_text)?;
+                for key in ["mem", "into"] {
+                    if !s.params.contains_key(key)
+                        && (s.string_params.contains_key(key) || s.assigns.contains_key(key))
+                    {
+                        return Err(error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            format!(
+                                "system 'watch' parameter '{key}' expects a slot index (number), got identifier `{}`",
+                                s.string_params
+                                    .get(key)
+                                    .or_else(|| s.assigns.get(key))
+                                    .map(String::as_str)
+                                    .unwrap_or("")
+                            ),
+                        ));
+                    }
+                }
                 let mem = param(&s.params, "mem", s.byte_offset, &s.kind)? as usize;
                 let into = param(&s.params, "into", s.byte_offset, &s.kind)? as usize;
                 if mem >= crate::components::State::MAX_STATE_SLOTS
@@ -1777,7 +1796,7 @@ pub(crate) fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
             .get("dt")
             .copied()
             .unwrap_or_else(crate::units::Dim::seconds);
-        let lets = to_let_stmts(&sys.update_stmts)?;
+        let lets = to_let_stmts(&sys.update_stmts, sys.byte_offset)?;
         // Rule LHS -> slot index (sN or a named slot).
         let mut rules: Vec<(usize, &str)> = Vec::new();
         for (key, text) in &sys.update {
@@ -2013,9 +2032,22 @@ fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
             Expr::Call(name, args) => {
                 if let Some(&n) = arity.get(*name) {
                     if args.len() != n {
-                        // detail 59 (arity mismatch), located at 0 for now.
-                        return Err(error(Status::Invalid, 59));
+                        return Err(error_at(
+                            Status::Invalid,
+                            59,
+                            0,
+                            format!("`{name}` expects {n} argument(s), got {}", args.len()),
+                        ));
                     }
+                } else if !crate::lang::parser::is_builtin_call(name) {
+                    return Err(error_at(
+                        Status::Invalid,
+                        59,
+                        0,
+                        format!(
+                            "`{name}` is not a builtin function or a user-defined `funcs` function"
+                        ),
+                    ));
                 }
                 for a in args {
                     walk(a, arity)?;
@@ -2062,6 +2094,8 @@ fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
         Ok(())
     }
     for sys in &parsed.systems {
+        let lets = to_let_stmts(&sys.update_stmts, sys.byte_offset)?;
+        walk_lets(&lets, &arity)?;
         for text in sys.update.values().chain(sys.assigns.values()) {
             walk(&parse_expr_str(text)?, &arity)?;
         }
@@ -2073,7 +2107,7 @@ fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
     }
     for f in &parsed.funcs {
         walk(&f.body, &arity)?;
-        let lets = to_let_stmts(&f.stmts)?;
+        let lets = to_let_stmts(&f.stmts, 0)?;
         walk_lets(&lets, &arity)?;
     }
     Ok(())
@@ -2179,6 +2213,22 @@ pub fn compile_program(mut parsed: ParsedProgram) -> Result<CompiledProgram> {
                         0,
                         format!(
                             "nbody body `{}` reads mass from state[6]; its `mass` field is ignored",
+                            e.name
+                        ),
+                    );
+                }
+                // RFC orientation convention: for state bodies, slots 7/8/9 are
+                // euler angles only when `orient = true`; otherwise slot 7 is a
+                // Z-spin, so a body that exposes those slots is silently
+                // reinterpreted (advisory, detail 95).
+                let orient = e.render.as_ref().map(|r| r.orient).unwrap_or(false);
+                if !orient && slots >= 8 {
+                    push_diag(
+                        95,
+                        0,
+                        format!(
+                            "nbody body `{}` has state slot 7 (and possibly 8/9) but `orient` is not true; \
+they are read as a Z-spin, not euler angles",
                             e.name
                         ),
                     );
@@ -2319,7 +2369,7 @@ pub fn compile_program(mut parsed: ParsedProgram) -> Result<CompiledProgram> {
             .cloned()
             .zip(slot_regs.iter().copied())
             .collect();
-        let lets = to_let_stmts(&f.stmts)?;
+        let lets = to_let_stmts(&f.stmts, 0)?;
         // Spatial queries need a per-entity lowering context, which function
         // bodies do not have; reject them at compile time.
         if expr_has_query(&f.body) || stmts_have_query(&lets) {
