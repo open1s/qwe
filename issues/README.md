@@ -16,7 +16,11 @@ re-verified on main `9d6277fe`; (5) a review of the typed-`let` commit
 of `4483cf46`/`c7ef2a65`/`9bfc38b4`/`8b892c1c` on main `8b892c1c` —
 #11/#17/#18/#19/#21/#23/#24/#27 verified fixed and left closed; #6/#20/
 #22/#25/#26/#28 reopened as partial with evidence comments; #29 filed
-(the #7 fix's blockquote breaks the parameter table).
+(the #7 fix's blockquote breaks the parameter table); (7) fix-verification
+of `ea8caf6e` (closures of 0006/0020/0022/0025/0026/0028/0029) on main
+`ea8caf6e` — #20/#22/#25/#26/#29 verified fixed and left closed (gates
+green: fmt, clippy, 308 tests, conformance 18/18); #6/#28 reopened again
+as partial with evidence comments.
 
 | # | Severity | Title | File |
 | --- | --- | --- | --- |
@@ -86,7 +90,7 @@ Typed-`let` review batch (0027–0028):
 2. 0028 — binding-aware annotation checking, `type_name` word boundary,
    integer-annotation honesty; can follow 0027.
 
-Fix-verification pass (reopened partials):
+Fix-verification pass 1 (reopen reasons, pass 6):
 
 1. 0020 — `error 60: internal EIR validation failed (EIR detail 4)` for
    `sin(1.0,2.0)`: wrong code, no real reason, builtin arity still
@@ -96,5 +100,25 @@ Fix-verification pass (reopened partials):
 3. 0006, 0025, 0026, 0028 — each fix landed only part of the issue's
    fix list (details in the reopen comments).
 4. 0029 — move the mailbox note below the parameter table.
+
+Fix-verification pass 2 (`ea8caf6e`, pass 7 — closures of 0006/0020/0022/
+0025/0026/0028/0029):
+
+1. Verified fixed, left closed: 0020 (builtin arity checked at parse →
+   `error 59` with the function name, unknown names → clear 59 instead of
+   EIR detail 6, `Invalid (NN)` → `error NN` unified), 0022 (name +
+   expected/got counts, system-`let` walk gap closed, `send value` covered),
+   0025 (color → 64 with explicit message, section order documented,
+   `ds/dt = A·s + c`), 0026 (watch wrong-kind → 48 with caret), 0029
+   (note moved below the table; GitHub render = 1 table, all rows intact).
+   Gates green: fmt, clippy, 308 tests, conformance 18/18.
+2. Reopened as partial: 0006 (91/92/95 + suppression with `orient=true`
+   + checklist line verified — but non-nbody rules writing slots 7/8/9
+   stay silent and "vice versa" is not covered); 0028 (`boolean`→89,
+   bool-as-number→89 with caret, aliasing OK — but `let i: i64 = 1.5`
+   still compiles and evaluates to 1.5).
+3. Minor residuals accepted (not reopened): arity errors still compile
+   with byte offset 0 (no caret), wrong-section-order parse error still
+   names the grammar rule (order is now documented).
 
 Local copies of the bodies live next to this file (`0001-…` … `0029-…`).
