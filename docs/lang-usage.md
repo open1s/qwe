@@ -160,7 +160,8 @@ The **`inte(E)` operator** is the increment `dt·E`, so `x = x + inte(vx)` equal
 `x = x + dt*(vx)`; the **`inte slot = rate`** statement (also `integrate` and
 `+=`) integrates without spelling out `dt`. The **`deriv(E)` operator** is the
 backward difference `(E − E_prev)/dt` — it *differentiates* (0 on the first
-step). `rk4` systems declare their derivatives with `deriv slot = rate`.
+step). In `rk4`, `inte slot = rate` integrates that rate with the classic
+4th-order Runge–Kutta method (much more accurate than Euler at the same `dt`).
 
 **Assign vs integrate.** Since `=` assigns, a constant write is just
 `slot = target` — no idiom needed.
@@ -450,7 +451,7 @@ update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 | --- | --- | --- |
 | My body never moves | it's a state body but you used `gravity`/`integrate` (or vice-versa) | pick one model (§0.6) |
 | A rule "does nothing" | `on =` missing (runs on every body) or the LHS names no slot | add `on = <entity\|pool>`; check the slot/field name |
-| Value stays constant unexpectedly | `slot = expr` **assigns** | to integrate, write `slot = slot + dt*(rate)` (or `deriv slot = rate`) |
+| Value stays constant unexpectedly | `slot = expr` **assigns** | to integrate, write `slot = slot + dt*(rate)` (or `inte slot = rate`) |
 | `update` runs on the wrong bodies | no `on =` → it runs on **every** dynamic body | add `on = <entity\|pool>` |
 | Objects move oddly across a step | system order / read timing | order: forces → integrate → constraints; reads are start-of-step |
 | `nbody` does nothing | mass not in `state[6]` (or body is component-only) | `state = (px,py,pz,vx,vy,vz,m)` |
@@ -673,8 +674,8 @@ systems {
 * **Time is explicit**: every rule's expression is multiplied by `dt`; `t`
   advances by `dt` each step.
 * **`slot = expr` assigns**. Integrate with `slot = slot + inte(rate)` (or the
-  `inte slot = rate` / `+=` statement); `deriv slot = rate` declares a
-  derivative for `rk4`. `inte(E) = dt·E`, `deriv(E) = (E−E_prev)/dt`.
+  `inte slot = rate` / `+=` statement); in `rk4`, `inte slot = rate`
+  integrates with 4th-order Runge–Kutta. `inte(E) = dt·E`, `deriv(E) = (E−E_prev)/dt`.
 * **System parameters are recognised by name** per kind; any other
   `name = <expr>` (including `name = 1.0`) is a rule.
 * **Reads**: within one system's function, all reads are sampled once at the

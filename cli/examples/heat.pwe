@@ -2,7 +2,9 @@
 #
 # A held-hot centre cell injects heat every step while a Gauss–Seidel sweep
 # relaxes the whole grid by its Laplacian (`flap` = the zero-flux stencil scaled
-# by 1/dx²), so a steady radial profile forms. `fget`/`fset` read and write
+# by 1/dx²). With insulated edges and a continuous source there is no true
+# steady state: the total energy rises linearly while the *shape* converges to a
+# quasi-steady radial profile. `fget`/`fset` read and write
 # field cells; the sweep uses a `for` loop unrolled to straight-line EIR, and
 # each cell sees its neighbours' fresh writes (deterministic Gauss–Seidel).
 # The probe entity reports the centre temperature in ordinary state.

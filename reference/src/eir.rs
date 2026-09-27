@@ -229,6 +229,9 @@ pub enum Opcode {
     /// site id rides in `constant`; result is F64. `deriv` gates its difference
     /// on this so the first (sub)step yields 0 instead of a NaN sentinel.
     HistHas = 231,
+    /// Read a component field from the **committed** scene, ignoring
+    /// in-interpretation writes. Target as `ReadView`; result is F64.
+    ReadCommitted = 232,
     Return = 0x8000,
     /// Unconditional branch to an instruction index (block target). Single
     /// operand = target index.
@@ -473,6 +476,15 @@ pub trait EirRuntime {
     /// as a raw u64 (bits of an f64 or an integer). Sees any writes made earlier
     /// in the same interpretation.
     fn read_field(&self, target: ComponentRef) -> Result<u64>;
+    /// Like [`read_field`](Self::read_field), but reads the **committed**
+    /// (start-of-step) value, ignoring writes made earlier in the same
+    /// interpretation. Cross-body reads (`nbody`, `@name`) use this so every
+    /// body sees the same snapshot — preserving Newton's third law and
+    /// momentum conservation. Defaults to `read_field` for runtimes that
+    /// cannot distinguish the two.
+    fn read_committed_field(&self, target: ComponentRef) -> Result<u64> {
+        self.read_field(target)
+    }
     /// Applies a scalar write during interpretation so later reads observe it.
     fn write_field(&mut self, target: ComponentRef, value: u64);
     /// Counts the entities (other than `entity`) whose position lies within
@@ -575,6 +587,7 @@ fn infer_instruction_type(i: &Instruction) -> Option<ValueType> {
         | Opcode::FiredEvery => Some(ValueType::F64),
         Opcode::Step => Some(ValueType::F64),
         Opcode::HistRead => Some(ValueType::F64),
+        Opcode::ReadCommitted => Some(ValueType::F64),
         Opcode::HistWrite => None,
         Opcode::HistHas => Some(ValueType::F64),
         Opcode::ReadSlotDyn => Some(ValueType::F64),
@@ -844,7 +857,7 @@ impl EirModule {
                     }
                     Some(ValueType::U64)
                 }
-                Opcode::ReadView => Some(ValueType::F64),
+                Opcode::ReadView | Opcode::ReadCommitted => Some(ValueType::F64),
                 Opcode::NeighborCount | Opcode::NearestDist => {
                     // Spatial queries read the world via the runtime; the
                     // target entity is a compile-time component reference.
@@ -1363,6 +1376,13 @@ impl EirModule {
                 Opcode::ReadView => {
                     let target = instruction.target.ok_or(error(Status::EirInvalid, 23, 0))?;
                     let raw = rt.read_field(target)?;
+                    stacks[depth - 1]
+                        .insert(instruction.result_id, Immediate::F64(f64::from_bits(raw)));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::ReadCommitted => {
+                    let target = instruction.target.ok_or(error(Status::EirInvalid, 23, 0))?;
+                    let raw = rt.read_committed_field(target)?;
                     stacks[depth - 1]
                         .insert(instruction.result_id, Immediate::F64(f64::from_bits(raw)));
                     pcs[depth - 1] += 1;
@@ -2278,6 +2298,7 @@ fn opcode_from_u16(raw: u16) -> Result<Opcode> {
         x if x == Opcode::HistRead as u16 => Opcode::HistRead,
         x if x == Opcode::HistWrite as u16 => Opcode::HistWrite,
         x if x == Opcode::HistHas as u16 => Opcode::HistHas,
+        x if x == Opcode::ReadCommitted as u16 => Opcode::ReadCommitted,
         _ => return Err(error(Status::EirInvalid, 28, 0)),
     })
 }

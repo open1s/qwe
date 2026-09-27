@@ -158,11 +158,17 @@ impl<'a> SceneRuntime<'a> {
     }
 }
 
-impl EirRuntime for SceneRuntime<'_> {
-    fn read_field(&self, target: ComponentRef) -> Result<u64> {
+impl SceneRuntime<'_> {
+    /// Shared read logic; `use_pending` selects whether in-interpretation writes
+    /// (the overlay) are honored. Cross-body reads (`nbody`, `@name`) use the
+    /// committed snapshot so every body sees the same start-of-step state,
+    /// preserving Newton's third law.
+    fn read_field_impl(&self, target: ComponentRef, use_pending: bool) -> Result<u64> {
         let key = (target.entity, target.component, target.offset);
-        if let Some(&v) = self.pending.get(&key) {
-            return Ok(v);
+        if use_pending {
+            if let Some(&v) = self.pending.get(&key) {
+                return Ok(v);
+            }
         }
         // The global simulation clock (`t`) does not belong to any entity.
         if target.component == sim_time_id() {
@@ -256,6 +262,15 @@ impl EirRuntime for SceneRuntime<'_> {
                 Ok(0)
             }
         }
+    }
+}
+
+impl EirRuntime for SceneRuntime<'_> {
+    fn read_field(&self, target: ComponentRef) -> Result<u64> {
+        self.read_field_impl(target, true)
+    }
+    fn read_committed_field(&self, target: ComponentRef) -> Result<u64> {
+        self.read_field_impl(target, false)
     }
     fn write_field(&mut self, target: ComponentRef, value: u64) {
         // Grid cells go to the dense per-field overlay (RFC-0037); the

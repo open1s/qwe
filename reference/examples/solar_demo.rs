@@ -12,23 +12,26 @@ use std::sync::{Arc, RwLock};
 const SOLAR: &str = r#"
     world {
         gravity = (0, 0, 0)
-        entity sun    { state = (0, 0, 0, 0, 0, 0, 1000000, 0); color = 0xFFD24A }
-        entity mercury{ state = (2, 0, 0, 0, 707, 0, 0.06, 0);  color = 0xB0A8A0 }
-        entity venus  { state = (3, 0, 0, 0, 577, 0, 0.82, 0);  color = 0xFFB347 }
-        entity earth  { state = (4, 0, 0, 0, 500, 0, 1, 0);     color = 0x4aa8ff }
-        entity mars   { state = (5.5, 0, 0, 0, 426, 0, 0.11, 0);color = 0xFF6B4A }
-        entity jupiter{ state = (8, 0, 0, 0, 354, 0, 318, 0);   color = 0xE8C39E }
-        entity saturn { state = (10, 0, 0, 0, 316, 0, 95, 0);   color = 0xEED484 }
-        entity uranus { state = (13, 0, 0, 0, 277, 0, 15, 0);   color = 0x8FE3E8 }
-        entity neptune{ state = (16, 0, 0, 0, 250, 0, 17, 0);   color = 0x5B6EE8 }
-        # Moon: a bright small body revolving near Earth's orbit.
-        entity moon   { state = (4.2, 0, 0, 0, 488, 0, 0.01, 0); color = 0xFFFFFF }
+        # Barycentric initial state (total momentum 0): real orbital-radius
+        # ratios scaled so Earth is at r = 4, real planet masses scaled to
+        # M_sun = 1000, each at its circular speed. The Sun recoils and is
+        # offset from the origin — required for a stable many-body solution.
+        entity sun      { state = (-0.029169, -0.01204, 0.0, 0.004654, -0.006533, 0.0, 1000, 0); color = 0xFFD24A }
+        entity mercury  { state = (-0.501099, -1.486349, 0.0, 24.211153, -7.755095, 0.0, 1.66e-4, 0); color = 0xB0A8A0 }
+        entity venus    { state = (-2.919442, -0.111961, 0.0, 0.64713, -18.590631, 0.0, 2.447e-3, 0); color = 0xFFB347 }
+        entity earth    { state = (-0.755365, 3.921487, 0.0, -15.543979, -2.877076, 0.0, 3.003e-3, 0); color = 0x4aa8ff }
+        entity moon     { state = (-0.757232, 3.9316, 0.0, -16.075391, -2.975183, 0.0, 3.69e-5, 0); color = 0xFFFFFF }
+        entity mars     { state = (6.047451, -0.497751, 0.0, 1.025148, 12.760635, 0.0, 3.226e-4, 0); color = 0xFF6B4A }
+        entity jupiter  { state = (17.153348, 11.731063, 0.0, -3.906565, 5.716365, 0.0, 0.9543, 0); color = 0xE8C39E }
+        entity saturn   { state = (24.451066, 29.245232, 0.0, -3.922032, 3.279016, 0.0, 0.2857, 0); color = 0xEED484 }
+        entity uranus   { state = (53.350601, -55.172695, 0.0, 2.598397, 2.50347, 0.0, 0.04365, 0); color = 0x8FE3E8 }
+        entity neptune  { state = (67.838429, -99.315956, 0.0, 2.385198, 1.62041, 0.0, 0.05148, 0); color = 0x5B6EE8 }
     }
     systems {
         # Revolution (公转): mutual gravity among the Sun, 8 planets, and Moon.
-        nbody { G = 1.0; dt = 0.0001 }
+        nbody { G = 1.0; dt = 0.004 }
         # Self-rotation (自转): every body spins about Z (visible as it revolves).
-        update { dt = 0.0001; s7 = s7 + inte(  s7 + 0.3 ) }
+        update { dt = 0.004; s7 = s7 + inte(  0.3 ) }
     }
 "#;
 
@@ -72,7 +75,7 @@ fn main() -> pwe_api::Result<()> {
         port,
     )
     .expect("serve live viewer");
-    println!("live solar system (8 planets revolve + self-rotate, Moon follows Earth): open http://localhost:{port}");
+    println!("live solar system (8 planets revolve + self-rotate; Moon orbits Earth): open http://localhost:{port}");
 
     let cam = CameraVisual {
         position: pwe_reference::math::Vec3::new(24.0, 18.0, 26.0),

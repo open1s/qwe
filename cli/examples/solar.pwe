@@ -1,64 +1,49 @@
 # solar.pwe — a solar system: mutually gravitating bodies (`nbody`).
 #
-# Bodies in an nbody model carry `state = (px, py, pz, vx, vy, vz, m)`; the
-# system computes the pairwise inverse-square force and integrates (symplectic
-# Euler) every step. Each planet starts at its circular-orbit speed
-# `v = sqrt(G·M_sun / r)` with G = 1, M_sun = 1000. The Moon rides a
-# circular orbit of its own just outside the Earth's (a co-orbital companion
-# about 2 units away). Orbital radii use a compressed scale (real ratios span
-# 4 orders of magnitude).
+# Bodies carry `state = (px, py, pz, vx, vy, vz, m)`; the `nbody` system computes
+# the pairwise inverse-square force (Newton's law of universal gravitation,
+# F = G·m1·m2/r²) and integrates it every step, reading all bodies from the same
+# start-of-step snapshot so Newton's third law holds. Radii are the real
+# semi-major axes (AU) scaled so Earth sits at r ≈ 4; masses are the real planet
+# masses scaled to M_sun = 1000; each body starts at its circular speed
+# v = sqrt(G·M_sun / r), prograde. The initial state is **barycentric** (total
+# momentum 0): the Sun recoils as the planets orbit, so it is offset from the
+# origin and carries the opposite momentum — without this the solution is
+# spurious and the planets spuriously scatter.
 #
 #   cargo build --release -p pwe-cli          # ~10x faster for many-body runs
 #   pwe compile cli/examples/solar.pwe -o solar.pweb
 #   pwe run     solar.pweb --steps 2000
-#   pwe present solar.pweb --port 8000        # live 3D viewer: legend (right),
-#                                             # per-body radii + title (left)
+#   pwe present solar.pweb --port 8000        # live 3D viewer
 
 world {
   title = "solar system (8 planets + Moon)"
   gravity = (0, 0, 0)
 
-  entity sun {
-    state = (0, 0, 0,   0, 0, 0,      1000)
-    sphere = 1.6; color = 0xFFD24A
-  }
-  entity mercury {
-    state = (2.01, 0, 0,   0, 22.305, 0,    0.05)
-    sphere = 0.18; color = 0xB0B0B8
-  }
-  entity venus {
-    state = (2.1284, 2.1284, 0,   -12.889, 12.889, 0,   0.4)
-    sphere = 0.3; color = 0xE8C46A
-  }
-  entity earth {
-    state = (0, 3.98, 0,   -15.851, 0, 0,   0.05)
-    sphere = 0.32; color = 0x4AA8FF
-  }
-  entity moon {
-    parent = earth
-    state = (-1.980, 3.693, 0,   -13.613, -7.300, 0,   0.02)
-    sphere = 0.12; color = 0xC8C8D0
-  }
-  entity mars {
-    state = (-3.882, 3.882, 0,   -9.543, -9.543, 0,   0.1)
-    sphere = 0.24; color = 0xFF6B4A
-  }
-  entity jupiter {
-    state = (-8.01, 0, 0,   0, -11.173, 0,   2)
-    sphere = 0.9; color = 0xE0A96D
-  }
-  entity saturn {
-    state = (-7.0357, -7.0357, 0,   7.089, -7.089, 0,   1)
-    sphere = 0.8; color = 0xE3D9A0
-  }
-  entity uranus {
-    state = (0, -12.94, 0,   8.791, 0, 0,   0.5)
-    sphere = 0.55; color = 0x7FD8E8
-  }
-  entity neptune {
-    state = (11.2925, -11.2925, 0,   5.596, 5.596, 0,   0.5)
-    sphere = 0.55; color = 0x5B7BE8
-  }
+  entity sun     { state = (-0.029169, -0.01204, 0.0,   0.004654, -0.006533, 0.0,   1000)
+    sphere = 1.6; color = 0xFFD24A }
+  entity mercury { state = (-0.501099, -1.486349, 0.0,   24.211153, -7.755095, 0.0,   1.66e-4)
+    sphere = 0.18; color = 0xB0B0B8 }
+  entity venus   { state = (-2.919442, -0.111961, 0.0,   0.64713, -18.590631, 0.0,   2.447e-3)
+    sphere = 0.3; color = 0xE8C46A }
+  entity earth   { state = (-0.755365, 3.921487, 0.0,   -15.543979, -2.877076, 0.0,   3.003e-3)
+    sphere = 0.32; color = 0x4AA8FF }
+  # Moon: a genuine satellite of Earth — placed at ~0.26 of Earth's Hill radius
+  # (r_H = a_earth·(m_earth/3M_sun)^⅓ ≈ 0.040) with the Earth-relative circular
+  # speed sqrt(G·m_earth/r) ≈ 0.540 (prograde), so it orbits Earth (~13.4 orbits
+  # per Earth year) while both orbit the Sun.
+  entity moon    { state = (-0.757232, 3.9316, 0.0,   -16.075391, -2.975183, 0.0,   3.69e-5)
+    sphere = 0.12; color = 0xC8C8D0 }
+  entity mars     { state = (6.047451, -0.497751, 0.0,   1.025148, 12.760635, 0.0,   3.226e-4)
+    sphere = 0.24; color = 0xFF6B4A }
+  entity jupiter  { state = (17.153348, 11.731063, 0.0,   -3.906565, 5.716365, 0.0,   0.9543)
+    sphere = 0.9; color = 0xE0A96D }
+  entity saturn   { state = (24.451066, 29.245232, 0.0,   -3.922032, 3.279016, 0.0,   0.2857)
+    sphere = 0.8; color = 0xE3D9A0 }
+  entity uranus   { state = (53.350601, -55.172695, 0.0,   2.598397, 2.50347, 0.0,   0.04365)
+    sphere = 0.55; color = 0x7FD8E8 }
+  entity neptune  { state = (67.838429, -99.315956, 0.0,   2.385198, 1.62041, 0.0,   0.05148)
+    sphere = 0.55; color = 0x5B7BE8 }
 }
 
 systems {

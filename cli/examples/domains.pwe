@@ -4,7 +4,6 @@ import "../../std/math"
 import "../../std/forces"
 import "../../std/thermal"
 import "../../std/em"
-import "../../std/chemistry"
 
 world {
   gravity = (0, 0, 0)
@@ -19,8 +18,8 @@ systems {
     dt = 0.1
     # damped spring back to the origin
     vx = vx + inte(  forces.spring_accel(2.0, x, 1.0) + forces.damping_accel(0.3, vx, 1.0) )
-    x = x + inte(  vx )  # radiative cooling toward a 20 °C ambient (element: carbon)
-    temp = temp + inte(  thermal.radiative_cooling(temp, 293.15, 0.9, 1.0, 1.0, 700.0) )  # electric potential of the probe's charge at its own position
-    potential = potential + inte(  em.potential(chemistry.atomic_mass(6.0), x) )
+    x = x + inte(  vx )                          # x' = vx
+    temp = temp + inte(  thermal.radiative_cooling(temp, 293.15, 0.9, 1.0, 1.0, 700.0) )  # radiative cooling toward 20 °C (carbon: c=700)
+    potential = potential + inte(  em.potential(6.0, x) )  # V = k·Q/r at distance x from a +6e carbon nucleus
   }
 }

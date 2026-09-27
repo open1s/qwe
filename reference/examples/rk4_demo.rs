@@ -14,28 +14,37 @@ use std::sync::{Arc, RwLock};
 const SOURCE: &str = r#"
     world {
         gravity = (0, 0, 0)
-        # Position renders from state[0..2] (x, y, z); state[6] is mass (visual
-        # size); state[7] is the spin angle (self-rotation).
-        entity a { state = (2, 0, 2, 0, 0, 0, 1, 0); color = 0x4aa8ff }
-        entity b { state = (2, 0, 2, 0, 0, 0, 1, 0); color = 0xffa03a }
-        entity c { state = (2, 0, 2, 0, 0, 0, 1, 0); color = 0x38e1ff }
+        # state = (x, y, z, vx, vy, vz, mass, spin). The renderer draws the body
+        # at (x, y, z); x and y are the two oscillators, so each body traces a
+        # Lissajous figure in the XY plane. `mass` is the visual size, `spin` a
+        # self-rotation angle about Z.
+        entity a { state = (x = 2, y = 2, z = 0, vx = 0, vy = 0, vz = 0, mass = 1, spin = 0); color = 0x4aa8ff }
+        entity b { state = (x = 2, y = 2, z = 0, vx = 0, vy = 0, vz = 0, mass = 1, spin = 0); color = 0xffa03a }
+        entity c { state = (x = 2, y = 2, z = 0, vx = 0, vy = 0, vz = 0, mass = 1, spin = 0); color = 0x38e1ff }
     }
     systems {
-        # x'' = -ωx²·x, y'' = -ωy²·y  =>  Lissajous ωx:ωy. RK4 keeps them closed.
+        # Each axis is an independent harmonic oscillator: x'' = -ωx²·x,
+        # y'' = -ωy²·y. A body traces a Lissajous figure with the ratio ωx:ωy.
         rk4 { on = a; dt = 0.02
-            deriv s0 =  s1  deriv s1 =  -4 * s0  # ωx:ωy = 2:3
-            deriv s2 =  s3  deriv s3 =  -9 * s2
-            deriv s7 =  0.3
+            inte x = vx
+            inte vx = -4 * x        # ωx = 2
+            inte y = vy
+            inte vy = -9 * y        # ωy = 3   => 2:3
+            inte spin = 0.3
         }
         rk4 { on = b; dt = 0.02
-            deriv s0 =  s1  deriv s1 =  -1 * s0  # 1:2
-            deriv s2 =  s3  deriv s3 =  -4 * s2
-            deriv s7 =  -0.4
+            inte x = vx
+            inte vx = -1 * x        # ωx = 1
+            inte y = vy
+            inte vy = -4 * y        # ωy = 2   => 1:2
+            inte spin = -0.4
         }
         rk4 { on = c; dt = 0.02
-            deriv s0 =  s1  deriv s1 =  -9 * s0  # 3:1
-            deriv s2 =  s3  deriv s3 =  -1 * s2
-            deriv s7 =  0.2
+            inte x = vx
+            inte vx = -9 * x        # ωx = 3
+            inte y = vy
+            inte vy = -1 * y        # ωy = 1   => 3:1
+            inte spin = 0.2
         }
     }
 "#;
@@ -79,18 +88,19 @@ fn main() -> pwe_api::Result<()> {
         g.frame = rt.present_frame(Some(cam));
         // Energy per body: E = ½v² + ½ω²r² for each axis, a conserved quantity
         // RK4 preserves far better than explicit Euler at this dt.
-        let e_a = 0.5 * state(&rt, 1, 1).powi(2)
+        // E = ½vx² + ½ωx²x² + ½vy² + ½ωy²y²  (slots: x 0, y 1, vx 3, vy 4).
+        let e_a = 0.5 * state(&rt, 1, 3).powi(2)
             + 0.5 * 4.0 * state(&rt, 1, 0).powi(2)
-            + 0.5 * state(&rt, 1, 3).powi(2)
-            + 0.5 * 9.0 * state(&rt, 1, 2).powi(2);
-        let e_b = 0.5 * state(&rt, 2, 1).powi(2)
+            + 0.5 * state(&rt, 1, 4).powi(2)
+            + 0.5 * 9.0 * state(&rt, 1, 1).powi(2);
+        let e_b = 0.5 * state(&rt, 2, 3).powi(2)
             + 0.5 * 1.0 * state(&rt, 2, 0).powi(2)
-            + 0.5 * state(&rt, 2, 3).powi(2)
-            + 0.5 * 4.0 * state(&rt, 2, 2).powi(2);
-        let e_c = 0.5 * state(&rt, 3, 1).powi(2)
+            + 0.5 * state(&rt, 2, 4).powi(2)
+            + 0.5 * 4.0 * state(&rt, 2, 1).powi(2);
+        let e_c = 0.5 * state(&rt, 3, 3).powi(2)
             + 0.5 * 9.0 * state(&rt, 3, 0).powi(2)
-            + 0.5 * state(&rt, 3, 3).powi(2)
-            + 0.5 * 1.0 * state(&rt, 3, 2).powi(2);
+            + 0.5 * state(&rt, 3, 4).powi(2)
+            + 0.5 * 1.0 * state(&rt, 3, 1).powi(2);
         g.info = vec![
             format!("step {step}: RK4 Lissajous (2:3, 1:2, 3:1), cross-backend"),
             format!("energy A {e_a:.3}  B {e_b:.3}  C {e_c:.3}  (conserved by RK4)"),

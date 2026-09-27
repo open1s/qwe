@@ -117,7 +117,10 @@ fn rk4_harmonic_oscillator_conserves_energy() {
     let mut rt = compile(
         r#"
         world { gravity = (0,0,0) entity m { state = (1, 0) } }
-        systems { rk4 { dt = 0.05; deriv s0 =  s1 deriv s1 =  -10 * s0 } }
+        systems { rk4 { dt = 0.05
+            inte s0 = s1
+            inte s1 = -10 * s0
+        } }
         "#,
     );
     rt.step_cross_n(2000).unwrap();

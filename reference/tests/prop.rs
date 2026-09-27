@@ -318,7 +318,8 @@ fn random_instruction(rng: &mut Rng, next: &mut u32) -> Instruction {
         | Opcode::SpawnInto
         | Opcode::HistRead
         | Opcode::HistWrite
-        | Opcode::HistHas => Instruction {
+        | Opcode::HistHas
+        | Opcode::ReadCommitted => Instruction {
             opcode,
             result_id: 0,
             result_type: None,

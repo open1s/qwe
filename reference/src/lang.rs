@@ -243,7 +243,7 @@ pub struct SystemDecl {
     pub params: std::collections::BTreeMap<String, f64>,
     /// Vector-valued params (e.g. `linear` rows `row0 = (a, b, c)`).
     pub vec_params: std::collections::BTreeMap<String, Vec<f64>>,
-    /// ODE derivative rules (`deriv slot = rate`): integrated as slot += dt·rate.
+    /// ODE derivative rules (`inte slot = rate`): integrated as slot += dt·rate.
     pub update: std::collections::BTreeMap<String, String>,
     /// Assignment rules (`slot = expr`): written each step.
     pub assigns: std::collections::BTreeMap<String, String>,
@@ -5102,7 +5102,7 @@ fn nb_read(out: &mut Vec<crate::eir::Instruction>, next: &mut u32, e: u128, slot
     let r = *next;
     *next += 1;
     out.push(crate::physics_eir::instr(
-        crate::eir::Opcode::ReadView,
+        crate::eir::Opcode::ReadCommitted,
         r,
         Some(crate::eir::ValueType::F64),
         vec![],
@@ -7369,7 +7369,7 @@ fn check_dimensions(parsed: &ParsedProgram) -> Result<()> {
             env.locals.insert("dt".to_string(), Some(dt_dim));
             env.of_lets(&lets)?;
             let rhs = env.of_expr(&expr)?;
-            // `deriv slot = expr` integrates as `slot += dt · expr`.
+            // `inte slot = expr` integrates as `slot += dt · expr`.
             let scaled: MaybeDim = rhs.map(|d| d.times(dt_dim));
             if unify(lhs, scaled).is_err() {
                 let lhs_name = match lhs {
@@ -9515,7 +9515,7 @@ mod tests {
             systems { rk4 { on = n; dt = 0.01
                 let g = s1
                 repeat 8 { let g = (g + s0 / g) * 0.5 }
-                deriv s1 =  s0 - s1 * s1
+                inte s1 =  s0 - s1 * s1
             } }
         "#;
         let mut rt = LangRuntime::compile(src).unwrap();
@@ -10623,7 +10623,7 @@ mod tests {
         let mk = |sub: usize| {
             format!(
                 "world {{ gravity=(0,0,0) entity o {{ state=(x=1.0) }} }} \
-                 systems {{ rk4 {{ on = o; dt = 0.5; substeps = {sub}; deriv x = 0.0 - x }} }}"
+                 systems {{ rk4 {{ on = o; dt = 0.5; substeps = {sub}; inte x = 0.0 - x }} }}"
             )
         };
         let analytic = (-1.0f64).exp();
@@ -10828,7 +10828,7 @@ mod tests {
     #[test]
     fn dynamic_lhs_rejected_in_rk4() {
         let src = "world { gravity=(0,0,0) entity e { state=(s0=1.0) } } \
-                   systems { rk4 { on = e; dt = 0.1 deriv s[0.0] =  0.0 + 1.0 } }";
+                   systems { rk4 { on = e; dt = 0.1 inte s[0.0] =  0.0 + 1.0 } }";
         match LangRuntime::compile(src) {
             Ok(_) => panic!("dynamic LHS in rk4 should be rejected"),
             Err(e) => assert_eq!(e.detail, 73),

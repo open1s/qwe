@@ -150,7 +150,8 @@ systems {
 **`inte(E)` 算子**即增量 `dt·E`，故 `x = x + inte(vx)` 与 `x = x + dt*(vx)` 等价；
 **`inte slot = rate`** 语句（`integrate`、`+=` 同义）无需写出 `dt` 即完成积分。
 **`deriv(E)` 算子**是后向差商 `(E − E_prev)/dt` —— 它做*微分*（首步为 0）。
-`rk4` 系统用 `deriv slot = rate` 声明导数。
+`rk4` 系统用 `inte slot = rate`，以经典四阶 Runge–Kutta 法积分该导数
+（同等 `dt` 下比 Euler 精确得多）。
 
 **赋值 vs 积分**：既然 `=` 是赋值，写常量就是 `slot = target`，无需任何惯用法。
 
@@ -428,7 +429,7 @@ update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 | --- | --- | --- |
 | 物体完全不动 | 状态型物体却用了 `gravity`/`integrate`（或反之） | 只选一种模型（§0.6） |
 | 规则“没效果” | 缺 `on =`（作用于每个物体）或左侧不是有效槽 | 加 `on = <实体\|池>`；核对槽/字段名 |
-| 数值总是不变 | `slot = expr` 是**赋值** | 要积分写 `slot = slot + dt*(rate)`（或 `deriv slot = rate`） |
+| 数值总是不变 | `slot = expr` 是**赋值** | 要积分写 `slot = slot + dt*(rate)`（或 `inte slot = rate`） |
 | `update` 作用到错误物体 | 没写 `on =` → 作用于**每个**动态物体 | 加 `on = <实体\|池>` |
 | 一步内运动怪 | 系统顺序 / 读取时机 | 顺序：力 → 积分 → 约束；读取在步开始 |
 | `nbody` 没反应 | 质量不在 `state[6]`（或物体是分量型） | `state = (px,py,pz,vx,vy,vz,m)` |
@@ -641,7 +642,7 @@ systems {
 # 第 3 部分 —— 语义与坑点
 
 * **时间是显式的**：每条规则的表达式都乘以 `dt`；`t` 每步前进 `dt`。
-* **`slot = expr` 是赋值**。积分用 `slot = slot + inte(rate)`（或 `inte slot = rate` / `+=` 语句）；`deriv slot = rate` 为 `rk4` 声明导数。`inte(E) = dt·E`，`deriv(E) = (E−E_prev)/dt`。
+* **`slot = expr` 是赋值**。积分用 `slot = slot + inte(rate)`（或 `inte slot = rate` / `+=` 语句）；`inte slot = rate` 为 `rk4` 声明导数。`inte(E) = dt·E`，`deriv(E) = (E−E_prev)/dt`。
 * **系统参数按名称识别**（针对该系统种类）；其它任何 `name = <表达式>`（含 `name = 1.0`）都是规则。
 * **读取**：同一系统函数内，所有读取在（子）步开始处采样一次（规则同时）；跨系统时，
   后跑的系统能看到先跑系统的写入——故顺序重要。场读取能看到同一步写入。
