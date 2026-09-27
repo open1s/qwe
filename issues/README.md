@@ -12,7 +12,11 @@ the 0003 residual, filed as 0018; 0016 verified; 0017 still open by design.
 283 probes across syntax/semantics/CLI with 0 panics — robustness passes;
 the findings below are diagnostics, semantic traps, and docs drift, all
 re-verified on main `9d6277fe`; (5) a review of the typed-`let` commit
-`b682e692` (0027–0028, re-verified on that commit).
+`b682e692` (0027–0028, re-verified on that commit); (6) fix-verification
+of `4483cf46`/`c7ef2a65`/`9bfc38b4`/`8b892c1c` on main `8b892c1c` —
+#11/#17/#18/#19/#21/#23/#24/#27 verified fixed and left closed; #6/#20/
+#22/#25/#26/#28 reopened as partial with evidence comments; #29 filed
+(the #7 fix's blockquote breaks the parameter table).
 
 | # | Severity | Title | File |
 | --- | --- | --- | --- |
@@ -44,6 +48,7 @@ re-verified on main `9d6277fe`; (5) a review of the typed-`let` commit
 | [0026](https://github.com/open1s/qwe/issues/26) | Low | Misleading param diagnostics (watch `into`, send `chan`) | reference/src/lang/compile.rs:124 |
 | [0027](https://github.com/open1s/qwe/issues/27) | Medium | Annotated `let` in loop bodies swallowed: initializer replaced by type name, detail 89 bypassed | reference/src/lang/parser.rs:444 |
 | [0028](https://github.com/open1s/qwe/issues/28) | Low | `let` type check never types names: bool alias wrongly rejected (89), integer annotations vacuous | reference/src/lang/parser.rs:81 |
+| [0029](https://github.com/open1s/qwe/issues/29) | Low | Mailbox blockquote wedged mid-table breaks the system-parameter table rendering | docs/lang-usage.md:603 |
 
 ## Suggested order
 
@@ -81,4 +86,15 @@ Typed-`let` review batch (0027–0028):
 2. 0028 — binding-aware annotation checking, `type_name` word boundary,
    integer-annotation honesty; can follow 0027.
 
-Local copies of the bodies live next to this file (`0001-…` … `0028-…`).
+Fix-verification pass (reopened partials):
+
+1. 0020 — `error 60: internal EIR validation failed (EIR detail 4)` for
+   `sin(1.0,2.0)`: wrong code, no real reason, builtin arity still
+   reaches the validator.
+2. 0022 — arity check misses system `let` statements; message has no
+   name/counts/location.
+3. 0006, 0025, 0026, 0028 — each fix landed only part of the issue's
+   fix list (details in the reopen comments).
+4. 0029 — move the mailbox note below the parameter table.
+
+Local copies of the bodies live next to this file (`0001-…` … `0029-…`).
