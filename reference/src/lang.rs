@@ -278,6 +278,10 @@ pub enum UpdateStmt {
     Break(Option<String>),
     /// `continue` / `continue if (cond)` inside a loop body.
     Continue(Option<String>),
+    /// `if cond { return a } [else { return b }]` in a function body: a
+    /// control-flow branch (lazy) so function calls nest/recursively on the
+    /// call stack, unlike the eager `if(c,a,b)` expression.
+    If(String, String, Option<String>),
 }
 
 /// A lowered (resolved) statement tree: the `Expr` form of [`UpdateStmt`],
@@ -289,6 +293,8 @@ pub enum LetStmt {
     For(String, f64, f64, Vec<LetStmt>),
     Break(Option<Expr>),
     Continue(Option<Expr>),
+    /// `if cond { return a } [else { return b }]` (control-flow branch).
+    If(Expr, Expr, Option<Expr>),
 }
 
 /// A parsed scalar expression over state slots (`s0`, `s1`, …).
@@ -553,6 +559,7 @@ fn unrolled_size(stmts: &[UpdateStmt]) -> usize {
         .iter()
         .map(|s| match s {
             UpdateStmt::Let(..) | UpdateStmt::Break(_) | UpdateStmt::Continue(_) => 1,
+            UpdateStmt::If(..) => 1,
             UpdateStmt::Repeat(n, body) => n * unrolled_size(body),
             UpdateStmt::For(_, lo, hi, body) => {
                 ((*hi - *lo).max(0.0) as usize) * (unrolled_size(body) + 1)
@@ -661,6 +668,11 @@ fn to_let_stmts(stmts: &[UpdateStmt]) -> Result<Vec<LetStmt>> {
                 Some(text) => Some(parse_expr_str(text)?),
                 None => None,
             })),
+            UpdateStmt::If(c, t, e) => Ok(LetStmt::If(
+                parse_expr_str(c)?,
+                parse_expr_str(t)?,
+                e.as_ref().map(|x| parse_expr_str(x)).transpose()?,
+            )),
             UpdateStmt::Continue(cond) => Ok(LetStmt::Continue(match cond {
                 Some(text) => Some(parse_expr_str(text)?),
                 None => None,
@@ -1566,6 +1578,22 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         stmts.push(build_loop_stmt(children[i].clone(), 0)?);
                                         i += 1;
                                     }
+                                    Rule::if_stmt => {
+                                        let mut it = children[i].clone().into_inner();
+                                        let _if_kw = it.next(); // `if` keyword token
+                                        let cond = it.next().unwrap().as_str().trim().to_string();
+                                        let _rk = it.next(); // return_kw (transparent)
+                                        let then_e = it.next().unwrap().as_str().trim().to_string();
+                                        let mut else_e = None;
+                                        if it.next().is_some() {
+                                            // else_kw, return_kw, expr
+                                            let _rk2 = it.next();
+                                            else_e =
+                                                it.next().map(|e| e.as_str().trim().to_string());
+                                        }
+                                        stmts.push(UpdateStmt::If(cond, then_e, else_e));
+                                        i += 1;
+                                    }
                                     Rule::return_kw => {
                                         let e = children
                                             .get(i + 1)
@@ -1578,7 +1606,21 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     }
                                 }
                             }
-                            (stmts, body.ok_or(error(Status::Invalid, 55))?)
+                            // A trailing `func_return` supplies the body; a terminal
+                            // control-flow `if` supplies it via its branch returns, so
+                            // the fall-through body is a dummy (a no-`else` terminal `if`
+                            // returns 0.0 on its false path).
+                            let body = match body {
+                                Some(e) => e,
+                                // A terminal control-flow `if` supplies the result
+                                // via its branch returns; the fall-through is a
+                                // dummy (a no-`else` terminal `if` returns 0.0).
+                                None => match stmts.last() {
+                                    Some(UpdateStmt::If(..)) => Expr::Const(0.0),
+                                    _ => return Err(error(Status::Invalid, 55)),
+                                },
+                            };
+                            (stmts, body)
                         }
                         _ => return Err(error(Status::Invalid, 55)),
                     };
@@ -5411,6 +5453,13 @@ fn let_stmts_slot_span(
     for s in stmts {
         match s {
             LetStmt::Let(_, e) => expr_slot_span(e, sn, max, any),
+            LetStmt::If(c, t, e) => {
+                expr_slot_span(c, sn, max, any);
+                expr_slot_span(t, sn, max, any);
+                if let Some(e) = e {
+                    expr_slot_span(e, sn, max, any);
+                }
+            }
             LetStmt::Break(c) | LetStmt::Continue(c) => {
                 if let Some(e) = c {
                     expr_slot_span(e, sn, max, any);
@@ -5435,6 +5484,13 @@ fn collect_let_refs(
         match s {
             LetStmt::Let(_, e) => {
                 collect_refs(e, out, props, named_refs, entity_map, state_names_by_id);
+            }
+            LetStmt::If(c, t, e) => {
+                collect_refs(c, out, props, named_refs, entity_map, state_names_by_id);
+                collect_refs(t, out, props, named_refs, entity_map, state_names_by_id);
+                if let Some(e) = e {
+                    collect_refs(e, out, props, named_refs, entity_map, state_names_by_id);
+                }
             }
             LetStmt::Break(c) | LetStmt::Continue(c) => {
                 if let Some(e) = c {
@@ -5510,7 +5566,7 @@ fn or_gate(
 /// instructions); loops with control flow get run/skip predication.
 fn has_control(stmts: &[LetStmt]) -> bool {
     stmts.iter().any(|s| match s {
-        LetStmt::Break(_) | LetStmt::Continue(_) => true,
+        LetStmt::Break(_) | LetStmt::Continue(_) | LetStmt::If(..) => true,
         LetStmt::Repeat(_, body) | LetStmt::For(_, _, _, body) => has_control(body),
         LetStmt::Let(..) => false,
     })
@@ -5552,6 +5608,11 @@ fn expr_has_query(expr: &Expr) -> bool {
 fn stmts_have_query(stmts: &[LetStmt]) -> bool {
     stmts.iter().any(|s| match s {
         LetStmt::Let(_, e) => expr_has_query(e),
+        LetStmt::If(c, t, e) => {
+            expr_has_query(c)
+                || expr_has_query(t)
+                || e.as_ref().map(expr_has_query).unwrap_or(false)
+        }
         LetStmt::Repeat(_, body) | LetStmt::For(_, _, _, body) => stmts_have_query(body),
         LetStmt::Break(g) | LetStmt::Continue(g) => g.as_ref().map(expr_has_query).unwrap_or(false),
     })
@@ -5658,6 +5719,10 @@ fn lower_let_block(
                 if matches!(stmt, LetStmt::Break(_)) {
                     broke = Some(or_gate(broke, fired, next_id, out));
                 }
+            }
+            LetStmt::If(..) => {
+                // Control-flow `if` is only valid in function bodies (handled by
+                // the function lowering); it cannot appear in a system's lets.
             }
             LetStmt::Repeat(n, body) => {
                 let controlled = has_control(body);
@@ -7250,6 +7315,13 @@ impl DimEnv<'_> {
                     let d = self.of_expr(e)?;
                     self.locals.insert(name.clone(), d);
                 }
+                LetStmt::If(c, t, e) => {
+                    self.of_expr(c)?;
+                    self.of_expr(t)?;
+                    if let Some(e) = e {
+                        self.of_expr(e)?;
+                    }
+                }
                 LetStmt::Repeat(_, body) | LetStmt::For(_, _, _, body) => self.of_lets(body)?,
                 LetStmt::Break(g) | LetStmt::Continue(g) => {
                     if let Some(e) = g {
@@ -7642,7 +7714,69 @@ pub fn compile_program(mut parsed: ParsedProgram) -> Result<CompiledProgram> {
         if expr_has_query(&f.body) || stmts_have_query(&lets) {
             return Err(error(Status::Invalid, 70));
         }
-        lower_let_block(&lets, None, &mut next_id, &mut instrs, &mut locals, &parts);
+        // Lower the body statements in order. `let`/loops go through the shared
+        // block lowerer; a control-flow `if … { return … }` emits a real branch
+        // (CondBr to two Return-terminated blocks), so calls nest on the call
+        // stack and recursion terminates.
+        for stmt in &lets {
+            match stmt {
+                LetStmt::If(cond, then_e, else_e) => {
+                    let ctx = parts.ctx(&locals);
+                    let c = truthy(
+                        lower_expr(cond, &ctx, &mut next_id, &mut instrs),
+                        &mut next_id,
+                        &mut instrs,
+                    );
+                    let cb = instrs.len();
+                    instrs.push(crate::physics_eir::instr(
+                        crate::eir::Opcode::CondBr,
+                        0,
+                        None,
+                        vec![c, 0, 0],
+                        None,
+                        None,
+                    ));
+                    let then_start = instrs.len() as u32;
+                    let ctx_t = parts.ctx(&locals);
+                    let rt = lower_expr(then_e, &ctx_t, &mut next_id, &mut instrs);
+                    instrs.push(crate::physics_eir::instr(
+                        crate::eir::Opcode::Return,
+                        0,
+                        None,
+                        vec![rt],
+                        None,
+                        None,
+                    ));
+                    let else_target = if let Some(e) = else_e {
+                        let else_start = instrs.len() as u32;
+                        let ctx_e = parts.ctx(&locals);
+                        let re = lower_expr(e, &ctx_e, &mut next_id, &mut instrs);
+                        instrs.push(crate::physics_eir::instr(
+                            crate::eir::Opcode::Return,
+                            0,
+                            None,
+                            vec![re],
+                            None,
+                            None,
+                        ));
+                        else_start
+                    } else {
+                        instrs.len() as u32
+                    };
+                    instrs[cb].operands = vec![c, then_start, else_target];
+                }
+                other => {
+                    lower_let_block(
+                        std::slice::from_ref(other),
+                        None,
+                        &mut next_id,
+                        &mut instrs,
+                        &mut locals,
+                        &parts,
+                    );
+                }
+            }
+        }
         let ctx = parts.ctx(&locals);
         let ret_reg = lower_expr(&f.body, &ctx, &mut next_id, &mut instrs);
         instrs.push(crate::physics_eir::instr(
@@ -8748,6 +8882,32 @@ mod tests {
     }
 
     #[test]
+    fn functions_support_recursion() {
+        // Control-flow `if … { return … }` in a function body makes calls nest on
+        // the interpreter's call stack, so recursion terminates (the eager
+        // `if(c,a,b)` expression would evaluate the recursive branch forever).
+        let src = r#"
+            world { gravity=(0,0,0) entity e { state=(x = 0.0) } }
+            funcs {
+                fact(n) { if n < 1.0 { return 1.0 } else { return n * fact(n - 1.0) } }
+                fib(n)  { if n < 2.0 { return n } return fib(n - 1.0) + fib(n - 2.0) }
+            }
+            systems { update { on = e; dt = 1.0 x = fact(5.0) + fib(10.0) } }
+        "#;
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(1).unwrap();
+        let x = rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[0];
+        assert_eq!(x, 120.0 + 55.0, "fact(5)+fib(10) = {x}");
+    }
+
+    #[test]
     fn system_barrier_within_system_is_simultaneous() {
         // One system, two entities: the later-id entity must read the earlier
         // entity's *start-of-system* value, not its same-step update.
@@ -9695,8 +9855,8 @@ mod tests {
                    systems { update { on = a; dt = 1.0 s0 = s0 + dt*(  f(1.0) ) } }";
         match LangRuntime::compile(src) {
             Ok(_) => panic!("statement body without return should be rejected"),
-            // The grammar requires `return`; the program-level parse fails.
-            Err(e) => assert_eq!(e.detail, 60),
+            // The body must end in `return` (or a terminal control-flow `if`).
+            Err(e) => assert_eq!(e.detail, 55),
         }
         // Bare-expression bodies still work.
         let src2 =

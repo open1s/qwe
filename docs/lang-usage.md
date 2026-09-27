@@ -163,6 +163,13 @@ backward difference `(E − E_prev)/dt` — it *differentiates* (0 on the first
 step). In `rk4`, `inte slot = rate` integrates that rate with the classic
 4th-order Runge–Kutta method (much more accurate than Euler at the same `dt`).
 
+**Recursion.** A function body may use the control-flow form
+`if cond { return a } else { return b }` (lazy): each call pushes a frame on the
+call stack, so functions may recurse — e.g.
+`fact(n) { if n < 1.0 { return 1.0 } else { return n * fact(n - 1.0) } }`. The
+expression `if(c, a, b)` evaluates *both* branches, so it cannot be used for
+recursion.
+
 **Assign vs integrate.** Since `=` assigns, a constant write is just
 `slot = target` — no idiom needed.
 

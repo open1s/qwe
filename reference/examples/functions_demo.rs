@@ -11,15 +11,19 @@ use pwe_reference::lang::LangRuntime;
 const SOURCE: &str = r#"
     world {
         gravity = (0, 0, 0)
-        entity x { state = (0.2, 0) }
+        entity x { state = (0.2, 0, 0) }
     }
 
     funcs {
-        # Reusable pure functions. Params are referenced as slots `s0`, `s1`, …
-        # (`a` -> s0, `b` -> s1, `x` -> s0, `lo`/`hi` -> s0/s1).
-        clamp(a, b)      { if(s0 < 0, 0, if(s0 > s1, s1, s0)) }
-        smoothstep(t)    { s0 * s0 * (3 - 2 * s0) }
-        logistic(p)      { s0 * (1 - s0) }          # r = 1
+        # Reusable pure functions with ordinary named parameters.
+        clamp(v, hi)     { if(v < 0, 0, if(v > hi, hi, v)) }
+        smoothstep(t)    { t * t * (3 - 2 * t) }
+        logistic(p)      { p * (1 - p) }            # r = 1
+
+        # Recursive functions use control-flow `if … { return … }` so each call
+        # pushes a frame on the interpreter's call stack (the eager
+        # `if(c,a,b)` expression would evaluate the recursive branch forever).
+        fact(n) { if n < 1.0 { return 1.0 } else { return n * fact(n - 1.0) } }
     }
 
     systems {
@@ -28,6 +32,7 @@ const SOURCE: &str = r#"
         update { dt = 0.02
             s0 = s0 + inte(  clamp(smoothstep(s0) + logistic(s0), 0.08) )
             s1 = s1 + inte(  s0 )
+            s2 = fact(5.0)              # recursion: 5! = 120
         }
     }
 "#;

@@ -23,7 +23,7 @@ const SOURCE: &str = r#"
         entity glider { state = (x = 0, y = 0, 0, vx = 0, vy = 0, vz = 0, 1.6); color = 0xffa03a }
     }
     funcs {
-        clamp(a, lo, hi) { if(s0 < s1, s1, if(s0 > s2, s2, s0)) }
+        clamp(v, lo, hi) { if(v < lo, lo, if(v > hi, hi, v)) }
     }
     systems {
         # Target orbits the origin (perpendicular velocity => circular motion).

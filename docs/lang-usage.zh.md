@@ -153,6 +153,11 @@ systems {
 `rk4` 系统用 `inte slot = rate`，以经典四阶 Runge–Kutta 法积分该导数
 （同等 `dt` 下比 Euler 精确得多）。
 
+**递归函数**：函数体可用控制流 `if 条件 { return a } else { return b }`（惰性求值），
+因此可递归调用（如 `fact(n) { if n < 1.0 { return 1.0 } else { return n * fact(n - 1.0) } }`）；
+而表达式 `if(c,a,b)` 会同时求值两支，不能用于递归。
+
+
 **赋值 vs 积分**：既然 `=` 是赋值，写常量就是 `slot = target`，无需任何惯用法。
 
 **一个立刻要记住的坑**：`let` 的名字不能是 `t`、`pi`、`e`、`sN`（detail 67）。

@@ -8,17 +8,25 @@ COMMENT = _{ "#" ~ (!"\n" ~ ANY)* | "//" ~ (!"\n" ~ ANY)* }
 program = _{ SOI ~ world_section ~ funcs_section? ~ systems_section? ~ EOI }
 
 // -- user-defined functions ---------------------------------------------------
-// Pure functions over named params, called from `update` rules. The body is a
-// scalar expression; params are referenced by slot `s0`, `s1`, … (param i is
-// slot `s_i`). Lowered to EIR `CALL` functions.
+// Pure functions over named parameters, called from `update` rules. The body is
+// a scalar expression (or a statement block with `return`); parameters are
+// referenced by name (`a`, `b`, …). They are also bound to the argument slots
+// `s0`, `s1`, … in declaration order, so `s0` remains a valid alias. Lowered to
+// EIR `CALL` functions.
 funcs_section = { "funcs" ~ "{" ~ func_def* ~ "}" }
 // The body is either a bare scalar expression (its return value) or a
 // sequence of statements (lets and bounded loops) ending with an explicit
 // `return expr`.
 func_def = { ident ~ "(" ~ param_list? ~ ")" ~ "{" ~ func_body ~ "}" }
 func_body = _{ func_stmts | expr }
-func_stmts = { (func_item ~ ";"?)+ ~ func_return }
-func_item = _{ let_stmt | repeat_stmt | for_stmt }
+func_stmts = { (func_item ~ ";"?)+ ~ func_return? }
+// Function-body statements. `if_stmt` is a control-flow branch (its branches
+// must `return`), so function calls form a real call stack and recursion works
+// — unlike the eager `if(c,a,b)` expression, which evaluates both branches.
+func_item = _{ let_stmt | repeat_stmt | for_stmt | if_stmt }
+if_stmt = { if_kw ~ expr ~ "{" ~ if_body ~ "}" ~ (else_kw ~ "{" ~ if_body ~ "}")? }
+if_body = _{ func_return }
+else_kw = @{ "else" ~ !(ASCII_ALPHANUMERIC | "_") }
 func_return = _{ return_kw ~ expr ~ ";"? }
 param_list = { ident ~ ("," ~ ident)* }
 
