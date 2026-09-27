@@ -95,10 +95,24 @@ pub fn build_systems(
                 if nbody_bodies.is_empty() {
                     return Err(error(Status::Invalid, 63));
                 }
+                // Velocity-Verlet (kick-drift-kick) as two systems: stage 1
+                // half-kicks and drifts; stage 2 finishes from the committed
+                // drifted positions (see NbodySystem).
+                let (g, dt) = (
+                    param(&s.params, "G", s.byte_offset, &s.kind)?,
+                    param(&s.params, "dt", s.byte_offset, &s.kind)?,
+                );
                 out.push(Box::new(NbodySystem {
                     bodies: nbody_bodies.to_vec(),
-                    g: param(&s.params, "G", s.byte_offset, &s.kind)?,
-                    dt: param(&s.params, "dt", s.byte_offset, &s.kind)?,
+                    g,
+                    dt,
+                    stage: 1,
+                }));
+                out.push(Box::new(NbodySystem {
+                    bodies: nbody_bodies.to_vec(),
+                    g,
+                    dt,
+                    stage: 2,
                 }));
             }
             "send" | "recv" => {

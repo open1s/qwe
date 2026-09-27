@@ -599,7 +599,7 @@ field name; cell writes are visible to later reads in the same step.
 | `wall` | `x`,`z`,`y_min?`,`restitution?` | component | reflect at `±x`,`±z` |
 | `ground_contact` | `restitution` | component | resolve the `y=0` plane |
 | `linear` | `slots`,`dt`,`row0=(…)`,… | state | `s_N' = Σ a_j s_j + c` |
-| `nbody` | `G`,`dt` | state | inverse-square; `state=(px,py,pz,vx,vy,vz,m)` |
+| `nbody` (velocity-Verlet) | `G`,`dt` | state | inverse-square; `state=(px,py,pz,vx,vy,vz,m)` |
 | `send`/`recv` | `chan`,`value` / `chan`,`slot` | channel | channel send/receive |
 | `update` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | explicit Euler |
 | `rk4` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | Runge–Kutta 4 |

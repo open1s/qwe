@@ -2,8 +2,9 @@
 #
 # Bodies carry `state = (px, py, pz, vx, vy, vz, m)`; the `nbody` system computes
 # the pairwise inverse-square force (Newton's law of universal gravitation,
-# F = G·m1·m2/r²) and integrates it every step, reading all bodies from the same
-# start-of-step snapshot so Newton's third law holds. Radii are the real
+# F = G·m1·m2/r²) and integrates it with velocity-Verlet (kick-drift-kick,
+# symplectic, 2nd order), reading all bodies from the same start-of-step
+# snapshot so Newton's third law holds. Radii are the real
 # semi-major axes (AU) scaled so Earth sits at r ≈ 4; masses are the real planet
 # masses scaled to M_sun = 1000; each body starts at its circular speed
 # v = sqrt(G·M_sun / r), prograde. The initial state is **barycentric** (total

@@ -2588,6 +2588,9 @@ pub struct NbodySystem {
     pub bodies: Vec<u128>,
     pub g: f64,
     pub dt: f64,
+    /// Velocity-Verlet stage: 1 = half-kick + drift (writes v, p); 2 = second
+    /// half-kick from the drifted (now committed) positions (writes v only).
+    pub stage: u8,
 }
 
 impl EirSystem for NbodySystem {
@@ -2610,7 +2613,7 @@ impl EirSystem for NbodySystem {
         let eps = 1e-12;
         let mut next_id = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
 
-        // Self state: px,py,pz,vx,vy,vz,m = slots 0..6.
+        // Self state: px,py,pz,vx,vy,vz,m = slots 0..6 (committed/start-of-step).
         let px = nb_read(out, &mut next_id, entity, 0);
         let py = nb_read(out, &mut next_id, entity, 1);
         let pz = nb_read(out, &mut next_id, entity, 2);
@@ -2618,63 +2621,49 @@ impl EirSystem for NbodySystem {
         let vy = nb_read(out, &mut next_id, entity, 4);
         let vz = nb_read(out, &mut next_id, entity, 5);
 
-        // ax = ay = az = 0
-        let mut ax = nb_const(out, &mut next_id, 0.0);
-        let mut ay = nb_const(out, &mut next_id, 0.0);
-        let mut az = nb_const(out, &mut next_id, 0.0);
+        // a = acceleration at the current (committed) positions.
+        let (ax, ay, az) = nb_accel(
+            out,
+            &mut next_id,
+            entity,
+            &self.bodies,
+            self.g,
+            eps,
+            px,
+            py,
+            pz,
+        );
+        // Half kick: v_half = v + a·dt/2.
+        let half = nb_const(out, &mut next_id, self.dt * 0.5);
+        let hax = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, ax, half);
+        let hay = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, ay, half);
+        let haz = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, az, half);
+        let vhx = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, vx, hax);
+        let vhy = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, vy, hay);
+        let vhz = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, vz, haz);
 
-        for &j in &self.bodies {
-            if j == entity {
-                continue;
-            }
-            let jx = nb_read(out, &mut next_id, j, 0);
-            let jy = nb_read(out, &mut next_id, j, 1);
-            let jz = nb_read(out, &mut next_id, j, 2);
-            let jm = nb_read(out, &mut next_id, j, 6);
-            let dx = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, jx, px);
-            let dy = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, jy, py);
-            let dz = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, jz, pz);
-            let dx2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, dx, dx);
-            let dy2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, dy, dy);
-            let dz2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, dz, dz);
-            let sxy = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, dx2, dy2);
-            let r2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, sxy, dz2);
-            let epsc = nb_const(out, &mut next_id, eps);
-            let r2eps = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, r2, epsc);
-            let r = nb_un(crate::eir::Opcode::Sqrt, out, &mut next_id, r2eps);
-            let r3 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, r2eps, r);
-            let gc = nb_const(out, &mut next_id, self.g);
-            let gm = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, gc, jm);
-            let scale = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, gm, r3);
-            let tx = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, scale, dx);
-            let ty = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, scale, dy);
-            let tz = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, scale, dz);
-            ax = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, ax, tx);
-            ay = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, ay, ty);
-            az = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, az, tz);
+        if self.stage == 1 {
+            // Drift: p_new = p + v_half·dt; publish v_half and p_new.
+            let dtc = nb_const(out, &mut next_id, self.dt);
+            let dvx = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vhx, dtc);
+            let dvy = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vhy, dtc);
+            let dvz = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vhz, dtc);
+            let npx = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, px, dvx);
+            let npy = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, py, dvy);
+            let npz = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, pz, dvz);
+            nb_write(out, entity, 3, vhx);
+            nb_write(out, entity, 4, vhy);
+            nb_write(out, entity, 5, vhz);
+            nb_write(out, entity, 0, npx);
+            nb_write(out, entity, 1, npy);
+            nb_write(out, entity, 2, npz);
+        } else {
+            // Second half kick at the drifted positions: the freshly-read v is
+            // v_half, so v_final = v + a'·dt/2 = vhx (computed above).
+            nb_write(out, entity, 3, vhx);
+            nb_write(out, entity, 4, vhy);
+            nb_write(out, entity, 5, vhz);
         }
-
-        // v += a*dt ; p += v*dt
-        let dtc = nb_const(out, &mut next_id, self.dt);
-        let dax = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, ax, dtc);
-        let day = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, ay, dtc);
-        let daz = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, az, dtc);
-        let nvx = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, vx, dax);
-        let nvy = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, vy, day);
-        let nvz = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, vz, daz);
-        let dtc2 = nb_const(out, &mut next_id, self.dt);
-        let dxp = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, nvx, dtc2);
-        let dyp = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, nvy, dtc2);
-        let dzp = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, nvz, dtc2);
-        let npx = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, px, dxp);
-        let npy = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, py, dyp);
-        let npz = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, pz, dzp);
-        nb_write(out, entity, 3, nvx);
-        nb_write(out, entity, 4, nvy);
-        nb_write(out, entity, 5, nvz);
-        nb_write(out, entity, 0, npx);
-        nb_write(out, entity, 1, npy);
-        nb_write(out, entity, 2, npz);
 
         out.push(crate::physics_eir::instr(
             crate::eir::Opcode::Return,
@@ -2685,6 +2674,56 @@ impl EirSystem for NbodySystem {
             None,
         ));
     }
+}
+
+/// Accumulates the inverse-square acceleration on `entity` from every other
+/// body, using the (committed) positions passed for `entity` and read for the
+/// others. Shared by both velocity-Verlet stages.
+fn nb_accel(
+    out: &mut Vec<crate::eir::Instruction>,
+    next_id: &mut u32,
+    entity: u128,
+    bodies: &[u128],
+    g: f64,
+    eps: f64,
+    px: u32,
+    py: u32,
+    pz: u32,
+) -> (u32, u32, u32) {
+    let mut ax = nb_const(out, next_id, 0.0);
+    let mut ay = nb_const(out, next_id, 0.0);
+    let mut az = nb_const(out, next_id, 0.0);
+    for &j in bodies {
+        if j == entity {
+            continue;
+        }
+        let jx = nb_read(out, next_id, j, 0);
+        let jy = nb_read(out, next_id, j, 1);
+        let jz = nb_read(out, next_id, j, 2);
+        let jm = nb_read(out, next_id, j, 6);
+        let dx = nb_arith(out, next_id, crate::eir::Opcode::Sub, jx, px);
+        let dy = nb_arith(out, next_id, crate::eir::Opcode::Sub, jy, py);
+        let dz = nb_arith(out, next_id, crate::eir::Opcode::Sub, jz, pz);
+        let dx2 = nb_arith(out, next_id, crate::eir::Opcode::Mul, dx, dx);
+        let dy2 = nb_arith(out, next_id, crate::eir::Opcode::Mul, dy, dy);
+        let dz2 = nb_arith(out, next_id, crate::eir::Opcode::Mul, dz, dz);
+        let sxy = nb_arith(out, next_id, crate::eir::Opcode::Add, dx2, dy2);
+        let r2 = nb_arith(out, next_id, crate::eir::Opcode::Add, sxy, dz2);
+        let epsc = nb_const(out, next_id, eps);
+        let r2eps = nb_arith(out, next_id, crate::eir::Opcode::Add, r2, epsc);
+        let r = nb_un(crate::eir::Opcode::Sqrt, out, next_id, r2eps);
+        let r3 = nb_arith(out, next_id, crate::eir::Opcode::Mul, r2eps, r);
+        let gc = nb_const(out, next_id, g);
+        let gm = nb_arith(out, next_id, crate::eir::Opcode::Mul, gc, jm);
+        let scale = nb_arith(out, next_id, crate::eir::Opcode::Div, gm, r3);
+        let tx = nb_arith(out, next_id, crate::eir::Opcode::Mul, scale, dx);
+        let ty = nb_arith(out, next_id, crate::eir::Opcode::Mul, scale, dy);
+        let tz = nb_arith(out, next_id, crate::eir::Opcode::Mul, scale, dz);
+        ax = nb_arith(out, next_id, crate::eir::Opcode::Add, ax, tx);
+        ay = nb_arith(out, next_id, crate::eir::Opcode::Add, ay, ty);
+        az = nb_arith(out, next_id, crate::eir::Opcode::Add, az, tz);
+    }
+    (ax, ay, az)
 }
 
 fn nb_arith(
