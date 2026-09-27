@@ -2031,9 +2031,9 @@ impl EirModule {
             return Err(error(Status::SchemaUnsupported, 2, 0));
         }
         let _flags = input.u32()?;
-        let stored_hash = Hash256(input.fixed(32)?.try_into().unwrap());
-        let schema_set_hash = Hash256(input.fixed(32)?.try_into().unwrap());
-        let domain_ir_hash = Hash256(input.fixed(32)?.try_into().unwrap());
+        let stored_hash = Hash256(input.fixed(32)?.try_into().expect("length-checked slice"));
+        let schema_set_hash = Hash256(input.fixed(32)?.try_into().expect("length-checked slice"));
+        let domain_ir_hash = Hash256(input.fixed(32)?.try_into().expect("length-checked slice"));
         let target_kind = input.u16()?;
         if target_kind > TARGET_NPU {
             return Err(error(Status::Invalid, 3, input.offset()));
@@ -2219,8 +2219,9 @@ fn decode_instruction(input: &mut Reader<'_>) -> Result<Instruction> {
         None
     };
     let target = if flags & FLAG_TARGET != 0 {
-        let entity = u128::from_le_bytes(input.fixed(16)?.try_into().unwrap());
-        let component = ComponentTypeId(input.fixed(16)?.try_into().unwrap());
+        let entity =
+            u128::from_le_bytes(input.fixed(16)?.try_into().expect("length-checked slice"));
+        let component = ComponentTypeId(input.fixed(16)?.try_into().expect("length-checked slice"));
         let offset = input.u32()?;
         Some(ComponentRef {
             entity,

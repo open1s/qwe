@@ -90,7 +90,7 @@ pub fn param_component_id(name: &str) -> ComponentTypeId {
     let mut input = b"pwe.lang.param/v1\0".to_vec();
     input.extend_from_slice(name.as_bytes());
     let h = crate::sha256::digest(&input);
-    ComponentTypeId(h.0[..16].try_into().unwrap())
+    ComponentTypeId(h.0[..16].try_into().expect("length-checked slice"))
 }
 
 /// Canonical `ComponentTypeId` for a named grid field (`pwe.lang.field.<name>`);

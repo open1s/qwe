@@ -13,6 +13,7 @@
 //!
 //! Exit codes: 0 success, 1 compile/runtime failure, 2 usage error.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 use pwe_api::RegionId;
 use pwe_reference::dsl::WorldModel;
 use pwe_reference::eir::EirModule;
@@ -109,7 +110,7 @@ fn take_u32(bytes: &[u8], cursor: &mut usize, what: &str) -> Result<u32, String>
             .get(*cursor..*cursor + 4)
             .ok_or_else(|| format!("truncated artifact: {what}"))?
             .try_into()
-            .unwrap(),
+            .expect("length-checked slice"),
     );
     *cursor += 4;
     Ok(v)
@@ -121,7 +122,7 @@ fn take_str<'a>(bytes: &'a [u8], cursor: &mut usize, what: &str) -> Result<&'a s
             .get(*cursor..*cursor + 4)
             .ok_or_else(|| format!("truncated artifact: {what} length"))?
             .try_into()
-            .unwrap(),
+            .expect("length-checked slice"),
     ) as usize;
     *cursor += 4;
     let raw = bytes
@@ -140,8 +141,10 @@ fn unpack(bytes: &[u8]) -> Result<(EirModule, ProgramSources), String> {
     if version != VERSION {
         return Err(format!("unsupported .pweb version {version}"));
     }
-    let eir_len = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) as usize;
-    let root_len = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+    let eir_len =
+        u64::from_le_bytes(bytes[8..16].try_into().expect("length-checked slice")) as usize;
+    let root_len =
+        u64::from_le_bytes(bytes[16..24].try_into().expect("length-checked slice")) as usize;
     let eir_bytes = bytes
         .get(24..24 + eir_len)
         .ok_or("truncated artifact: EIR section")?;
@@ -464,7 +467,7 @@ fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
         // already captured the lines for the viewer).
         let _ = rt.drain_logs();
         {
-            let mut g = live.write().unwrap();
+            let mut g = live.write().unwrap_or_else(|e| e.into_inner());
             g.step = step;
             g.frame = frame;
             g.info = info;
@@ -486,7 +489,7 @@ fn info_lines(rt: &LangRuntime, model: &WorldModel, step: u64) -> Vec<String> {
         .min_by(|a, b| {
             from_origin(a.position)
                 .partial_cmp(&from_origin(b.position))
-                .unwrap()
+                .unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|e| e.position);
     let by_name: std::collections::BTreeMap<String, Vec3> = frame

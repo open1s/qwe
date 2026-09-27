@@ -21,7 +21,7 @@ fn u128_bytes(value: u128) -> [u8; 16] {
     value.to_le_bytes()
 }
 fn parse_u128(bytes: &[u8]) -> u128 {
-    u128::from_le_bytes(bytes.try_into().unwrap())
+    u128::from_le_bytes(bytes.try_into().expect("length-checked slice"))
 }
 
 impl ReferenceWorld {
@@ -71,7 +71,7 @@ impl ReferenceWorld {
         if input.fixed(8)? != MAGIC || input.u16()? != 2 || input.u16()? != 0 {
             return Err(error(Status::Invalid, 1));
         }
-        let schema = Hash256(input.fixed(32)?.try_into().unwrap());
+        let schema = Hash256(input.fixed(32)?.try_into().expect("length-checked slice"));
         if schema != expected_schema_set_hash {
             return Err(error(Status::SchemaHash, 1));
         }
@@ -86,8 +86,8 @@ impl ReferenceWorld {
         for _ in 0..resource_ref_count {
             let rid = ResourceId(parse_u128(input.fixed(16)?));
             let reference = ResourceRef {
-                content_hash: Hash256(input.fixed(32)?.try_into().unwrap()),
-                schema_hash: Hash256(input.fixed(32)?.try_into().unwrap()),
+                content_hash: Hash256(input.fixed(32)?.try_into().expect("length-checked slice")),
+                schema_hash: Hash256(input.fixed(32)?.try_into().expect("length-checked slice")),
             };
             if resource_refs.insert(rid, reference).is_some() {
                 return Err(error(Status::Invalid, 4));
@@ -115,10 +115,11 @@ impl ReferenceWorld {
                 id: EntityId(parse_u128(input.fixed(16)?)),
                 generation: input.u32()?,
             };
-            let type_id = ComponentTypeId(input.fixed(16)?.try_into().unwrap());
+            let type_id =
+                ComponentTypeId(input.fixed(16)?.try_into().expect("length-checked slice"));
             let descriptor = ComponentDescriptor {
                 type_id,
-                schema_hash: Hash256(input.fixed(32)?.try_into().unwrap()),
+                schema_hash: Hash256(input.fixed(32)?.try_into().expect("length-checked slice")),
                 abi_major: input.u32()?,
                 flags: input.u32()?,
                 value_size: input.u32()?,
@@ -381,8 +382,10 @@ impl DeltaOp {
         }
         fn descriptor(input: &mut Reader) -> Result<ComponentDescriptor> {
             Ok(ComponentDescriptor {
-                type_id: ComponentTypeId(input.fixed(16)?.try_into().unwrap()),
-                schema_hash: Hash256(input.fixed(32)?.try_into().unwrap()),
+                type_id: ComponentTypeId(
+                    input.fixed(16)?.try_into().expect("length-checked slice"),
+                ),
+                schema_hash: Hash256(input.fixed(32)?.try_into().expect("length-checked slice")),
                 abi_major: input.u32()?,
                 flags: input.u32()?,
                 value_size: input.u32()?,
@@ -407,7 +410,9 @@ impl DeltaOp {
             op::REMOVE_COMPONENT => DeltaOp::RemoveComponent {
                 entity: entity(input)?,
                 ownership: ownership(input)?,
-                type_id: ComponentTypeId(input.fixed(16)?.try_into().unwrap()),
+                type_id: ComponentTypeId(
+                    input.fixed(16)?.try_into().expect("length-checked slice"),
+                ),
             },
             op::REPLACE_COMPONENT => DeltaOp::ReplaceComponent {
                 entity: entity(input)?,
@@ -418,15 +423,21 @@ impl DeltaOp {
             op::PATCH_COMPONENT => DeltaOp::PatchComponent {
                 entity: entity(input)?,
                 ownership: ownership(input)?,
-                type_id: ComponentTypeId(input.fixed(16)?.try_into().unwrap()),
+                type_id: ComponentTypeId(
+                    input.fixed(16)?.try_into().expect("length-checked slice"),
+                ),
                 offset: input.u32()?,
                 bytes: input.bytes()?.to_vec(),
             },
             op::RESOURCE_UPDATE => DeltaOp::ResourceUpdate {
                 id: ResourceId(parse_u128(input.fixed(16)?)),
                 reference: ResourceRef {
-                    content_hash: Hash256(input.fixed(32)?.try_into().unwrap()),
-                    schema_hash: Hash256(input.fixed(32)?.try_into().unwrap()),
+                    content_hash: Hash256(
+                        input.fixed(32)?.try_into().expect("length-checked slice"),
+                    ),
+                    schema_hash: Hash256(
+                        input.fixed(32)?.try_into().expect("length-checked slice"),
+                    ),
                 },
             },
             op::OWNERSHIP_UPDATE => DeltaOp::OwnershipUpdate {
@@ -479,7 +490,7 @@ impl StateDelta {
             return Err(error(Status::Invalid, 11));
         }
         let delta = StateDelta {
-            schema_set_hash: Hash256(input.fixed(32)?.try_into().unwrap()),
+            schema_set_hash: Hash256(input.fixed(32)?.try_into().expect("length-checked slice")),
             world: WorldId(parse_u128(input.fixed(16)?)),
             base_version: WorldVersion(input.u64()?),
             target_version: WorldVersion(input.u64()?),

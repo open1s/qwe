@@ -1,0 +1,5 @@
+# Production paths must not call `.unwrap()` (use `?`, or `.expect("proven: …")`
+# with a documented invariant). Test code may unwrap freely.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-unwrap-in-consts = true

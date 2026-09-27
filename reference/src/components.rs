@@ -36,7 +36,7 @@ fn push_quat(out: &mut Vec<u8>, q: Quat) {
 fn take_f64(bytes: &[u8], at: usize) -> Result<f64> {
     let slice = bytes.get(at..at + 8).ok_or(error(Status::Invalid, 1))?;
     Ok(f64::from_bits(u64::from_le_bytes(
-        slice.try_into().unwrap(),
+        slice.try_into().expect("length-checked slice"),
     )))
 }
 fn take_vec3(bytes: &[u8], at: usize) -> Result<Vec3> {
@@ -442,14 +442,18 @@ impl Collider {
             }),
             3 => {
                 let count_raw = bytes.get(1..3).ok_or(error(Status::Invalid, 7))?;
-                let parts_len = u16::from_le_bytes(count_raw.try_into().unwrap()) as usize;
+                let parts_len =
+                    u16::from_le_bytes(count_raw.try_into().expect("length-checked slice"))
+                        as usize;
                 let mut cursor = 3;
                 let mut parts = Vec::with_capacity(parts_len);
                 for _ in 0..parts_len {
                     let len_bytes = bytes
                         .get(cursor..cursor + 4)
                         .ok_or(error(Status::Invalid, 8))?;
-                    let len = u32::from_le_bytes(len_bytes.try_into().unwrap()) as usize;
+                    let len =
+                        u32::from_le_bytes(len_bytes.try_into().expect("length-checked slice"))
+                            as usize;
                     cursor += 4;
                     let slice = bytes
                         .get(cursor..cursor + len)
@@ -461,9 +465,9 @@ impl Collider {
             }
             4 => {
                 let rows_bytes = bytes.get(1..3).ok_or(error(Status::Invalid, 10))?;
-                let rows = u16::from_le_bytes(rows_bytes.try_into().unwrap());
+                let rows = u16::from_le_bytes(rows_bytes.try_into().expect("length-checked slice"));
                 let cols_bytes = bytes.get(3..5).ok_or(error(Status::Invalid, 11))?;
-                let cols = u16::from_le_bytes(cols_bytes.try_into().unwrap());
+                let cols = u16::from_le_bytes(cols_bytes.try_into().expect("length-checked slice"));
                 let row_step = take_f64(bytes, 5)?;
                 let col_step = take_f64(bytes, 13)?;
                 let origin = take_vec3(bytes, 21)?;
@@ -472,7 +476,7 @@ impl Collider {
                         .get(45..49)
                         .ok_or(error(Status::Invalid, 12))?
                         .try_into()
-                        .unwrap(),
+                        .expect("length-checked slice"),
                 ) as usize;
                 let mut heights = Vec::with_capacity(count);
                 let mut cursor = 49;
@@ -495,7 +499,7 @@ impl Collider {
                         .get(1..5)
                         .ok_or(error(Status::Invalid, 14))?
                         .try_into()
-                        .unwrap(),
+                        .expect("length-checked slice"),
                 ) as usize;
                 let mut points = Vec::with_capacity(count);
                 let mut cursor = 5;
@@ -565,7 +569,9 @@ impl DistanceJoint {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let other = bytes.get(0..16).ok_or(error(Status::Invalid, 4))?;
         Ok(Self {
-            other: pwe_api::EntityId(u128::from_le_bytes(other.try_into().unwrap())),
+            other: pwe_api::EntityId(u128::from_le_bytes(
+                other.try_into().expect("length-checked slice"),
+            )),
             rest_length: take_f64(bytes, 16)?,
             stiffness: take_f64(bytes, 24)?,
         })
@@ -644,7 +650,9 @@ impl Joint {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let kind = *bytes.first().ok_or(error(Status::Invalid, 6))?;
         let other_raw = bytes.get(1..17).ok_or(error(Status::Invalid, 7))?;
-        let other = pwe_api::EntityId(u128::from_le_bytes(other_raw.try_into().unwrap()));
+        let other = pwe_api::EntityId(u128::from_le_bytes(
+            other_raw.try_into().expect("length-checked slice"),
+        ));
         let rest = take_f64(bytes, 17)?;
         let stiffness = take_f64(bytes, 25)?;
         let v1 = take_vec3(bytes, 33)?;

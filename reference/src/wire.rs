@@ -129,16 +129,22 @@ impl<'a> Reader<'a> {
         Ok(value)
     }
     pub fn u16(&mut self) -> Result<u16> {
-        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+        Ok(u16::from_le_bytes(
+            self.take(2)?.try_into().expect("length-checked slice"),
+        ))
     }
     pub fn u8(&mut self) -> Result<u8> {
         Ok(self.take(1)?[0])
     }
     pub fn u32(&mut self) -> Result<u32> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+        Ok(u32::from_le_bytes(
+            self.take(4)?.try_into().expect("length-checked slice"),
+        ))
     }
     pub fn u64(&mut self) -> Result<u64> {
-        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+        Ok(u64::from_le_bytes(
+            self.take(8)?.try_into().expect("length-checked slice"),
+        ))
     }
     pub fn bytes(&mut self) -> Result<&'a [u8]> {
         let length = usize::try_from(self.u32()?).map_err(|_| error(Status::Limit, self.cursor))?;

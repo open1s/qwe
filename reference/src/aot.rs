@@ -111,7 +111,7 @@ impl AotProgram {
         let stored_hash = Hash256(
             bytes[AOT_HASH_OFFSET..AOT_HASH_OFFSET + 32]
                 .try_into()
-                .unwrap(),
+                .expect("length-checked slice"),
         );
         // Recompute the hash over the bytes with the hash field zeroed.
         let mut hashed = bytes.to_vec();
@@ -122,7 +122,7 @@ impl AotProgram {
         }
         let len_bytes: [u8; 4] = bytes[AOT_HASH_OFFSET + 32..AOT_HASH_OFFSET + 36]
             .try_into()
-            .unwrap();
+            .expect("length-checked slice");
         let module_len = u32::from_le_bytes(len_bytes) as usize;
         let module_start = AOT_HASH_OFFSET + 36;
         let module_bytes = bytes

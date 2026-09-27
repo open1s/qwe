@@ -163,7 +163,10 @@ impl OwnershipMachine {
             return Err(error(Status::OwnershipStale, 2));
         }
         self.transfers.insert(message.transfer_id, message.clone());
-        let source_mut = self.regions.get_mut(&message.source).unwrap();
+        let source_mut = self
+            .regions
+            .get_mut(&message.source)
+            .expect("source region exists");
         source_mut
             .pending
             .insert(message.entity, message.transfer_id);
@@ -265,7 +268,10 @@ impl OwnershipMachine {
             .get(&transfer_id)
             .copied()
             .ok_or(error(Status::OwnershipStale, 4))?;
-        let source = self.regions.get_mut(&message.source).unwrap();
+        let source = self
+            .regions
+            .get_mut(&message.source)
+            .expect("source region exists");
         // Only release if the target actually advanced to expected_epoch+1.
         if confirmed != message.expected_epoch + 1 {
             return Err(error(Status::OwnershipStale, 5));

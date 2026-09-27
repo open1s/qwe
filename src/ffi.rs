@@ -39,6 +39,12 @@ pub struct PweHandle {
     pub reserved: u32,
 }
 
+// SAFETY: these `unsafe extern "C" fn` types are the frozen vtable signatures
+// (RFC-0016/RFC-0031). Callers (hosts/plugins crossing the ABI) MUST pass a
+// valid `*mut c_void` runtime context and non-null out-parameters, and MUST
+// honour the returned `PweStatus` before reading any out-parameter; buffers
+// returned in `PweBuffer` MUST be released with the matching free function. No
+// unwind crosses the ABI boundary.
 pub type WorldGet =
     unsafe extern "C" fn(*mut c_void, PweBuffer, *mut PweHandle, *mut PweError) -> PweStatus;
 pub type ComponentView = unsafe extern "C" fn(

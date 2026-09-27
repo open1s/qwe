@@ -247,8 +247,10 @@ impl WirDocument {
             return Err(error(Status::Invalid, 8, 84));
         }
 
-        let schema_set_hash = Hash256(input.fixed(32)?.try_into().unwrap());
-        let world_id = WorldId(u128::from_le_bytes(input.fixed(16)?.try_into().unwrap()));
+        let schema_set_hash = Hash256(input.fixed(32)?.try_into().expect("length-checked slice"));
+        let world_id = WorldId(u128::from_le_bytes(
+            input.fixed(16)?.try_into().expect("length-checked slice"),
+        ));
         let world_version = WorldVersion(input.u64()?);
         let sim_time_ns = input.u64()? as i64;
 
@@ -330,9 +332,15 @@ impl WirDocument {
             }
         }
 
-        let (schema_off, schema_len) = *kinds_seen.get(&KIND_SCHEMA).unwrap();
-        let (entities_off, entities_len) = *kinds_seen.get(&KIND_ENTITIES).unwrap();
-        let (components_off, components_len) = *kinds_seen.get(&KIND_COMPONENTS).unwrap();
+        let (schema_off, schema_len) = *kinds_seen
+            .get(&KIND_SCHEMA)
+            .expect("schema section recorded");
+        let (entities_off, entities_len) = *kinds_seen
+            .get(&KIND_ENTITIES)
+            .expect("entities section recorded");
+        let (components_off, components_len) = *kinds_seen
+            .get(&KIND_COMPONENTS)
+            .expect("components section recorded");
 
         let schemas = decode_schema_section(&bytes[schema_off..schema_off + schema_len])?;
         let entities = decode_entities_section(&bytes[entities_off..entities_off + entities_len])?;
@@ -466,7 +474,9 @@ fn decode_entities_section(bytes: &[u8]) -> Result<Vec<EntityRecord>> {
     let mut entities = Vec::new();
     let mut previous = None::<(EntityId, u32)>;
     for _ in 0..count {
-        let id = EntityId(u128::from_le_bytes(input.fixed(16)?.try_into().unwrap()));
+        let id = EntityId(u128::from_le_bytes(
+            input.fixed(16)?.try_into().expect("length-checked slice"),
+        ));
         let generation = input.u32()?;
         let flags = input.u32()?;
         if id.0 == 0 || generation == 0 {
@@ -527,8 +537,10 @@ fn decode_components_section(bytes: &[u8]) -> Result<Vec<ComponentRecord>> {
     for _ in 0..count {
         let record_bytes = input.bytes()?;
         let mut record = Reader::new(record_bytes)?;
-        let type_id = ComponentTypeId(record.fixed(16)?.try_into().unwrap());
-        let entity = EntityId(u128::from_le_bytes(record.fixed(16)?.try_into().unwrap()));
+        let type_id = ComponentTypeId(record.fixed(16)?.try_into().expect("length-checked slice"));
+        let entity = EntityId(u128::from_le_bytes(
+            record.fixed(16)?.try_into().expect("length-checked slice"),
+        ));
         let generation = record.u32()?;
         let value = record.bytes()?.to_vec();
         record.finish()?;

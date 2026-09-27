@@ -21,7 +21,7 @@ pub fn digest(data: &[u8]) -> Hash256 {
     let bit_len = (data.len() as u64).wrapping_mul(8);
     let mut blocks = data.chunks_exact(64);
     for block in &mut blocks {
-        compress(&mut state, block.try_into().unwrap());
+        compress(&mut state, block.try_into().expect("length-checked slice"));
     }
     let tail = blocks.remainder();
     let mut last = [0u8; 128];
@@ -30,7 +30,7 @@ pub fn digest(data: &[u8]) -> Hash256 {
     let length_offset = if tail.len() < 56 { 56 } else { 120 };
     last[length_offset..length_offset + 8].copy_from_slice(&bit_len.to_be_bytes());
     for block in last[..length_offset + 8].chunks_exact(64) {
-        compress(&mut state, block.try_into().unwrap());
+        compress(&mut state, block.try_into().expect("length-checked slice"));
     }
     let mut out = [0u8; 32];
     for (index, word) in state.into_iter().enumerate() {
@@ -42,7 +42,11 @@ pub fn digest(data: &[u8]) -> Hash256 {
 fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut w = [0u32; 64];
     for i in 0..16 {
-        w[i] = u32::from_be_bytes(block[i * 4..i * 4 + 4].try_into().unwrap());
+        w[i] = u32::from_be_bytes(
+            block[i * 4..i * 4 + 4]
+                .try_into()
+                .expect("length-checked slice"),
+        );
     }
     for i in 16..64 {
         let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);

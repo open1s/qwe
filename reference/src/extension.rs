@@ -52,7 +52,8 @@ impl CompressionMetadata {
         let mut input = Reader::new(bytes)?;
         let algorithm = input.fixed(1)?[0];
         let uncompressed_length = input.u64()?;
-        let uncompressed_sha256 = Hash256(input.fixed(32)?.try_into().unwrap());
+        let uncompressed_sha256 =
+            Hash256(input.fixed(32)?.try_into().expect("length-checked slice"));
         input.finish()?;
         if uncompressed_length as usize > crate::wire::MAX_DOCUMENT_BYTES {
             return Err(error(Status::Limit, 1, 0));

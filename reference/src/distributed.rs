@@ -72,7 +72,7 @@ impl DistributedContinuum {
             .node_mut(region)
             .entities
             .get_mut(&field_entity(region))
-            .unwrap()
+            .expect("node entity present after claim")
             .components
             .insert(FIELD_COMPONENT, field_to_bytes(&field));
         // One process per node carries the reduction budget the scheduler grants.

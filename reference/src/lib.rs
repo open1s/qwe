@@ -1,5 +1,6 @@
 //! Deterministic in-memory semantic reference for RFC-0023 and RFC-0024.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 pub use pwe_api;
 pub mod aot;
 pub mod artifact;

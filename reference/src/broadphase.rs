@@ -171,7 +171,7 @@ impl Bvh {
             }
             return;
         }
-        let (a, b) = self.children(index).unwrap();
+        let (a, b) = self.children(index).expect("internal node has children");
         self.pairs_between(a, b, out);
         self.collect_pairs(a, out);
         self.collect_pairs(b, out);
@@ -207,18 +207,18 @@ impl Bvh {
                 }
             }
             (Some(_), None) => {
-                let (ca, cb) = self.children(b).unwrap();
+                let (ca, cb) = self.children(b).expect("internal node has children");
                 self.pairs_between(a, ca, out);
                 self.pairs_between(a, cb, out);
             }
             (None, Some(_)) => {
-                let (ca, cb) = self.children(a).unwrap();
+                let (ca, cb) = self.children(a).expect("internal node has children");
                 self.pairs_between(ca, b, out);
                 self.pairs_between(cb, b, out);
             }
             (None, None) => {
-                let (aa1, aa2) = self.children(a).unwrap();
-                let (bb1, bb2) = self.children(b).unwrap();
+                let (aa1, aa2) = self.children(a).expect("internal node has children");
+                let (bb1, bb2) = self.children(b).expect("internal node has children");
                 self.pairs_between(aa1, bb1, out);
                 self.pairs_between(aa1, bb2, out);
                 self.pairs_between(aa2, bb1, out);

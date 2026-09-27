@@ -1086,7 +1086,7 @@ fn handle_connection(
             asset.as_bytes().to_vec(),
         )
     } else if path == "/state" {
-        let live = state.read().unwrap();
+        let live = state.read().unwrap_or_else(|e| e.into_inner());
         let body = live_state_json(&live);
         ("200 OK", "application/json", body.into_bytes())
     } else if path == "/reset" {

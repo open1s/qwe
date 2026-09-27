@@ -120,7 +120,9 @@ impl ComponentIdentity {
         let mut input = b"pwe.component/v2\0".to_vec();
         input.extend(self.canonical_bytes()?);
         let hash = digest(&input);
-        Ok(ComponentTypeId(hash.0[..16].try_into().unwrap()))
+        Ok(ComponentTypeId(
+            hash.0[..16].try_into().expect("length-checked slice"),
+        ))
     }
 }
 impl Schema {
@@ -233,7 +235,7 @@ impl SchemaRegistry {
             if existing_hash != hash {
                 return Err(error(Status::HashCollision, 1));
             }
-            return Ok(self.schemas.get(&type_id).unwrap());
+            return Ok(self.schemas.get(&type_id).expect("present above"));
         }
         self.schemas.insert(
             type_id,
@@ -243,7 +245,7 @@ impl SchemaRegistry {
                 schema,
             },
         );
-        Ok(self.schemas.get(&type_id).unwrap())
+        Ok(self.schemas.get(&type_id).expect("just inserted"))
     }
     pub fn get(&self, type_id: ComponentTypeId) -> Option<&RegisteredSchema> {
         self.schemas.get(&type_id)

@@ -2,6 +2,7 @@
 //! Implementations live behind these traits; this crate owns no World storage.
 
 #![no_std]
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 
 use core::fmt;
 

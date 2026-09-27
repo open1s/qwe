@@ -422,7 +422,7 @@ fn take_32(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32]> {
         byte_offset: *cursor as u64,
     })?;
     *cursor += 32;
-    Ok(s.try_into().unwrap())
+    Ok(s.try_into().expect("length-checked slice"))
 }
 fn take_f64_s(bytes: &[u8], cursor: &mut usize) -> Result<f64> {
     let b = take_8(bytes, cursor)?;
@@ -443,7 +443,7 @@ fn take_8(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 8]> {
         byte_offset: *cursor as u64,
     })?;
     *cursor += 8;
-    Ok(s.try_into().unwrap())
+    Ok(s.try_into().expect("length-checked slice"))
 }
 fn take_16(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 16]> {
     let s = bytes.get(*cursor..*cursor + 16).ok_or(pwe_api::Error {
@@ -452,7 +452,7 @@ fn take_16(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 16]> {
         byte_offset: *cursor as u64,
     })?;
     *cursor += 16;
-    Ok(s.try_into().unwrap())
+    Ok(s.try_into().expect("length-checked slice"))
 }
 
 #[cfg(test)]

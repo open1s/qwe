@@ -69,9 +69,9 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 ### Phase 0 — 工程基座（进行中）
 - [x] CI（fmt/clippy `-D warnings`/test/conformance/examples/bench）+ `rust-toolchain.toml` + `deny.toml` + `.cargo/config.toml`
 - [x] 手写基准 `reference/benches/throughput.rs`（无重依赖）
-- [ ] 消除非测试 `unwrap`；`unsafe` 附 `// SAFETY:`
+- [x] 消除非测试 `unwrap()`（134→0；固定长转换用 `.expect("proven")`，解析用 `next_pair` 传播，锁用 `unwrap_or_else(into_inner)`）；以 `clippy.toml` + `#![cfg_attr(not(test), deny(clippy::unwrap_used))]` 防回归；FFI 类型别名补安全契约说明
 - [ ] **系统内同步屏障（引擎通用语义）**：见 Phase 2 第 10 项（本次已提前完成核心）
-- [ ] 编译期性能：`validate_function` 去 O(F) 查找、SSA 表改稠密数组
+- [x] 编译期性能：`validate_function` 去 O(F) 查找、SSA 表改稠密数组（compile(nbody 64) 96→38ms）
 
 ### Phase 1 — 语言与运行时定型/拆解
 - [ ] 拆分 `lang.rs` → `ast/parser/units/lower/systems/*/runtime/diagnostics`
@@ -103,7 +103,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
    系统内所有实体读到同一冻结快照，跨系统可见先前写。**修复了 nbody 破坏牛顿第三定律的根因**，并新增两个回归测试。
 2. **太阳系演示科学修正**：真实轨道半径比例 + 真实质量 + **质心系初值**，月球真正绕地球（希尔半径 ~0.26 倍）。
 3. **工程基座**：CI、工具链、`cargo-deny`、`.cargo` 策略、无依赖基准。
-4. **性能度量**：基准暴露 `compile` O(n²) 与 `validate` 常数过高（待优化）。
+4. **性能度量**：基准暴露 `compile` O(n²) 与 `validate` 常数过高；已优化至 38ms。
 
 ## 5. 验收标准（关键项）
 - 运行路径 `unwrap=0`；CI 全绿；基准回归 >5% 报警。

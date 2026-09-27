@@ -381,14 +381,14 @@ fn numeric_param_keys(kind: &str) -> &'static [&'static str] {
 /// bucket (scalar / vector / expression) of a `SystemDecl`.
 fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
     let mut inner = param.into_inner();
-    let first = inner.next().unwrap();
+    let first = next_pair(&mut inner)?;
     // `let name = expr` is a local binding; otherwise `ident = rhs`.
     if first.as_rule() == Rule::let_stmt {
         // The literal `let` is transparent; children are [ident(name), expr].
         let mut li = first.into_inner();
-        let name = li.next().unwrap().as_str().to_string();
+        let name = next_pair(&mut li)?.as_str().to_string();
         check_let_name(&name, decl.byte_offset)?;
-        let expr = li.next().unwrap().as_str().trim().to_string();
+        let expr = next_pair(&mut li)?.as_str().trim().to_string();
         decl.update_stmts.push(UpdateStmt::Let(name, expr));
         return Ok(());
     }
@@ -412,9 +412,9 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
         if is_ode {
             let _ = it.next();
         }
-        let lhs = it.next().unwrap();
+        let lhs = next_pair(&mut it)?;
         let key = lhs.as_str().trim().to_string();
-        let expr = it.next().unwrap();
+        let expr = next_pair(&mut it)?;
         if expr.as_rule() != Rule::expr {
             return Err(error(Status::Invalid, 55));
         }
@@ -423,7 +423,7 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
     }
     if first.as_rule() == Rule::dot_lhs {
         let key = first.as_str().trim().to_string();
-        let rhs = inner.next().unwrap();
+        let rhs = next_pair(&mut inner)?;
         if rhs.as_rule() != Rule::expr {
             return Err(error(Status::Invalid, 55));
         }
@@ -432,7 +432,7 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
     }
     if first.as_rule() == Rule::slot_lhs {
         let key = first.as_str().trim().to_string();
-        let rhs = inner.next().unwrap();
+        let rhs = next_pair(&mut inner)?;
         if rhs.as_rule() != Rule::expr {
             return Err(error(Status::Invalid, 55));
         }
@@ -440,7 +440,7 @@ fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
         return Ok(());
     }
     let key = first.as_str().trim().to_string();
-    let rhs = inner.next().unwrap();
+    let rhs = next_pair(&mut inner)?;
     match rhs.as_rule() {
         Rule::vecN => {
             let vals: Vec<f64> = rhs.into_inner().map(parse_value).collect();
@@ -514,6 +514,14 @@ const MAX_UNROLLED_STMTS: usize = 10_000;
 /// Rejects `let` names that can never be read back: the grammar resolves
 /// `t` (time), `pi`/`e` (constants), and `sN` (slot) before bare idents, so a
 /// binding with such a name is silently unreachable.
+/// Takes the next PEST pair, or reports a program parse failure (detail 60).
+/// The grammar guarantees the child, so this never panics on well-formed input.
+fn next_pair<'a>(
+    pairs: &mut pest::iterators::Pairs<'a, Rule>,
+) -> Result<pest::iterators::Pair<'a, Rule>> {
+    pairs.next().ok_or_else(|| error(Status::Invalid, 60))
+}
+
 fn check_let_name(name: &str, offset: usize) -> Result<()> {
     let reserved = name == "t"
         || name == "pi"
@@ -595,8 +603,8 @@ fn build_loop_stmt(pair: Pair<'_, Rule>, offset: usize) -> Result<UpdateStmt> {
             for child in it {
                 if child.as_rule() == Rule::repeat_gate {
                     let mut ci = child.into_inner();
-                    let kw = ci.next().unwrap().as_str().to_string();
-                    let cond = ci.next().unwrap().as_str().trim().to_string();
+                    let kw = next_pair(&mut ci)?.as_str().to_string();
+                    let cond = next_pair(&mut ci)?.as_str().trim().to_string();
                     gate = Some((kw == "while", cond));
                 } else {
                     items.push(child);
@@ -695,9 +703,9 @@ fn build_loop_body<'a>(
         match inner.as_rule() {
             Rule::let_stmt => {
                 let mut li = inner.into_inner();
-                let name = li.next().unwrap().as_str().to_string();
+                let name = next_pair(&mut li)?.as_str().to_string();
                 check_let_name(&name, offset)?;
-                let expr = li.next().unwrap().as_str().trim().to_string();
+                let expr = next_pair(&mut li)?.as_str().trim().to_string();
                 body.push(UpdateStmt::Let(name, expr));
             }
             Rule::repeat_stmt | Rule::for_stmt => body.push(build_loop_stmt(inner, offset)?),
@@ -902,7 +910,7 @@ fn build_factor(pair: Pair<'_, Rule>) -> Result<Expr> {
 
 fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
     let mut it = pair.into_inner();
-    let name = it.next().unwrap().as_str().to_string();
+    let name = next_pair(&mut it)?.as_str().to_string();
     let mut args = Vec::new();
     for a in it {
         args.push(build_expr(a)?);
@@ -1075,8 +1083,8 @@ fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
 
 fn build_ref(pair: Pair<'_, Rule>) -> Result<Expr> {
     let mut it = pair.into_inner();
-    let name = it.next().unwrap().as_str().to_string();
-    let path = it.next().unwrap();
+    let name = next_pair(&mut it)?.as_str().to_string();
+    let path = next_pair(&mut it)?;
     match path.as_rule() {
         Rule::slot => {
             let idx: usize = path
@@ -1208,12 +1216,12 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         continue;
                     }
                     let mut it = item.into_inner();
-                    let name = it.next().unwrap().as_str().to_string();
+                    let name = next_pair(&mut it)?.as_str().to_string();
                     let mut fields: crate::dsl::StructDef = Vec::new();
                     for f in it {
                         let mut fi = f.into_inner();
-                        let fname = fi.next().unwrap().as_str().to_string();
-                        let rhs = fi.next().unwrap();
+                        let fname = next_pair(&mut fi)?.as_str().to_string();
+                        let rhs = next_pair(&mut fi)?;
                         let ft = if rhs.as_rule() == Rule::value {
                             crate::dsl::StructFieldType::Scalar(parse_value(rhs))
                         } else {
@@ -1227,11 +1235,11 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                 for item in section.into_inner() {
                     match item.as_rule() {
                         Rule::gravity_stmt => {
-                            let vec3 = item.into_inner().next().unwrap();
+                            let vec3 = next_pair(&mut item.into_inner())?;
                             model.gravity = parse_vec3(vec3);
                         }
                         Rule::title_stmt => {
-                            let inner = item.into_inner().next().unwrap();
+                            let inner = next_pair(&mut item.into_inner())?;
                             let text = inner.as_str().trim();
                             // Strip the surrounding quotes.
                             model.title = Some(
@@ -1242,25 +1250,25 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         }
                         Rule::chan_stmt => {
                             let mut inner = item.into_inner();
-                            let name = inner.next().unwrap().as_str().to_string();
+                            let name = next_pair(&mut inner)?.as_str().to_string();
                             let value = inner.next().map(parse_value).unwrap_or(0.0);
                             model.channels.push(crate::dsl::ChanDecl { name, value });
                         }
                         Rule::shape_stmt => {
                             // `shape <name> { part <kind> = <params> [at (x,y,z)]; }`
                             let mut it = item.into_inner();
-                            let name = it.next().unwrap().as_str().to_string();
+                            let name = next_pair(&mut it)?.as_str().to_string();
                             let mut parts: Vec<crate::components::ShapePart> = Vec::new();
                             for part in it {
                                 let part_rule = part.as_rule();
                                 let mut pi = part.into_inner();
                                 if part_rule == Rule::shape_ref {
-                                    let refname = pi.next().unwrap().as_str().to_string();
+                                    let refname = next_pair(&mut pi)?.as_str().to_string();
                                     let mut offset = (0.0, 0.0, 0.0);
                                     let mut scale = 1.0f64;
                                     for opt in pi {
                                         let rule = opt.as_rule();
-                                        let inner = opt.into_inner().next().unwrap();
+                                        let inner = next_pair(&mut opt.into_inner())?;
                                         match rule {
                                             Rule::at_opt => {
                                                 let o = parse_vec3(inner);
@@ -1284,7 +1292,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     });
                                     continue;
                                 }
-                                let kind = match pi.next().unwrap().as_str() {
+                                let kind = match next_pair(&mut pi)?.as_str() {
                                     "sphere" => 1u8,
                                     "box" => 2,
                                     "capsule" => 3,
@@ -1293,7 +1301,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     "poly" => 6,
                                     _ => 0,
                                 };
-                                let val = pi.next().unwrap();
+                                let val = next_pair(&mut pi)?;
                                 let mut path: Option<String> = None;
                                 let mut points: Vec<(f64, f64, f64)> = Vec::new();
                                 let (mut a, b, c) = if val.as_rule() == Rule::string {
@@ -1322,7 +1330,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 let mut offset = (0.0, 0.0, 0.0);
                                 for opt in pi {
                                     let rule = opt.as_rule();
-                                    let inner = opt.into_inner().next().unwrap();
+                                    let inner = next_pair(&mut opt.into_inner())?;
                                     match rule {
                                         Rule::at_opt => {
                                             let o = parse_vec3(inner);
@@ -1365,13 +1373,13 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         }
                         Rule::field_stmt => {
                             let mut inner = item.into_inner();
-                            let name = inner.next().unwrap().as_str().to_string();
+                            let name = next_pair(&mut inner)?.as_str().to_string();
                             let mut params: std::collections::BTreeMap<String, f64> =
                                 Default::default();
                             for p in inner {
                                 let mut pi = p.into_inner();
-                                let key = pi.next().unwrap().as_str().to_string();
-                                let rhs = pi.next().unwrap();
+                                let key = next_pair(&mut pi)?.as_str().to_string();
+                                let rhs = next_pair(&mut pi)?;
                                 if let Some(v) = parse_scalar_number(rhs.as_str().trim()) {
                                     params.insert(key, v);
                                 }
@@ -1426,7 +1434,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         }
                         Rule::entity_stmt => {
                             let mut inner = item.into_inner();
-                            let name = inner.next().unwrap().as_str().to_string();
+                            let name = next_pair(&mut inner)?.as_str().to_string();
                             let mut decl = EntityDecl::named(&name);
                             for field in inner {
                                 apply_entity_field(field, &mut decl, &structs)?;
@@ -1435,7 +1443,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         }
                         Rule::soft_stmt => {
                             let mut inner = item.into_inner();
-                            let name = inner.next().unwrap().as_str().to_string();
+                            let name = next_pair(&mut inner)?.as_str().to_string();
                             let mut sd = crate::dsl::SoftDecl {
                                 name,
                                 nx: 8,
@@ -1489,7 +1497,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         }
                         Rule::pool_stmt => {
                             let mut inner = item.into_inner();
-                            let name = inner.next().unwrap().as_str().to_string();
+                            let name = next_pair(&mut inner)?.as_str().to_string();
                             let count = inner
                                 .next()
                                 .map(|n| n.as_str().parse::<u32>().unwrap_or(0))
@@ -1514,7 +1522,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                     let kind = match rule {
                         Rule::send_system => "send".to_string(),
                         Rule::recv_system => "recv".to_string(),
-                        _ => inner.next().unwrap().as_str().to_string(),
+                        _ => next_pair(&mut inner)?.as_str().to_string(),
                     };
                     let mut decl = SystemDecl {
                         kind,
@@ -1537,7 +1545,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
             Rule::funcs_section => {
                 for func in section.into_inner() {
                     let mut inner = func.into_inner();
-                    let name = inner.next().unwrap().as_str().to_string();
+                    let name = next_pair(&mut inner)?.as_str().to_string();
                     let mut params = Vec::new();
                     let mut body_child: Option<Pair<'_, Rule>> = None;
                     for child in inner {
@@ -1568,9 +1576,9 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 match children[i].as_rule() {
                                     Rule::let_stmt => {
                                         let mut li = children[i].clone().into_inner();
-                                        let lname = li.next().unwrap().as_str().to_string();
+                                        let lname = next_pair(&mut li)?.as_str().to_string();
                                         check_let_name(&lname, 0)?;
-                                        let text = li.next().unwrap().as_str().trim().to_string();
+                                        let text = next_pair(&mut li)?.as_str().trim().to_string();
                                         stmts.push(UpdateStmt::Let(lname, text));
                                         i += 1;
                                     }
@@ -1581,9 +1589,10 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     Rule::if_stmt => {
                                         let mut it = children[i].clone().into_inner();
                                         let _if_kw = it.next(); // `if` keyword token
-                                        let cond = it.next().unwrap().as_str().trim().to_string();
+                                        let cond = next_pair(&mut it)?.as_str().trim().to_string();
                                         let _rk = it.next(); // return_kw (transparent)
-                                        let then_e = it.next().unwrap().as_str().trim().to_string();
+                                        let then_e =
+                                            next_pair(&mut it)?.as_str().trim().to_string();
                                         let mut else_e = None;
                                         if it.next().is_some() {
                                             // else_kw, return_kw, expr
@@ -2559,10 +2568,10 @@ impl EirSystem for Rk4System {
             });
             for (i, _) in &resolved {
                 let mut next_id = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
-                let k1 = stage_k[0][*i].unwrap();
-                let k2 = stage_k[1][*i].unwrap();
-                let k3 = stage_k[2][*i].unwrap();
-                let k4 = stage_k[3][*i].unwrap();
+                let k1 = stage_k[0][*i].expect("rk4 stage register");
+                let k2 = stage_k[1][*i].expect("rk4 stage register");
+                let k3 = stage_k[2][*i].expect("rk4 stage register");
+                let k4 = stage_k[3][*i].expect("rk4 stage register");
                 // 2*k2
                 let two = {
                     let sreg = next_id;
@@ -4847,7 +4856,7 @@ impl EirSystem for ChanSystem {
         match self.op {
             ChanOp::Send => {
                 // value -> channel.state[0]
-                let expr = self.value.as_ref().unwrap();
+                let expr = self.value.as_ref().expect("ChanOp::Send carries a value");
                 let mut refs: std::collections::BTreeSet<(String, usize)> = Default::default();
                 let mut props = std::collections::BTreeSet::new();
                 let mut named = std::collections::BTreeSet::new();
@@ -8036,7 +8045,9 @@ impl LangRuntime {
             let addr = ChannelAddr::new(self.region, ChannelId(cid as u64));
             if let Some(msg) = self.router.recv(addr)? {
                 if msg.len() == 8 {
-                    let value = f64::from_bits(u64::from_le_bytes(msg[..8].try_into().unwrap()));
+                    let value = f64::from_bits(u64::from_le_bytes(
+                        msg[..8].try_into().expect("length-checked slice"),
+                    ));
                     if let Some(e) = self.scene.get_mut(EntityId(cid)) {
                         if let Some(st) = e.state.as_mut() {
                             st.values[0] = value;
@@ -8254,7 +8265,7 @@ fn parse_state_field(
     decl: &mut EntityDecl,
     structs: &std::collections::BTreeMap<String, crate::dsl::StructDef>,
 ) -> Result<()> {
-    let list = field.into_inner().next().unwrap();
+    let list = next_pair(&mut field.into_inner())?;
     let mut values: Vec<f64> = Vec::new();
     let mut names: Vec<Option<String>> = Vec::new();
     let mut units: Vec<Option<crate::units::Dim>> = Vec::new();
@@ -8393,7 +8404,7 @@ fn expand_state_item(
     match it.next() {
         Some(p) if p.as_rule() == Rule::ident => {
             let full = format!("{prefix}{}", p.as_str());
-            let rhs = it.next().unwrap();
+            let rhs = next_pair(&mut it)?;
             match rhs.as_rule() {
                 Rule::named_state => expand_named_state(
                     rhs.into_inner(),
@@ -8437,42 +8448,42 @@ fn apply_entity_field(
 ) -> Result<()> {
     match field.as_rule() {
         Rule::position_field => {
-            decl.position = Some(parse_vec3(field.into_inner().next().unwrap()))
+            decl.position = Some(parse_vec3(next_pair(&mut field.into_inner())?))
         }
         Rule::rotation_field => {
-            decl.rotation = Some(parse_vec3(field.into_inner().next().unwrap()))
+            decl.rotation = Some(parse_vec3(next_pair(&mut field.into_inner())?))
         }
         Rule::velocity_field => {
-            decl.velocity = Some(parse_vec3(field.into_inner().next().unwrap()))
+            decl.velocity = Some(parse_vec3(next_pair(&mut field.into_inner())?))
         }
         Rule::state_field => parse_state_field(field, decl, structs)?,
 
-        Rule::mass_field => decl.mass = Some(parse_value(field.into_inner().next().unwrap())),
+        Rule::mass_field => decl.mass = Some(parse_value(next_pair(&mut field.into_inner())?)),
         Rule::dynamic_field => {
-            decl.dynamic = Some(field.into_inner().next().unwrap().as_str() == "true")
+            decl.dynamic = Some(next_pair(&mut field.into_inner())?.as_str() == "true")
         }
         Rule::nbody_field => {
-            decl.nbody = Some(field.into_inner().next().unwrap().as_str() == "true")
+            decl.nbody = Some(next_pair(&mut field.into_inner())?.as_str() == "true")
         }
         Rule::parent_field => {
-            decl.parent = Some(field.into_inner().next().unwrap().as_str().to_string())
+            decl.parent = Some(next_pair(&mut field.into_inner())?.as_str().to_string())
         }
         Rule::restitution_field => {
-            decl.restitution = Some(parse_value(field.into_inner().next().unwrap()))
+            decl.restitution = Some(parse_value(next_pair(&mut field.into_inner())?))
         }
         Rule::friction_field => {
-            decl.friction = Some(parse_value(field.into_inner().next().unwrap()))
+            decl.friction = Some(parse_value(next_pair(&mut field.into_inner())?))
         }
         Rule::box_field => {
-            let dims = parse_vec3(field.into_inner().next().unwrap());
+            let dims = parse_vec3(next_pair(&mut field.into_inner())?);
             decl.collider = Some(ColliderDecl::Box { dims });
         }
         Rule::sphere_field => {
-            let radius = parse_value(field.into_inner().next().unwrap());
+            let radius = parse_value(next_pair(&mut field.into_inner())?);
             decl.collider = Some(ColliderDecl::Sphere { radius });
         }
         Rule::hull_field => {
-            let list = field.into_inner().next().unwrap();
+            let list = next_pair(&mut field.into_inner())?;
             let points: Vec<Vec3> = list.into_inner().map(parse_vec3).collect();
             if points.len() < 4 {
                 return Err(error(Status::Invalid, 51));
@@ -8480,16 +8491,16 @@ fn apply_entity_field(
             decl.collider = Some(ColliderDecl::ConvexHull { points });
         }
         Rule::camera_field => {
-            decl.camera = Some(field.into_inner().next().unwrap().as_str() == "true")
+            decl.camera = Some(next_pair(&mut field.into_inner())?.as_str() == "true")
         }
         Rule::color_field => {
-            let hex = field.into_inner().next().unwrap().as_str();
+            let hex = next_pair(&mut field.into_inner())?.as_str();
             let v = u32::from_str_radix(&hex[2..], 16).map_err(|_| error(Status::Invalid, 64))?;
             decl.color = Some(v);
         }
         // Presentation-only render hints.
         Rule::shape_field => {
-            let name = field.into_inner().next().unwrap().as_str();
+            let name = next_pair(&mut field.into_inner())?.as_str();
             let r = decl.render.get_or_insert_with(Default::default);
             match name {
                 "point" | "sphere" | "box" | "capsule" => {
@@ -8507,7 +8518,7 @@ fn apply_entity_field(
             }
         }
         Rule::size_field => {
-            let inner = field.into_inner().next().unwrap();
+            let inner = next_pair(&mut field.into_inner())?;
             let r = decl.render.get_or_insert_with(Default::default);
             if inner.as_rule() == Rule::vec3 {
                 let d = parse_vec3(inner);
@@ -8517,23 +8528,23 @@ fn apply_entity_field(
             }
         }
         Rule::opacity_field => {
-            let v = parse_value(field.into_inner().next().unwrap());
+            let v = parse_value(next_pair(&mut field.into_inner())?);
             decl.render.get_or_insert_with(Default::default).opacity = Some(v);
         }
         Rule::glow_field => {
-            let v = parse_value(field.into_inner().next().unwrap());
+            let v = parse_value(next_pair(&mut field.into_inner())?);
             decl.render.get_or_insert_with(Default::default).glow = Some(v);
         }
         Rule::orient_field => {
-            let v = field.into_inner().next().unwrap().as_str() == "true";
+            let v = next_pair(&mut field.into_inner())?.as_str() == "true";
             decl.render.get_or_insert_with(Default::default).orient = v;
         }
         Rule::vector_field => {
-            let v = field.into_inner().next().unwrap().as_str() == "true";
+            let v = next_pair(&mut field.into_inner())?.as_str() == "true";
             decl.render.get_or_insert_with(Default::default).no_velocity = !v;
         }
         Rule::label_field => {
-            let v = field.into_inner().next().unwrap().as_str() == "true";
+            let v = next_pair(&mut field.into_inner())?.as_str() == "true";
             decl.render.get_or_insert_with(Default::default).label = Some(v);
         }
         _ => {}
