@@ -70,182 +70,226 @@ pub enum ValueType {
 
 impl ValueType {}
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Opcode {
-    Nop = 0,
-    Const = 1,
-    Add = 16,
-    Sub = 17,
-    Mul = 18,
-    Div = 19,
-    Rem = 20,
+// ---------------------------------------------------------------------------
+// EIR opcode table — the SINGLE SOURCE OF TRUTH for opcode metadata.
+//
+// Adding an opcode is one entry here (name + wire value + default result type);
+// the enum, `ALL`, `from_u16`, `name`, and `default_result_type` are generated.
+// The validator and interpreter still have per-opcode arms (behaviour), but the
+// compiler enforces their exhaustiveness. The default result type replicates the
+// historical inference (`bool` comparisons, `f64` value ops, `none` for
+// `Const`/`HistWrite`, `u64` otherwise).
+// ---------------------------------------------------------------------------
+macro_rules! declare_opcodes {
+    ($( $(#[$meta:meta])* $variant:ident = $value:expr => $ty:ident, )*) => {
+        /// An EIR opcode. Numeric values are the frozen RFC-0021 wire encoding.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[repr(u16)]
+        pub enum Opcode {
+            $( $(#[$meta])* $variant = $value, )*
+        }
+        impl Opcode {
+            /// Every opcode, in declaration order.
+            pub const ALL: &'static [Opcode] = &[ $( Opcode::$variant, )* ];
+            /// Decode a wire opcode number (RFC-0021).
+            pub fn from_u16(raw: u16) -> Option<Opcode> {
+                match raw {
+                    $( v if v == Opcode::$variant as u16 => Some(Opcode::$variant), )*
+                    _ => None,
+                }
+            }
+            /// The opcode's mnemonic (diagnostics/tests).
+            pub fn name(self) -> &'static str {
+                match self { $( Opcode::$variant => stringify!($variant), )* }
+            }
+            /// Default result type when an instruction has no explicit
+            /// `result_type` and no constant (see `infer_instruction_type`).
+            pub fn default_result_type(self) -> Option<ValueType> {
+                match self { $( Opcode::$variant => declare_opcodes!(@ty $ty), )* }
+            }
+        }
+    };
+    (@ty bool) => { Some(ValueType::Bool) };
+    (@ty f64)  => { Some(ValueType::F64) };
+    (@ty u64)  => { Some(ValueType::U64) };
+    (@ty none) => { None };
+}
+
+declare_opcodes! {
+    Nop = 0 => u64,
+    Const = 1 => none,
+    Add = 16 => f64,
+    Sub = 17 => f64,
+    Mul = 18 => f64,
+    Div = 19 => f64,
+    Rem = 20 => f64,
     /// Unary transcendental / elementary functions (single f64 operand).
-    Sin = 128,
-    Cos = 129,
-    Exp = 130,
-    Ln = 131,
-    Sqrt = 132,
+    Sin = 128 => f64,
+    Cos = 129 => f64,
+    Exp = 130 => f64,
+    Ln = 131 => f64,
+    Sqrt = 132 => f64,
     /// `pow(base, exponent)`.
-    Pow = 133,
-    Eq = 32,
-    Ne = 33,
-    Lt = 34,
-    Le = 35,
-    Gt = 36,
-    Ge = 37,
+    Pow = 133 => f64,
+    Eq = 32 => bool,
+    Ne = 33 => bool,
+    Lt = 34 => bool,
+    Le = 35 => bool,
+    Gt = 36 => bool,
+    Ge = 37 => bool,
     /// Select: if cond (operand 0) is nonzero, result = operand 1 else operand 2.
-    Select = 40,
+    Select = 40 => u64,
     /// Intra-module call: operand 0 = target function id, operands 1.. = argument
     /// value ids. Result = the callee's return value (its `Return` operand 0).
-    Call = 48,
+    Call = 48 => u64,
     /// Read one scalar field of a component into the value stack (field offset
     /// is a compile-time operand). RFC-0021 `READ_VIEW=64`. Yields the field's
     /// f64/u64 value.
-    ReadView = 64,
+    ReadView = 64 => f64,
     /// Write one scalar field of a component from the value stack.
     /// RFC-0021 `WRITE_VIEW=65`.
-    WriteView = 65,
-    Load = 66,
-    Store = 67,
+    WriteView = 65 => u64,
+    Load = 66 => u64,
+    Store = 67 => u64,
     /// Atomic read-modify-write on a component field (add). Reads the field,
     /// writes field + rhs, yields the old value. Effect `ATOMIC`.
-    Atomic = 68,
+    Atomic = 68 => u64,
     /// Emit an ordered event `(kind, payload)` (RFC-0023). Operands:
     /// `kind`, `payload`. Effect `IO`.
-    EmitEvent = 69,
+    EmitEvent = 69 => u64,
     /// Read the explicit sim time from the execution context. Effect `TIME`.
-    Time = 70,
+    Time = 70 => f64,
     /// Draw a (deterministically seeded) random value. Effect `RANDOM`.
-    Random = 71,
+    Random = 71 => f64,
     /// External input/output through the execution context. Effect `IO`.
-    Io = 72,
+    Io = 72 => f64,
     // -- extended math (unary f64 -> f64) --
-    Abs = 192,
-    Floor = 193,
-    Ceil = 194,
-    Round = 195,
-    Sign = 196,
-    Log10 = 197,
-    Log2 = 198,
-    Sinh = 199,
-    Cosh = 200,
-    Tanh = 201,
-    Asin = 202,
-    Acos = 203,
-    Atan = 204,
+    Abs = 192 => f64,
+    Floor = 193 => f64,
+    Ceil = 194 => f64,
+    Round = 195 => f64,
+    Sign = 196 => f64,
+    Log10 = 197 => f64,
+    Log2 = 198 => f64,
+    Sinh = 199 => f64,
+    Cosh = 200 => f64,
+    Tanh = 201 => f64,
+    Asin = 202 => f64,
+    Acos = 203 => f64,
+    Atan = 204 => f64,
     // -- extended math (binary f64 x f64 -> f64) --
-    Atan2 = 205,
-    Hypot = 206,
+    Atan2 = 205 => f64,
+    Hypot = 206 => f64,
     /// Debugging `print`: logs operand 0 to the execution context and yields it
     /// back unchanged (semantically transparent). No effect bit — a debug
     /// side-channel that never changes world state.
-    Print = 207,
+    Print = 207 => f64,
     // -- spatial queries (read-only, deterministic; served by the EirRuntime) --
     /// Count the entities (other than the target entity) whose position lies
     /// within `radius` of the target entity's position. Operand 0 = radius
     /// value id; target = the querying entity. Yields the count as f64.
-    NeighborCount = 208,
+    NeighborCount = 208 => f64,
     /// Distance to the nearest entity other than the target entity; `f64::MAX`
     /// when the target entity is alone. Target = the querying entity. Yields
     /// the distance as f64.
-    NearestDist = 209,
+    NearestDist = 209 => f64,
     /// Read the host-advanced step counter from the execution context.
     /// Deterministic (advances by 1 per step); no effect bit.
-    Step = 210,
+    Step = 210 => f64,
     // -- dynamic slot access (runtime index into the State component) --
     /// Read the State slot at a runtime index. Operand 0 = index value id;
     /// target = the owning entity (component = the State component). Yields
     /// the slot's f64 value. The byte offset is `index * STATE_SLOT_STRIDE`.
-    ReadSlotDyn = 211,
+    ReadSlotDyn = 211 => f64,
     /// Write the State slot at a runtime index. Operand 0 = index value id,
     /// operand 1 = value id; target = the owning entity.
-    WriteSlotDyn = 212,
+    WriteSlotDyn = 212 => u64,
     // -- grid field access (the PDE substrate; runtime cell coordinates) --
     /// Read a grid field cell. Operand 0 = i value id, operand 1 = j value id;
     /// target = ComponentRef whose component is the field's canonical id and
     /// whose offset is the field's width (compile-time, from the model).
     /// Yields the cell's f64 value.
-    ReadFieldCell = 213,
+    ReadFieldCell = 213 => f64,
     /// Write a grid field cell. Operand 0 = i, operand 1 = j, operand 2 =
     /// value id; target as for `ReadFieldCell`.
-    WriteFieldCell = 214,
+    WriteFieldCell = 214 => u64,
     /// Discrete Laplacian of a grid field cell (the Field's zero-flux stencil).
     /// Operand 0 = i, operand 1 = j; target as for `ReadFieldCell`. Yields f64.
-    FieldLaplacian = 215,
+    FieldLaplacian = 215 => f64,
     /// Read the payload of the most recent event with a given kind, from the
     /// events emitted so far in this interpretation. Operand 0 = kind value
     /// id. Yields the payload as f64, or 0.0 when no event of that kind has
     /// been emitted (deterministic reverse scan).
-    ReadEvent = 216,
+    ReadEvent = 216 => f64,
     // -- neighborhood aggregates / directional sensing (spatial queries v2) --
     /// Mean of a State slot over the neighbors within `radius` of the target
     /// entity (0.0 when there are none). Operands: slot value id, radius value
     /// id. Target = the sensing entity.
-    NeighborMean = 217,
+    NeighborMean = 217 => f64,
     /// X component of `(nearest neighbor position - target entity position)`;
     /// 0.0 when the target entity is alone. Target = the sensing entity.
-    NearestOffsetX = 218,
+    NearestOffsetX = 218 => f64,
     /// Y component of the nearest-neighbor offset (see `NearestOffsetX`).
-    NearestOffsetY = 219,
+    NearestOffsetY = 219 => f64,
     /// Z component of the nearest-neighbor offset (see `NearestOffsetX`).
-    NearestOffsetZ = 220,
+    NearestOffsetZ = 220 => f64,
     // -- scheduled events (discrete-event scheduling on the step grid) --
     /// Fires (1.0) exactly in the one step whose time window
     /// `[time, time + step_dt)` contains the instant `T`; 0.0 otherwise.
     /// Operand 0 = T. Exact-once, stateless, deterministic.
-    FiredAt = 221,
+    FiredAt = 221 => f64,
     /// Fires (1.0) in the step whose window contains a periodic instant
     /// `phase + k·period`; 0.0 otherwise. Operands: period, phase (default 0).
-    FiredEvery = 222,
+    FiredEvery = 222 => f64,
     /// Schedule an event `(kind, payload)` to fire `delay` seconds from now,
     /// but only when `gate` (operand 0) is nonzero. Operands: gate, delay,
     /// kind, payload. Yields nothing. Gate on a per-step pulse (`at`/`periodic`
     /// or `last_event`) to schedule exactly once.
-    ScheduleEvent = 223,
+    ScheduleEvent = 223 => u64,
     /// RFC-0037: one Jacobi diffusion sweep `T += rate·∇²T` over a grid field
     /// (the whole sweep in one instruction). Operand 0 = rate; target = field.
-    FieldDiffuse = 224,
+    FieldDiffuse = 224 => u64,
     /// RFC-0037: one leapfrog wave step over a grid field. Operands: the four
     /// little-endian `u32` limbs of the `prev` field id, then `cfl`, `damping`,
     /// `absorb`, `absorb_width`.
-    FieldWave = 225,
+    FieldWave = 225 => u64,
     /// RFC-0037: `iters` Gauss–Seidel sweeps of `∇²φ = ρ·scale`. Operands: the
     /// four limbs of the `source` field id (all zero = none), `iters`, `scale`.
-    FieldPoisson = 226,
+    FieldPoisson = 226 => u64,
     /// RFC-0038: the lowest-id inactive slot in a pool. Operands: the four
     /// little-endian `u32` limbs of the pool's first slot id, then the slot
     /// count. Result: the slot id, or 0 when the pool is full.
-    FindFreeSlot = 227,
+    FindFreeSlot = 227 => u64,
     /// RFC-0038: activate one free slot of a pool and copy the caller's state
     /// into it. Operands as for `FindFreeSlot`; target = the caller entity.
     /// Result: the slot id, or 0 when the pool is full. Emits the activation and
     /// state writes.
-    SpawnInto = 228,
+    SpawnInto = 228 => u64,
     /// `deriv(E)` history: read the previous (sub)step's value stored for a
     /// call site. The site id rides in `constant` (`Immediate::U64`). Result:
     /// the stored f64, or NaN when the site has no history yet.
-    HistRead = 229,
+    HistRead = 229 => f64,
     /// Store the current (sub)step's value for a `deriv(E)` call site so the
     /// next (sub)step can difference against it. Operand 0 = value; the site id
     /// rides in `constant` (`Immediate::U64`). Yields no SSA value.
-    HistWrite = 230,
+    HistWrite = 230 => none,
     /// Whether a `deriv(E)` call site has history yet (1.0) or not (0.0). The
     /// site id rides in `constant`; result is F64. `deriv` gates its difference
     /// on this so the first (sub)step yields 0 instead of a NaN sentinel.
-    HistHas = 231,
+    HistHas = 231 => f64,
     /// Read a component field from the **committed** scene, ignoring
     /// in-interpretation writes. Target as `ReadView`; result is F64.
-    ReadCommitted = 232,
-    Return = 0x8000,
+    ReadCommitted = 232 => f64,
+    Return = 0x8000 => u64,
     /// Unconditional branch to an instruction index (block target). Single
     /// operand = target index.
-    Br = 0x8001,
+    Br = 0x8001 => u64,
     /// Conditional branch: operand 0 = condition value id, operand 1 = true
     /// target index, operand 2 = false target index.
-    CondBr = 0x8002,
-    Trap = 0x8003,
+    CondBr = 0x8002 => u64,
+    Trap = 0x8003 => u64,
     /// Marks a block that must not be reached (RFC-0021 UNREACHABLE). Traps.
-    Unreachable = 0x8004,
+    Unreachable = 0x8004 => u64,
 }
 
 #[derive(Clone, Debug)]
@@ -580,59 +624,10 @@ fn infer_instruction_type(i: &Instruction) -> Option<ValueType> {
     if let Some(t) = i.result_type {
         return Some(t);
     }
-    i.constant.map(Immediate::ty).or(match i.opcode {
-        Opcode::Eq | Opcode::Ne | Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => {
-            Some(ValueType::Bool)
-        }
-        Opcode::ReadView
-        | Opcode::NeighborCount
-        | Opcode::NearestDist
-        | Opcode::NeighborMean
-        | Opcode::NearestOffsetX
-        | Opcode::NearestOffsetY
-        | Opcode::NearestOffsetZ
-        | Opcode::FiredAt
-        | Opcode::FiredEvery => Some(ValueType::F64),
-        Opcode::Step => Some(ValueType::F64),
-        Opcode::HistRead => Some(ValueType::F64),
-        Opcode::ReadCommitted => Some(ValueType::F64),
-        Opcode::HistWrite => None,
-        Opcode::HistHas => Some(ValueType::F64),
-        Opcode::ReadSlotDyn => Some(ValueType::F64),
-        Opcode::ReadFieldCell | Opcode::FieldLaplacian | Opcode::ReadEvent => Some(ValueType::F64),
-        Opcode::Const => i.constant.map(Immediate::ty),
-        Opcode::Sin
-        | Opcode::Cos
-        | Opcode::Exp
-        | Opcode::Ln
-        | Opcode::Sqrt
-        | Opcode::Abs
-        | Opcode::Floor
-        | Opcode::Ceil
-        | Opcode::Round
-        | Opcode::Sign
-        | Opcode::Log10
-        | Opcode::Log2
-        | Opcode::Sinh
-        | Opcode::Cosh
-        | Opcode::Tanh
-        | Opcode::Asin
-        | Opcode::Acos
-        | Opcode::Atan
-        | Opcode::Atan2
-        | Opcode::Hypot
-        | Opcode::Print
-        | Opcode::Pow
-        | Opcode::Add
-        | Opcode::Sub
-        | Opcode::Mul
-        | Opcode::Div
-        | Opcode::Rem
-        | Opcode::Time
-        | Opcode::Random
-        | Opcode::Io => Some(ValueType::F64),
-        _ => Some(ValueType::U64),
-    })
+    if let Some(t) = i.constant.map(Immediate::ty) {
+        return Some(t);
+    }
+    i.opcode.default_result_type()
 }
 
 /// All operands of an arithmetic instruction must share one numeric type.
@@ -2276,86 +2271,7 @@ fn decode_immediate(input: &mut Reader<'_>) -> Result<Immediate> {
 }
 
 fn opcode_from_u16(raw: u16) -> Result<Opcode> {
-    Ok(match raw {
-        x if x == Opcode::Nop as u16 => Opcode::Nop,
-        x if x == Opcode::Const as u16 => Opcode::Const,
-        x if x == Opcode::Add as u16 => Opcode::Add,
-        x if x == Opcode::Sub as u16 => Opcode::Sub,
-        x if x == Opcode::Mul as u16 => Opcode::Mul,
-        x if x == Opcode::Div as u16 => Opcode::Div,
-        x if x == Opcode::Rem as u16 => Opcode::Rem,
-        x if x == Opcode::Eq as u16 => Opcode::Eq,
-        x if x == Opcode::Ne as u16 => Opcode::Ne,
-        x if x == Opcode::Lt as u16 => Opcode::Lt,
-        x if x == Opcode::Le as u16 => Opcode::Le,
-        x if x == Opcode::Gt as u16 => Opcode::Gt,
-        x if x == Opcode::Ge as u16 => Opcode::Ge,
-        x if x == Opcode::Select as u16 => Opcode::Select,
-        x if x == Opcode::Call as u16 => Opcode::Call,
-        x if x == Opcode::ReadView as u16 => Opcode::ReadView,
-        x if x == Opcode::WriteView as u16 => Opcode::WriteView,
-        x if x == Opcode::Load as u16 => Opcode::Load,
-        x if x == Opcode::Store as u16 => Opcode::Store,
-        x if x == Opcode::Atomic as u16 => Opcode::Atomic,
-        x if x == Opcode::EmitEvent as u16 => Opcode::EmitEvent,
-        x if x == Opcode::Time as u16 => Opcode::Time,
-        x if x == Opcode::Random as u16 => Opcode::Random,
-        x if x == Opcode::Io as u16 => Opcode::Io,
-        x if x == Opcode::Return as u16 => Opcode::Return,
-        x if x == Opcode::Br as u16 => Opcode::Br,
-        x if x == Opcode::CondBr as u16 => Opcode::CondBr,
-        x if x == Opcode::Trap as u16 => Opcode::Trap,
-        x if x == Opcode::Unreachable as u16 => Opcode::Unreachable,
-        x if x == Opcode::Sin as u16 => Opcode::Sin,
-        x if x == Opcode::Cos as u16 => Opcode::Cos,
-        x if x == Opcode::Exp as u16 => Opcode::Exp,
-        x if x == Opcode::Ln as u16 => Opcode::Ln,
-        x if x == Opcode::Sqrt as u16 => Opcode::Sqrt,
-        x if x == Opcode::Pow as u16 => Opcode::Pow,
-        x if x == Opcode::Abs as u16 => Opcode::Abs,
-        x if x == Opcode::Floor as u16 => Opcode::Floor,
-        x if x == Opcode::Ceil as u16 => Opcode::Ceil,
-        x if x == Opcode::Round as u16 => Opcode::Round,
-        x if x == Opcode::Sign as u16 => Opcode::Sign,
-        x if x == Opcode::Log10 as u16 => Opcode::Log10,
-        x if x == Opcode::Log2 as u16 => Opcode::Log2,
-        x if x == Opcode::Sinh as u16 => Opcode::Sinh,
-        x if x == Opcode::Cosh as u16 => Opcode::Cosh,
-        x if x == Opcode::Tanh as u16 => Opcode::Tanh,
-        x if x == Opcode::Asin as u16 => Opcode::Asin,
-        x if x == Opcode::Acos as u16 => Opcode::Acos,
-        x if x == Opcode::Atan as u16 => Opcode::Atan,
-        x if x == Opcode::Atan2 as u16 => Opcode::Atan2,
-        x if x == Opcode::Hypot as u16 => Opcode::Hypot,
-        x if x == Opcode::Print as u16 => Opcode::Print,
-        // Extended opcode space (keep in sync with the enum).
-        x if x == Opcode::NeighborCount as u16 => Opcode::NeighborCount,
-        x if x == Opcode::NearestDist as u16 => Opcode::NearestDist,
-        x if x == Opcode::Step as u16 => Opcode::Step,
-        x if x == Opcode::ReadSlotDyn as u16 => Opcode::ReadSlotDyn,
-        x if x == Opcode::WriteSlotDyn as u16 => Opcode::WriteSlotDyn,
-        x if x == Opcode::ReadFieldCell as u16 => Opcode::ReadFieldCell,
-        x if x == Opcode::WriteFieldCell as u16 => Opcode::WriteFieldCell,
-        x if x == Opcode::FieldLaplacian as u16 => Opcode::FieldLaplacian,
-        x if x == Opcode::ReadEvent as u16 => Opcode::ReadEvent,
-        x if x == Opcode::NeighborMean as u16 => Opcode::NeighborMean,
-        x if x == Opcode::NearestOffsetX as u16 => Opcode::NearestOffsetX,
-        x if x == Opcode::NearestOffsetY as u16 => Opcode::NearestOffsetY,
-        x if x == Opcode::NearestOffsetZ as u16 => Opcode::NearestOffsetZ,
-        x if x == Opcode::FiredAt as u16 => Opcode::FiredAt,
-        x if x == Opcode::FiredEvery as u16 => Opcode::FiredEvery,
-        x if x == Opcode::ScheduleEvent as u16 => Opcode::ScheduleEvent,
-        x if x == Opcode::FieldDiffuse as u16 => Opcode::FieldDiffuse,
-        x if x == Opcode::FieldWave as u16 => Opcode::FieldWave,
-        x if x == Opcode::FieldPoisson as u16 => Opcode::FieldPoisson,
-        x if x == Opcode::FindFreeSlot as u16 => Opcode::FindFreeSlot,
-        x if x == Opcode::SpawnInto as u16 => Opcode::SpawnInto,
-        x if x == Opcode::HistRead as u16 => Opcode::HistRead,
-        x if x == Opcode::HistWrite as u16 => Opcode::HistWrite,
-        x if x == Opcode::HistHas as u16 => Opcode::HistHas,
-        x if x == Opcode::ReadCommitted as u16 => Opcode::ReadCommitted,
-        _ => return Err(error(Status::EirInvalid, 28, 0)),
-    })
+    Opcode::from_u16(raw).ok_or(error(Status::EirInvalid, 28, 0))
 }
 
 fn value_type_from_u32(raw: u32) -> Option<ValueType> {
@@ -2626,6 +2542,23 @@ fn component_from_addr(address: Immediate) -> ComponentTypeId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opcode_table_is_consistent() {
+        // Every opcode round-trips through the wire encoding, has a mnemonic,
+        // and has a unique wire value.
+        let mut seen = std::collections::BTreeSet::new();
+        for &op in Opcode::ALL {
+            assert_eq!(Opcode::from_u16(op as u16), Some(op), "{}", op.name());
+            assert!(!op.name().is_empty());
+            assert!(
+                seen.insert(op as u16),
+                "duplicate wire value: {}",
+                op.name()
+            );
+        }
+        assert!(Opcode::from_u16(0x7fff).is_none());
+    }
 
     fn add(_a: Immediate, _b: Immediate, result: u32, ty: ValueType) -> Instruction {
         Instruction {

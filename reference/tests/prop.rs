@@ -249,77 +249,7 @@ fn random_instruction(rng: &mut Rng, next: &mut u32) -> Instruction {
             constant: None,
             target: None,
         },
-        Opcode::Return
-        | Opcode::Nop
-        | Opcode::Sub
-        | Opcode::Mul
-        | Opcode::Div
-        | Opcode::Rem
-        | Opcode::Eq
-        | Opcode::Ne
-        | Opcode::Lt
-        | Opcode::Le
-        | Opcode::Gt
-        | Opcode::Ge
-        | Opcode::Select
-        | Opcode::Load
-        | Opcode::Trap
-        | Opcode::Br
-        | Opcode::CondBr
-        | Opcode::Unreachable
-        | Opcode::Call
-        | Opcode::Atomic
-        | Opcode::EmitEvent
-        | Opcode::Time
-        | Opcode::Random
-        | Opcode::Io
-        | Opcode::Abs
-        | Opcode::Floor
-        | Opcode::Ceil
-        | Opcode::Round
-        | Opcode::Sign
-        | Opcode::Log10
-        | Opcode::Log2
-        | Opcode::Sinh
-        | Opcode::Cosh
-        | Opcode::Tanh
-        | Opcode::Asin
-        | Opcode::Acos
-        | Opcode::Atan
-        | Opcode::Atan2
-        | Opcode::Hypot
-        | Opcode::Print
-        | Opcode::NeighborCount
-        | Opcode::NearestDist
-        | Opcode::Step
-        | Opcode::ReadSlotDyn
-        | Opcode::WriteSlotDyn
-        | Opcode::ReadFieldCell
-        | Opcode::WriteFieldCell
-        | Opcode::FieldLaplacian
-        | Opcode::ReadEvent
-        | Opcode::NeighborMean
-        | Opcode::NearestOffsetX
-        | Opcode::NearestOffsetY
-        | Opcode::NearestOffsetZ
-        | Opcode::FiredAt
-        | Opcode::FiredEvery
-        | Opcode::ScheduleEvent
-        | Opcode::Sin
-        | Opcode::Cos
-        | Opcode::Exp
-        | Opcode::Ln
-        | Opcode::Sqrt
-        | Opcode::Pow
-        | Opcode::FieldDiffuse
-        | Opcode::FieldWave
-        | Opcode::FieldPoisson
-        | Opcode::FindFreeSlot
-        | Opcode::SpawnInto
-        | Opcode::HistRead
-        | Opcode::HistWrite
-        | Opcode::HistHas
-        | Opcode::ReadCommitted => Instruction {
+        _ => Instruction {
             opcode,
             result_id: 0,
             result_type: None,
