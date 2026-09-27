@@ -2867,3 +2867,56 @@ fn f64_divide_by_zero_traps() {
         Err(e) => assert_eq!(e.detail, 18, "detail = {}", e.detail),
     }
 }
+
+#[test]
+fn reviewed_bugs_0018_0019_0022_0023_0024_0027_0028() {
+    let detail = |src: &str| match LangRuntime::compile(src) {
+        Ok(_) => 0,
+        Err(e) => e.detail,
+    };
+    // #19 schedule compiles (void opcode).
+    assert_eq!(
+        detail(
+            "world { gravity=(0,0,0) entity e { state=(x=0.0) } } systems { update { on=e; dt=1.0 \
+             let _ = schedule(at(1.0), 0.5, 7.0, 1.0)  x = x + 0.0 } }"
+        ),
+        0
+    );
+    // #22 user-func arity.
+    assert_eq!(
+        detail(
+            "world { gravity=(0,0,0) entity e { state=(x=0.0) } } funcs { f(a,b) { a+b } } \
+             systems { update { on=e; dt=1.0 x = f(1.0, 2.0, 3.0) } }"
+        ),
+        59
+    );
+    // #23 rk4 plain assignment rejected.
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=0.0) } } systems { rk4 { on=e; dt=0.1 s0 = 1.0 } }"),
+        93
+    );
+    // #24 out-of-range `sN` assignment.
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=0.0) } } systems { update { on=e; dt=1.0 s99 = 1.0 + 0.0 } }"),
+        52
+    );
+    // #27 loop-body `let` parses and is type-checked.
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=0.0) } } systems { update { on=e; dt=1.0 repeat 2 { let n: i64 = 7 / 2 } x = x } }"),
+        0
+    );
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=0.0) } } systems { update { on=e; dt=1.0 repeat 2 { let n: f64 = 1.0 > 0.0 } x = x } }"),
+        89
+    );
+    // #28 bool alias accepted.
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(x=1.0) } } systems { update { on=e; dt=1.0 let f: bool = x > 0.0  let b: bool = f  x = x } }"),
+        0
+    );
+    // #18 dt-slot collision is a warning, not an error (compiles).
+    assert_eq!(
+        detail("world { gravity=(0,0,0) entity e { state=(dt=0.0, x=0.0) } } systems { update { on=e; dt=1.0 x = x + 1.0 } }"),
+        0
+    );
+}

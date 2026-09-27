@@ -474,6 +474,9 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
                     };
                     if let Err(e) = one {
                         eprintln!("pwe: step {} failed: {e}", done + j as u64);
+                        for d in pwe_reference::lang::take_diagnostics() {
+                            eprintln!("  [{}] {}", d.detail, d.message);
+                        }
                         return 1;
                     }
                 }
@@ -528,6 +531,9 @@ fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
         };
         if let Err(e) = r {
             eprintln!("pwe: step {step} failed: {e}");
+            for d in pwe_reference::lang::take_diagnostics() {
+                eprintln!("  [{}] {}", d.detail, d.message);
+            }
             return 1;
         }
         step += 1;

@@ -146,7 +146,7 @@ systems {
 }
 ```
 
-Run: `pwe run osc.pweb --steps 200` → `state = [0.7226, -1.1813]`. The mass swings
+Run: `pwe run osc.pweb --steps 200` → `state = [0.6302, -1.5751]`. The mass swings
 and slowly loses energy (damped), converging to 0.
 
 **The crucial rule.** `slot = expr` is a plain **assignment**: each step the
@@ -917,7 +917,8 @@ systems {
 ## Appendix B — Stability checklist
 
 * [ ] Each body uses one model (§0.6).
-* [ ] Rules are `slot = <expression>`; assign with `slot = (target - slot)`.
+* [ ] Rules are `slot = <expression>` (an **assignment**); integrate with
+`slot = slot + inte(rate)` or `inte slot = rate`.
 * [ ] `on = <entity|pool>` where intended.
 * [ ] System order: forces/gravity → integrate → constraints/boundaries.
 * [ ] Solver stability respected (`diffuse` rate, `wave` Courant).

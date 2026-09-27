@@ -106,6 +106,10 @@ pub fn detail_name(detail: u32) -> &'static str {
         90 => "unit annotation required (units = \"strict\")",
         91 => "nbody body needs at least 7 state slots (px,py,pz,vx,vy,vz,m)",
         92 => "nbody ignores the `mass` field (reads state[6])",
+        93 => "plain assignment is `update`-only (rk4 integrates `inte slot = rate`)",
+        94 => "state slot name collides with a system parameter name",
+        4 => "EIR operand/type validation failed (compiler bug)",
+        6 => "EIR result type unspecified (compiler bug)",
         _ => "unspecified compile error",
     }
 }

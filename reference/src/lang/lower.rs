@@ -557,6 +557,12 @@ pub(crate) fn lower_expr(
                         .iter()
                         .map(|a| lower_expr(a, ctx, next_id, out))
                         .collect();
+                    // `schedule` yields nothing (a void opcode) — emit with no
+                    // result so the validator accepts it; its value is discarded.
+                    if op == crate::eir::Opcode::ScheduleEvent {
+                        out.push(crate::physics_eir::instr(op, 0, None, operands, None, None));
+                        return 0;
+                    }
                     let out_reg = *next_id;
                     *next_id += 1;
                     out.push(crate::physics_eir::instr(

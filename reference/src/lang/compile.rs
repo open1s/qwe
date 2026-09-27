@@ -121,11 +121,14 @@ pub fn build_systems(
                 } else {
                     ChanOp::Recv
                 };
-                let chan_name = s
-                    .string_params
-                    .get("chan")
-                    .cloned()
-                    .ok_or(error(Status::Invalid, 62))?;
+                let chan_name = s.string_params.get("chan").cloned().ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        format!("`{}` requires a `chan = <channel>` parameter", s.kind),
+                    )
+                })?;
                 let channel_entity = entity_ids
                     .get(&chan_name)
                     .copied()
@@ -172,6 +175,7 @@ pub fn build_systems(
                 out.push(Box::new(chan));
             }
             "update" => {
+                warn_state_param_collisions(s, state_names_by_id, entity_ids);
                 let mut rules = Vec::new();
                 for (key, text) in &s.update {
                     // Keep the raw LHS (`sN` or a named slot); it is resolved to a
@@ -231,6 +235,25 @@ pub fn build_systems(
                             .trim_end_matches(']');
                         dyn_assigns.push((parse_expr_str(inner)?, parse_expr_str(text)?));
                     } else {
+                        // Enforce the slot bound for `sN` assignments too (the
+                        // `+=`/`inte` path already checks it, detail 52).
+                        if let Some(digits) = key.strip_prefix('s') {
+                            if !digits.is_empty()
+                                && !key.contains('[')
+                                && digits.bytes().all(|b| b.is_ascii_digit())
+                                && digits
+                                    .parse::<usize>()
+                                    .map(|i| i >= crate::components::State::MAX_STATE_SLOTS)
+                                    .unwrap_or(false)
+                            {
+                                return Err(error_at(
+                                    Status::Invalid,
+                                    52,
+                                    s.byte_offset,
+                                    format!("state slot index in `{key}` is out of range"),
+                                ));
+                            }
+                        }
                         assigns.push((key.clone(), parse_expr_str(text)?));
                     }
                 }
@@ -284,6 +307,7 @@ side-effecting `let`/call"
                 }));
             }
             "rk4" => {
+                warn_state_param_collisions(s, state_names_by_id, entity_ids);
                 let mut rules = Vec::new();
                 for (key, text) in &s.update {
                     if let Some(idx) = numeric_slot(key) {
@@ -303,14 +327,27 @@ side-effecting `let`/call"
                     }
                     rules.push((key.clone(), parse_expr_str(text)?));
                 }
+                // `rk4` integrates derivatives (`inte slot = rate`); a plain
+                // assignment (`slot = expr`) has no rk4 meaning and was silently
+                // dropped — reject it explicitly (detail 93).
+                if !s.assigns.is_empty() {
+                    let key = s.assigns.keys().next().cloned().unwrap_or_default();
+                    return Err(error_at(
+                        Status::Invalid,
+                        93,
+                        s.byte_offset,
+                        format!(
+                            "`{key} = …` is a plain assignment, which is `update`-only; in \
+`rk4` write `inte {key} = <rate>` to integrate a derivative"
+                        ),
+                    ));
+                }
                 if rules.is_empty() {
                     return Err(error_at(
                         Status::Invalid,
                         55,
                         s.byte_offset,
-                        "rk4 system has no slot rules (a pure-number RHS such as `s0 = 1.0` \
-becomes a scalar parameter — write `s0 = 0.0 + 1.0` instead)"
-                            .to_string(),
+                        "rk4 system has no rules; add `inte slot = <rate>`".to_string(),
                     ));
                 }
                 let lets = to_let_stmts(&s.update_stmts)?;
@@ -1918,6 +1955,123 @@ fn check_solver_stability(
     Ok(())
 }
 
+/// Warns (detail 94) when a state slot name collides with one of the system
+/// kind's numeric parameter names — the assignment would silently configure the
+/// parameter instead of writing the slot (issue #18).
+fn warn_state_param_collisions(
+    s: &SystemDecl,
+    state_names_by_id: &std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
+    entity_ids: &std::collections::BTreeMap<String, u128>,
+) {
+    let keys = numeric_param_keys(&s.kind);
+    if keys.is_empty() {
+        return;
+    }
+    let mut names: std::collections::BTreeSet<&str> = Default::default();
+    for id in entity_ids.values() {
+        if let Some(m) = state_names_by_id.get(id) {
+            for n in m.keys() {
+                names.insert(n.as_str());
+            }
+        }
+    }
+    for k in keys {
+        if names.contains(k) {
+            push_diag(
+                94,
+                0,
+                format!(
+                    "state slot `{k}` collides with the `{}` parameter name; `{k} = …` in `{}` \
+sets the parameter, not the slot",
+                    s.kind, s.kind
+                ),
+            );
+        }
+    }
+}
+
+/// Rejects a user-`funcs` call whose argument count does not match the
+/// definition (detail 59). Builtins are checked at lowering; user functions
+/// previously were not checked at all (extra args silently ignored).
+fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
+    let mut arity: std::collections::BTreeMap<String, usize> = Default::default();
+    for f in &parsed.funcs {
+        arity.insert(f.name.clone(), f.params.len());
+        if !f.namespace.is_empty() {
+            arity.insert(format!("{}.{}", f.namespace, f.name), f.params.len());
+        }
+    }
+    fn walk(e: &Expr, arity: &std::collections::BTreeMap<String, usize>) -> Result<()> {
+        match e {
+            Expr::Call(name, args) => {
+                if let Some(&n) = arity.get(*name) {
+                    if args.len() != n {
+                        // detail 59 (arity mismatch), located at 0 for now.
+                        return Err(error(Status::Invalid, 59));
+                    }
+                }
+                for a in args {
+                    walk(a, arity)?;
+                }
+                Ok(())
+            }
+            Expr::SlotDyn(a) | Expr::Neg(a) | Expr::Not(a) => walk(a, arity),
+            Expr::Add(a, b)
+            | Expr::Sub(a, b)
+            | Expr::Mul(a, b)
+            | Expr::Div(a, b)
+            | Expr::Rem(a, b)
+            | Expr::Cmp(_, a, b)
+            | Expr::And(a, b)
+            | Expr::Or(a, b) => {
+                walk(a, arity)?;
+                walk(b, arity)
+            }
+            _ => Ok(()),
+        }
+    }
+    fn walk_lets(
+        stmts: &[LetStmt],
+        arity: &std::collections::BTreeMap<String, usize>,
+    ) -> Result<()> {
+        for s in stmts {
+            match s {
+                LetStmt::Let(_, e) => walk(e, arity)?,
+                LetStmt::If(c, t, e) => {
+                    walk(c, arity)?;
+                    walk(t, arity)?;
+                    if let Some(e) = e {
+                        walk(e, arity)?;
+                    }
+                }
+                LetStmt::Repeat(_, b) | LetStmt::For(_, _, _, b) => walk_lets(b, arity)?,
+                LetStmt::Break(c) | LetStmt::Continue(c) => {
+                    if let Some(e) = c {
+                        walk(e, arity)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    for sys in &parsed.systems {
+        for text in sys.update.values().chain(sys.assigns.values()) {
+            walk(&parse_expr_str(text)?, &arity)?;
+        }
+        if let Some(w) = sys.string_params.get("when") {
+            if let Ok(e) = parse_expr_str(w) {
+                walk(&e, &arity)?;
+            }
+        }
+    }
+    for f in &parsed.funcs {
+        walk(&f.body, &arity)?;
+        let lets = to_let_stmts(&f.stmts)?;
+        walk_lets(&lets, &arity)?;
+    }
+    Ok(())
+}
+
 /// Rejects a present-but-unsupported `lang_version` (detail 83).
 fn check_lang_version(parsed: &ParsedProgram) -> Result<()> {
     if let Some(v) = &parsed.model.lang_version {
@@ -1939,6 +2093,7 @@ fn check_lang_version(parsed: &ParsedProgram) -> Result<()> {
 /// Compiles an already-parsed (and merged) program to EIR.
 pub fn compile_program(mut parsed: ParsedProgram) -> Result<CompiledProgram> {
     check_lang_version(&parsed)?;
+    check_call_arities(&parsed)?;
     check_dimensions(&parsed)?;
     // Inline `part <other-shape>` references so render paths see concrete parts.
     expand_shapes(&mut parsed.model.shapes)?;
@@ -2245,7 +2400,14 @@ pub fn compile_program(mut parsed: ParsedProgram) -> Result<CompiledProgram> {
     }
     // Fold RANDOM/TIME/IO/ATOMIC/EMIT_EVENT effect bits from the emitted opcodes.
     module.apply_required_effects();
-    module.validate(false)?;
+    module.validate(false).map_err(|e| {
+        // EIR-level validation error: surface the reason instead of the generic
+        // "unspecified compile error" (its byte_offset is an instruction index,
+        // not a source position).
+        let msg = format!("internal EIR validation failed (EIR detail {})", e.detail);
+        push_diag(60, 0, msg.clone());
+        error_at(Status::Invalid, 60, 0, msg)
+    })?;
     let eir = module;
     Ok(CompiledProgram {
         parsed,

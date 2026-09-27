@@ -79,11 +79,26 @@ pub(crate) enum LangType {
     Bool,
 }
 
-/// The surface type of an expression (used for `let`-annotation checks).
-pub(crate) fn expr_lang_type(e: &Expr) -> LangType {
+/// The known surface type of an expression, if any: comparisons/logical ops are
+/// `bool`, numeric literals/arithmetic are `float`, and a bare name is *unknown*
+/// (it may alias a bool-typed local), so annotation checks accept it.
+pub(crate) fn expr_lang_type(e: &Expr) -> Option<LangType> {
     match e {
-        Expr::Cmp(..) | Expr::And(..) | Expr::Or(..) | Expr::Not(..) => LangType::Bool,
-        _ => LangType::Float,
+        Expr::Cmp(..) | Expr::And(..) | Expr::Or(..) | Expr::Not(..) => Some(LangType::Bool),
+        Expr::Const(_)
+        | Expr::Add(..)
+        | Expr::Sub(..)
+        | Expr::Mul(..)
+        | Expr::Div(..)
+        | Expr::Rem(..)
+        | Expr::Neg(..) => Some(LangType::Float),
+        Expr::Name(_)
+        | Expr::Slot(_)
+        | Expr::SlotDyn(_)
+        | Expr::Ref(..)
+        | Expr::PropRef(..)
+        | Expr::Time
+        | Expr::Call(..) => None,
     }
 }
 
@@ -129,13 +144,14 @@ pub(crate) fn parse_let_parts(first: Pair<'_, Rule>, offset: usize) -> Result<(S
         nxt = next_pair(&mut li)?;
         let expr = nxt.as_str().trim().to_string();
         let actual = expr_lang_type(&parse_expr_str(&expr)?);
-        let ok = match ty.as_str() {
-            "bool" => actual == LangType::Bool,
-            "f64" | "i64" | "i32" | "u64" | "u32" => actual == LangType::Float,
+        let ok = match (ty.as_str(), actual) {
+            (_, None) => true, // unknown (e.g. a name) — accept
+            ("bool", Some(LangType::Bool)) => true,
+            ("f64" | "i64" | "i32" | "u64" | "u32", Some(LangType::Float)) => true,
             _ => false,
         };
         if !ok {
-            let got = if actual == LangType::Bool {
+            let got = if actual == Some(LangType::Bool) {
                 "bool"
             } else {
                 "number"
@@ -487,10 +503,7 @@ pub(crate) fn build_loop_body<'a>(
         let inner = item.into_inner().next().ok_or(error(Status::Invalid, 56))?;
         match inner.as_rule() {
             Rule::let_stmt => {
-                let mut li = inner.into_inner();
-                let name = next_pair(&mut li)?.as_str().to_string();
-                check_let_name(&name, offset)?;
-                let expr = next_pair(&mut li)?.as_str().trim().to_string();
+                let (name, expr) = parse_let_parts(inner, offset)?;
                 body.push(UpdateStmt::Let(name, expr));
             }
             Rule::repeat_stmt | Rule::for_stmt => body.push(build_loop_stmt(inner, offset)?),
