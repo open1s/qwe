@@ -799,6 +799,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 84 | Malformed unit annotation. |
 | 85 | Unknown identifier (reads 0.0) — a warning. |
 | 86 | Unstable solver setting (CFL / diffusion limit). |
+| 88 | Non-finite state (simulation diverged) — with `pwe run --check`. |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the

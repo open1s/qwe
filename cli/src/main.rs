@@ -363,6 +363,7 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     let mut steps: u64 = 60;
     let mut port = present_default;
     let mut params: Vec<(String, f64)> = Vec::new();
+    let mut check = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -387,6 +388,9 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
                     return 2;
                 };
                 params.push((k.to_string(), v));
+            }
+            "--check" => {
+                check = true;
             }
             "--port" | "-p" => {
                 let Some(v) = it.next().and_then(|s| s.parse::<u16>().ok()) else {
@@ -449,6 +453,9 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
         for p in group {
             rt.scene.params.insert(p, *v);
         }
+    }
+    if check {
+        rt.set_finite_check(true);
     }
     match port {
         None => {

@@ -100,6 +100,7 @@ pub fn detail_name(detail: u32) -> &'static str {
         84 => "malformed unit annotation",
         85 => "unknown identifier (reads 0.0)",
         86 => "unstable solver setting (CFL / diffusion limit)",
+        88 => "non-finite state (simulation diverged)",
         _ => "unspecified compile error",
     }
 }

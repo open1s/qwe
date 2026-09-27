@@ -2671,3 +2671,23 @@ fn solver_stability_is_checked() {
     "#;
     LangRuntime::compile(stable).unwrap();
 }
+
+#[test]
+fn finite_check_catches_divergence() {
+    // `x = x * 2.0` diverges to +inf; the finite check turns it into detail 88.
+    let src = r#"
+        world { gravity=(0,0,0) entity e { state=(x = 1.0) } }
+        systems { update { on = e; dt = 1.0 x = x * 2.0 } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.set_finite_check(true);
+    let mut caught = false;
+    for _ in 0..2000 {
+        if let Err(e) = rt.step_cross() {
+            assert_eq!(e.detail, 88, "detail = {}", e.detail);
+            caught = true;
+            break;
+        }
+    }
+    assert!(caught, "divergence must be caught by the finite check");
+}

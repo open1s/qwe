@@ -37,6 +37,9 @@ pub struct LangRuntime {
     /// Raw invariant expressions in source order; verdict field `i` of the
     /// hidden check component belongs to `invariant_exprs[i]` (diagnostics).
     invariant_exprs: Vec<String>,
+    /// When set, every step asserts that no entity state became non-finite and
+    /// fails with detail 88 otherwise (catches unphysical blow-ups).
+    finite_check: bool,
 }
 
 impl LangRuntime {
@@ -162,6 +165,7 @@ impl LangRuntime {
             entity_names,
             peer_region: None,
             env: crate::eir::ExecEnv::default(),
+            finite_check: false,
             invariant_exprs: compiled
                 .parsed
                 .systems
@@ -288,6 +292,36 @@ impl LangRuntime {
         self.env = crate::eir::ExecEnv::default();
     }
 
+    /// Enables/disables the per-step non-finite state check (detail 88).
+    pub fn set_finite_check(&mut self, on: bool) {
+        self.finite_check = on;
+    }
+
+    /// Fails (detail 88) when any entity's state holds a non-finite value.
+    pub fn assert_finite(&self) -> Result<()> {
+        for (id, e) in &self.scene.entities {
+            let id = id.0;
+            if let Some(st) = &e.state {
+                for (i, v) in st.values.iter().enumerate() {
+                    if !v.is_finite() {
+                        let name = self
+                            .entity_names
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(|| format!("#{id}"));
+                        return Err(error_at(
+                            Status::EirInvalid,
+                            88,
+                            0,
+                            format!("entity `{name}` slot {i} is non-finite ({v})"),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Advances the global simulation clock by one step.
     fn advance_clock(&mut self) {
         self.scene.sim_time += self.sim_dt;
@@ -336,6 +370,9 @@ impl LangRuntime {
         let overlays = rt.take_overlays();
         apply_writes(&mut self.scene, &writes)?;
         crate::physics_eir::flush_overlays(&mut self.scene, &overlays);
+        if self.finite_check {
+            self.assert_finite()?;
+        }
         self.advance_clock();
         Ok(writes)
     }
@@ -418,6 +455,9 @@ impl LangRuntime {
         self.env = env_a;
         apply_writes(&mut self.scene, &int_writes)?;
         crate::physics_eir::flush_overlays(&mut self.scene, &overlays);
+        if self.finite_check {
+            self.assert_finite()?;
+        }
         self.advance_clock();
         Ok(int_writes)
     }
