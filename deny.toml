@@ -1,13 +1,18 @@
 # cargo-deny policy (supply chain / licenses / advisories).
 [graph]
 all-features = true
+
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
+# Schema v2: vulnerabilities are always denied; `yanked`/`unmaintained` are the
+# tunable knobs. (`vulnerability`/`unmaintained` string keys are deprecated.)
+version = 2
 yanked = "deny"
+unmaintained = "workspace"
+
 [licenses]
 allow = ["Apache-2.0", "MIT", "Unicode-3.0", "Unicode-DFS-2016", "BSD-3-Clause"]
 confidence-threshold = 0.9
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
