@@ -1723,6 +1723,71 @@ pub const LANG_VERSION: &str = "0.3";
 /// `lang_version` values this build accepts.
 pub const SUPPORTED_LANG_VERSIONS: &[&str] = &["0.3"];
 
+/// Rejects an explicit field solver whose settings violate the numerical
+/// stability limit (detail 86): explicit diffusion (`T += rate·∇²T`) needs
+/// `rate ≤ dx²/(2·dim)`, and the leapfrog wave needs `c·dt/dx ≤ 1/√dim`.
+fn check_solver_stability(
+    parsed: &ParsedProgram,
+    field_info: &std::collections::BTreeMap<String, (u32, u32, u32, f64)>,
+) -> Result<()> {
+    let dim_of = |f: &str| -> Option<f64> {
+        let (w, h, d, _) = field_info.get(f).copied()?;
+        Some(((w > 1) as u32 + (h > 1) as u32 + (d > 1) as u32).max(1) as f64)
+    };
+    for s in &parsed.systems {
+        match s.kind.as_str() {
+            "diffuse" => {
+                let Some(field) = s.string_params.get("field") else {
+                    continue;
+                };
+                let (Some((_, _, _, dx)), Some(dim)) =
+                    (field_info.get(field).copied(), dim_of(field))
+                else {
+                    continue;
+                };
+                let rate = s.params.get("rate").copied().unwrap_or(0.0);
+                let limit = dx * dx / (2.0 * dim);
+                if rate > limit * (1.0 + 1e-9) {
+                    return Err(error_at(
+                        Status::Invalid,
+                        86,
+                        s.byte_offset,
+                        format!(
+                            "diffuse `rate = {rate}` exceeds the explicit stability limit {limit:.4} (= dx²/(2·dim)) for a {dim:.0}-D field; lower `rate` or reduce `dx`"
+                        ),
+                    ));
+                }
+            }
+            "wave" => {
+                let Some(field) = s.string_params.get("field") else {
+                    continue;
+                };
+                let (Some((_, _, _, dx)), Some(dim)) =
+                    (field_info.get(field).copied(), dim_of(field))
+                else {
+                    continue;
+                };
+                let cfl = s.params.get("velocity").copied().unwrap_or(1.0)
+                    * s.params.get("dt").copied().unwrap_or(0.0)
+                    / dx;
+                let limit = 1.0 / dim.sqrt();
+                if cfl > limit * (1.0 + 1e-9) {
+                    return Err(error_at(
+                        Status::Invalid,
+                        86,
+                        s.byte_offset,
+                        format!(
+                            "wave CFL c·dt/dx = {cfl:.4} exceeds {limit:.4} (1/√dim) for a {dim:.0}-D field; lower `velocity`/`dt` or reduce `dx`"
+                        ),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Rejects a present-but-unsupported `lang_version` (detail 83).
 fn check_lang_version(parsed: &ParsedProgram) -> Result<()> {
     if let Some(v) = &parsed.model.lang_version {
@@ -1861,6 +1926,7 @@ pub fn compile_program(mut parsed: ParsedProgram) -> Result<CompiledProgram> {
             )
         })
         .collect();
+    check_solver_stability(&parsed, &field_info)?;
     // Every declared parameter name (qualified), for namespace fallback.
     let param_names: std::collections::BTreeSet<String> =
         parsed.model.params.keys().cloned().collect();

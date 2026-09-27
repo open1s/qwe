@@ -99,6 +99,7 @@ pub fn detail_name(detail: u32) -> &'static str {
         83 => "unsupported lang_version (see docs/lang-usage)",
         84 => "malformed unit annotation",
         85 => "unknown identifier (reads 0.0)",
+        86 => "unstable solver setting (CFL / diffusion limit)",
         _ => "unspecified compile error",
     }
 }

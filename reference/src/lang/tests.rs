@@ -2645,3 +2645,29 @@ fn params_units_are_checked() {
     let malformed = "world { gravity=(0,0,0) params { k = 4.0 [1/s^] } }";
     assert!(LangRuntime::compile(malformed).is_err());
 }
+
+#[test]
+fn solver_stability_is_checked() {
+    // Explicit diffusion needs rate <= dx²/(2·dim); the wave needs c·dt/dx <= 1/√dim.
+    let detail = |src: &str| match LangRuntime::compile(src) {
+        Ok(_) => panic!("expected a stability error"),
+        Err(e) => e.detail,
+    };
+    let unstable_diffuse = r#"
+        world { gravity=(0,0,0) field t { width=8; height=8; dx=1.0 } entity p { state=(0.0) } }
+        systems { diffuse { field=t; rate=0.5 } update { on=p; dt=1.0 s0=s0+inte(0.0) } }
+    "#;
+    assert_eq!(detail(unstable_diffuse), 86);
+    let unstable_wave = r#"
+        world { gravity=(0,0,0) field u { width=8; height=8; dx=1.0 }
+            field um { width=8; height=8; dx=1.0 } entity p { state=(0.0) } }
+        systems { wave { field=u; prev=um; velocity=5.0; dt=0.5 }
+            update { on=p; dt=0.5 s0=s0+inte(0.0) } }
+    "#;
+    assert_eq!(detail(unstable_wave), 86);
+    let stable = r#"
+        world { gravity=(0,0,0) field t { width=8; height=8; dx=1.0 } entity p { state=(0.0) } }
+        systems { diffuse { field=t; rate=0.2 } update { on=p; dt=1.0 s0=s0+inte(0.0) } }
+    "#;
+    LangRuntime::compile(stable).unwrap();
+}

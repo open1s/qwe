@@ -795,6 +795,10 @@ error 48: system 'update' is missing required parameter 'dt'
 | 78 | Unknown pool name (`spawn`/`despawn`). |
 | 79 | Unknown shape / shape-reference cycle. |
 | 80 | Unknown struct type / struct cycle / state too large. |
+| 83 | Unsupported `lang_version`. |
+| 84 | Malformed unit annotation. |
+| 85 | Unknown identifier (reads 0.0) — a warning. |
+| 86 | Unstable solver setting (CFL / diffusion limit). |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the
