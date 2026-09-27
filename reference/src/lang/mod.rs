@@ -76,6 +76,9 @@ pub use systems::*;
 mod runtime;
 pub use runtime::*;
 
+mod migrate;
+pub use migrate::{migrate_v02_to_v03, Migration};
+
 // ---------------------------------------------------------------------------
 // Lower to low-level IR (EIR)
 // ---------------------------------------------------------------------------

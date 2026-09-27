@@ -34,6 +34,7 @@ fn main() {
         Some("compile") => cmd_compile(&args[1..]),
         Some("run") => cmd_run(&args[1..], None),
         Some("present") => cmd_run(&args[1..], Some(8000)),
+        Some("migrate") => cmd_migrate(&args[1..]),
         Some("-h") | Some("--help") | None => {
             usage();
             0
@@ -54,7 +55,8 @@ fn usage() {
          USAGE:\n  \
            pwe compile <src.pwe> [-o <out.pweb>]\n  \
            pwe run     <out.pweb> [--steps N] [--param K=V]...\n  \
-           pwe present <out.pweb> [--port P] [--param K=V]...\n\
+           pwe present <out.pweb> [--port P] [--param K=V]...\n  \
+           pwe migrate <src.pwe> [-o <out.pwe>]   # upgrade a pre-v0.3 source\n\
          \n\
          Compile source to a .pweb binary, then run the binary (javac/java style).\n\
          --param overrides a declared model parameter at run time.\n\
@@ -231,6 +233,57 @@ fn hex(bytes: &[u8]) -> String {
 // ---------------------------------------------------------------------------
 // compile
 // ---------------------------------------------------------------------------
+
+/// `pwe migrate <src.pwe> [-o <out>]` — upgrade a pre-v0.3 source to the frozen
+/// v0.3 semantics (implicit `=` integration and the old `deriv` form → `inte`).
+fn cmd_migrate(args: &[String]) -> i32 {
+    let mut input: Option<String> = None;
+    let mut out: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" => {
+                i += 1;
+                out = args.get(i).cloned();
+            }
+            other => input = Some(other.to_string()),
+        }
+        i += 1;
+    }
+    let Some(input) = input else {
+        eprintln!("pwe: migrate needs a source file");
+        return 2;
+    };
+    let src = match std::fs::read_to_string(&input) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("pwe: cannot read {input}: {e}");
+            return 1;
+        }
+    };
+    let m = match pwe_reference::lang::migrate_v02_to_v03(&src) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("pwe: migration failed: {e}");
+            return 1;
+        }
+    };
+    if m.already_current {
+        eprintln!("pwe: {input} already declares lang_version 0.3 (unchanged)");
+    } else {
+        eprintln!("pwe: migrated {} rule line(s) to v0.3", m.rules_migrated);
+    }
+    match out {
+        Some(path) => {
+            if let Err(e) = std::fs::write(&path, &m.source) {
+                eprintln!("pwe: cannot write {path}: {e}");
+                return 1;
+            }
+        }
+        None => print!("{}", m.source),
+    }
+    0
+}
 
 fn cmd_compile(args: &[String]) -> i32 {
     let mut input: Option<String> = None;

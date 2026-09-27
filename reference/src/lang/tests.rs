@@ -2534,3 +2534,48 @@ fn lang_version_pragma_accepted_and_rejected() {
     // `12` (unquoted) is a parse error, not an accepted version.
     assert!(LangRuntime::compile("world { lang_version = 12 }").is_err());
 }
+
+#[test]
+fn migrate_v02_to_v03_source() {
+    // Old implicit integration (`slot = rate`) and the old `deriv` statement /
+    // `deriv(E)` operator.
+    let legacy = r#"world { gravity=(0,0,0) entity e { state=(x=1.0, vx=0.0) } }
+systems {
+  update { on = e; dt = 0.1
+    vx = 0.0 - 2.0 * x
+    x = vx
+  }
+}
+"#;
+    let m = migrate_v02_to_v03(legacy).unwrap();
+    assert!(m.source.contains("lang_version = \"0.3\""), "{}", m.source);
+    assert!(m.source.contains("inte vx = 0.0 - 2.0 * x"), "{}", m.source);
+    assert!(m.source.contains("inte x = vx"), "{}", m.source);
+    assert_eq!(m.rules_migrated, 2);
+    LangRuntime::compile(&m.source).unwrap();
+
+    // Idempotent: an already-v0.3 source is returned unchanged.
+    let again = migrate_v02_to_v03(&m.source).unwrap();
+    assert!(again.already_current);
+    assert_eq!(again.rules_migrated, 0);
+
+    // rk4 `deriv` statements and the `deriv(E)` operator.
+    let rk = r#"world { gravity=(0,0,0) entity e { state=(x=0.0, v=1.0, a=0.0) } }
+systems {
+  rk4 { on = e; dt = 0.1
+    deriv x = v
+    deriv v = 0.0 - 4.0 * x
+  }
+  update { on = e; dt = 0.1 a = a + deriv(v) }
+}
+"#;
+    let m2 = migrate_v02_to_v03(rk).unwrap();
+    assert!(m2.source.contains("inte x = v"), "{}", m2.source);
+    assert!(
+        m2.source.contains("inte v = 0.0 - 4.0 * x"),
+        "{}",
+        m2.source
+    );
+    assert!(m2.source.contains("a = a + inte(v)"), "{}", m2.source);
+    LangRuntime::compile(&m2.source).unwrap();
+}

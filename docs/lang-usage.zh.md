@@ -650,6 +650,8 @@ systems {
 * **`slot = expr` 是赋值**。积分用 `slot = slot + inte(rate)`（或 `inte slot = rate` / `+=` 语句）；`inte slot = rate` 在 `rk4` 中以四阶 RK 积分。`inte(E) = dt·E`，`deriv(E) = (E−E_prev)/dt`。
 * **语言版本**：`world { lang_version = "0.3" }` 固定语义（v0.3 即上述规则）；
   缺省表示“当前版本”；不支持的值在编译期报错（detail 83）。
+  旧版（pre-v0.3）源码可用 `pwe migrate <src.pwe> [-o out.pwe]` 升级
+  （旧的隐式 `=` 积分与旧 `deriv` 形式会改写为 `inte`）。
 * **系统参数按名称识别**（针对该系统种类）；其它任何 `name = <表达式>`（含 `name = 1.0`）都是规则。
 * **读取**：同一系统函数内，所有读取在（子）步开始处采样一次（规则同时）；跨系统时，
   后跑的系统能看到先跑系统的写入——故顺序重要。场读取能看到同一步写入。

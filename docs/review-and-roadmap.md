@@ -76,7 +76,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 ### Phase 1 — 语言与运行时定型/拆解
 - [x] 拆分 `lang.rs`（11077→mod.rs 387）：`systems.rs`/`tests.rs`/`compile.rs`/`lower.rs`/`parser.rs`/`runtime.rs`/`ast.rs`/`diagnostics.rs`
 - [ ] opcode 元数据单一事实源 + 全 opcode round-trip 测试
-- [~] 语言版本 pragma：`world { lang_version = "0.3" }`，缺省=当前，不支持→detail 83（冻结 v0.3 语义）；迁移器待续
+- [x] 语言版本 pragma（`world { lang_version = "0.3" }`，detail 83）**+ 迁移器**：`pwe migrate` / `lang::migrate_v02_to_v03`（旧隐式 `=` 积分与旧 `deriv` → `inte`）
 - [ ] `funcs` 具名形参
 
 ### Phase 2 — 类型系统与科学正确性
