@@ -74,9 +74,9 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - [x] 编译期性能：`validate_function` 去 O(F) 查找、SSA 表改稠密数组（compile(nbody 64) 96→38ms）
 
 ### Phase 1 — 语言与运行时定型/拆解
-- [x] 拆分 `lang.rs`（11077→mod.rs 384）：`systems.rs`(2762)/`tests.rs`(2519)/`compile.rs`(1974)/`parser.rs`(1456)/`lower.rs`(1428)/`runtime.rs`(445)/`diagnostics.rs`(157)
+- [x] 拆分 `lang.rs`（11077→mod.rs 387）：`systems.rs`/`tests.rs`/`compile.rs`/`lower.rs`/`parser.rs`/`runtime.rs`/`ast.rs`/`diagnostics.rs`
 - [ ] opcode 元数据单一事实源 + 全 opcode round-trip 测试
-- [ ] 语言版本 pragma + 语义冻结 + 迁移器
+- [~] 语言版本 pragma：`world { lang_version = "0.3" }`，缺省=当前，不支持→detail 83（冻结 v0.3 语义）；迁移器待续
 - [ ] `funcs` 具名形参
 
 ### Phase 2 — 类型系统与科学正确性

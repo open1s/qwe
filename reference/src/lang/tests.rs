@@ -2517,3 +2517,20 @@ fn dynamic_lhs_rejected_in_rk4() {
         Err(e) => assert_eq!(e.detail, 73),
     }
 }
+
+#[test]
+fn lang_version_pragma_accepted_and_rejected() {
+    let base = |ver: &str| {
+        format!(
+            "world {{ lang_version = \"{ver}\" gravity=(0,0,0) entity e {{ state=(0.0) }} }} \
+             systems {{ update {{ on = e; dt = 1.0 s0 = s0 + inte(1.0) }} }}"
+        )
+    };
+    LangRuntime::compile(&base("0.3")).unwrap();
+    match LangRuntime::compile(&base("0.1")) {
+        Ok(_) => panic!("unsupported lang_version must be rejected"),
+        Err(e) => assert_eq!(e.detail, 83, "detail = {}", e.detail),
+    }
+    // `12` (unquoted) is a parse error, not an accepted version.
+    assert!(LangRuntime::compile("world { lang_version = 12 }").is_err());
+}

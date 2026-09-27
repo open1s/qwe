@@ -683,6 +683,9 @@ systems {
 * **`slot = expr` assigns**. Integrate with `slot = slot + inte(rate)` (or the
   `inte slot = rate` / `+=` statement); in `rk4`, `inte slot = rate`
   integrates with 4th-order Runge–Kutta. `inte(E) = dt·E`, `deriv(E) = (E−E_prev)/dt`.
+* **Language version**: `world { lang_version = "0.3" }` pins the semantics
+  (v0.3 = the rules above). Absent means "current"; an unsupported value is
+  rejected at compile time (detail 83).
 * **System parameters are recognised by name** per kind; any other
   `name = <expr>` (including `name = 1.0`) is a rule.
 * **Reads**: within one system's function, all reads are sampled once at the

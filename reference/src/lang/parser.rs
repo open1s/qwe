@@ -39,118 +39,6 @@ pub(crate) fn parse_vec3(pair: Pair<'_, Rule>) -> Vec3 {
     )
 }
 
-/// A parsed system declaration: `kind { key = value; ... }`.
-#[derive(Clone, Debug)]
-pub struct SystemDecl {
-    pub kind: String,
-    pub params: std::collections::BTreeMap<String, f64>,
-    /// Vector-valued params (e.g. `linear` rows `row0 = (a, b, c)`).
-    pub vec_params: std::collections::BTreeMap<String, Vec<f64>>,
-    /// ODE derivative rules (`inte slot = rate`): integrated as slot += dt·rate.
-    pub update: std::collections::BTreeMap<String, String>,
-    /// Assignment rules (`slot = expr`): written each step.
-    pub assigns: std::collections::BTreeMap<String, String>,
-    /// `let name = expr` local bindings in the `update` system, in order.
-    pub update_stmts: Vec<UpdateStmt>,
-    /// Ident-valued params (e.g. `chan = ping`).
-    pub string_params: std::collections::BTreeMap<String, String>,
-    /// Declared units for scalar params (e.g. `dt = 0.01 s`).
-    pub param_units: std::collections::BTreeMap<String, crate::units::Dim>,
-    /// Byte offset of this system's opening brace in the source (for
-    /// diagnostics).
-    pub byte_offset: usize,
-    /// The module namespace this system came from ("" for the root program);
-    /// unqualified function/parameter references resolve within it first.
-    pub namespace: String,
-}
-
-/// A statement in an `update` rule body. Loops keep their structure (count /
-/// range + nested body) so lowering can unroll them with per-loop
-/// break/continue gating; `break`/`continue` only occur inside loop bodies
-/// (enforced by the grammar).
-#[derive(Clone, Debug, PartialEq)]
-pub enum UpdateStmt {
-    /// `let name = expr` — a reusable local computed before the slot rules run.
-    Let(String, String),
-    /// `repeat n { … }` / `repeat n until (cond) { … }` — unrolled at lowering
-    /// time, bounded.
-    Repeat(usize, Vec<UpdateStmt>),
-    /// `for i in lo..hi { … }` — unrolled with the index bound per iteration.
-    For(String, f64, f64, Vec<UpdateStmt>),
-    /// `break` / `break if (cond)` inside a loop body.
-    Break(Option<String>),
-    /// `continue` / `continue if (cond)` inside a loop body.
-    Continue(Option<String>),
-    /// `if cond { return a } [else { return b }]` in a function body: a
-    /// control-flow branch (lazy) so function calls nest/recursively on the
-    /// call stack, unlike the eager `if(c,a,b)` expression.
-    If(String, String, Option<String>),
-}
-
-/// A lowered (resolved) statement tree: the `Expr` form of [`UpdateStmt`],
-/// stored per system and unrolled with gates during EIR lowering.
-#[derive(Clone, Debug)]
-pub enum LetStmt {
-    Let(String, Expr),
-    Repeat(usize, Vec<LetStmt>),
-    For(String, f64, f64, Vec<LetStmt>),
-    Break(Option<Expr>),
-    Continue(Option<Expr>),
-    /// `if cond { return a } [else { return b }]` (control-flow branch).
-    If(Expr, Expr, Option<Expr>),
-}
-
-/// A parsed scalar expression over state slots (`s0`, `s1`, …).
-#[derive(Clone, Debug)]
-pub enum Expr {
-    Const(f64),
-    Slot(usize),
-    /// A dynamic slot read `s[i]`: the State slot at a runtime index.
-    SlotDyn(Box<Expr>),
-    Add(Box<Expr>, Box<Expr>),
-    Sub(Box<Expr>, Box<Expr>),
-    Mul(Box<Expr>, Box<Expr>),
-    Div(Box<Expr>, Box<Expr>),
-    /// Remainder `a % b` (fmod semantics).
-    Rem(Box<Expr>, Box<Expr>),
-    /// A comparison `a <op> b`, yielding 1.0 / 0.0.
-    Cmp(&'static str, Box<Expr>, Box<Expr>),
-    /// Logical conjunction `a and b`: 1.0 iff both operands are nonzero.
-    And(Box<Expr>, Box<Expr>),
-    /// Logical disjunction `a or b`: 1.0 iff either operand is nonzero.
-    Or(Box<Expr>, Box<Expr>),
-    /// Logical negation `not a`: 1.0 iff the operand is zero.
-    Not(Box<Expr>),
-    /// Unary negation `-x`.
-    Neg(Box<Expr>),
-    /// A built-in math function call: `sin(x)`, `pow(a, b)`, `if(c,a,b)`, …
-    Call(&'static str, Vec<Expr>),
-    /// A reference to another entity's state slot: `@name.sN`.
-    Ref(String, usize),
-    /// A named state slot reference (`x`), resolved against the model's state
-    /// layout. Requires named `state = (x = 0, …)` declarations.
-    Name(String),
-    /// A cross-entity property reference: `@name.mass`, `@name.position.x`, …
-    PropRef(String, PropKind),
-    /// The global simulation clock: `t`.
-    Time,
-}
-
-/// A cross-entity property path (`@name.<kind>`), lowering to a read of the
-/// corresponding physics component field.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
-pub enum PropKind {
-    Mass,
-    IsDynamic,
-    PositionX,
-    PositionY,
-    PositionZ,
-    VelocityX,
-    VelocityY,
-    VelocityZ,
-    State(usize),
-}
-
 /// The scalar (numeric) parameter names a system kind recognises. An
 /// `name = <number>` whose name is not listed here is a **rule**, not a
 /// parameter — so `update { x = 1.0 }` is a rule (and `update { dt = 0.01 }` is
@@ -969,31 +857,6 @@ pub(crate) fn build_ref(pair: Pair<'_, Rule>) -> Result<Expr> {
     }
 }
 
-/// The parsed program before lowering: a world model plus system declarations.
-#[derive(Clone, Debug)]
-pub struct ParsedProgram {
-    pub model: WorldModel,
-    pub systems: Vec<SystemDecl>,
-    /// User-defined pure functions (params referenced as `s0`, `s1`, … in the
-    /// body), lowered to EIR `CALL` functions.
-    pub funcs: Vec<FuncDecl>,
-}
-
-/// A user-defined pure function: a name, its parameters (referenced as slots
-/// `s0..s_{n-1}` in the body), statements computed before the return (lets and
-/// bounded loops), and the return-value expression.
-#[derive(Clone, Debug)]
-pub struct FuncDecl {
-    pub name: String,
-    /// The module namespace this function belongs to ("" for the root); its
-    /// body resolves unqualified parameter/slot names within it first.
-    pub namespace: String,
-    pub params: Vec<String>,
-    /// Statements before the `return` (lets / loops), in order.
-    pub stmts: Vec<UpdateStmt>,
-    pub body: Expr,
-}
-
 /// Parses PWE source text into a world model plus system declarations, using
 /// the PEST grammar above.
 pub fn parse(source: &str) -> Result<ParsedProgram> {
@@ -1046,6 +909,15 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let text = inner.as_str().trim();
                             // Strip the surrounding quotes.
                             model.title = Some(
+                                text.trim_start_matches('"')
+                                    .trim_end_matches('"')
+                                    .to_string(),
+                            );
+                        }
+                        Rule::lang_version_stmt => {
+                            let inner = next_pair(&mut item.into_inner())?;
+                            let text = inner.as_str().trim();
+                            model.lang_version = Some(
                                 text.trim_start_matches('"')
                                     .trim_end_matches('"')
                                     .to_string(),

@@ -55,6 +55,9 @@ pub use diagnostics::{
 pub(crate) use diagnostics::{error, error_at};
 use pwe_api::{Access, EntityId, Error, Hash256, RegionId, Result, Status, WorldId, WorldVersion};
 
+mod ast;
+pub use ast::*;
+
 mod parser;
 pub use parser::*;
 
@@ -64,7 +67,7 @@ pub(crate) use lower::*;
 mod compile;
 pub use compile::{
     build_systems, compile, compile_file, compile_program, load_program, load_program_sources,
-    merge_sources, CompiledProgram, ProgramSources,
+    merge_sources, CompiledProgram, ProgramSources, LANG_VERSION, SUPPORTED_LANG_VERSIONS,
 };
 
 mod systems;

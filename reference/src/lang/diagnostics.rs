@@ -96,6 +96,7 @@ pub fn detail_name(detail: u32) -> &'static str {
         75 => "field needs width and height ≥ 1",
         76 => "import failed (missing file, bad directive, or cycle)",
         77 => "dimension mismatch (see declared units)",
+        83 => "unsupported lang_version (see docs/lang-usage)",
         _ => "unspecified compile error",
     }
 }

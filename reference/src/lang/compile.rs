@@ -1240,6 +1240,9 @@ pub(crate) fn merge_modules(
         if model.title.is_none() {
             model.title = m.parsed.model.title.clone();
         }
+        if model.lang_version.is_none() {
+            model.lang_version = m.parsed.model.lang_version.clone();
+        }
         for e in &m.parsed.model.entities {
             if let Some(prev) = entity_seen.get(&e.name) {
                 return Err(error_at(
@@ -1690,8 +1693,34 @@ pub fn compile(source: &str) -> Result<CompiledProgram> {
     compile_program(parse(source)?)
 }
 
+/// The language semantics this build implements (frozen at v0.3). A model may
+/// pin it with `world { lang_version = "0.3" }`; absence means "current".
+pub const LANG_VERSION: &str = "0.3";
+
+/// `lang_version` values this build accepts.
+pub const SUPPORTED_LANG_VERSIONS: &[&str] = &["0.3"];
+
+/// Rejects a present-but-unsupported `lang_version` (detail 83).
+fn check_lang_version(parsed: &ParsedProgram) -> Result<()> {
+    if let Some(v) = &parsed.model.lang_version {
+        if !SUPPORTED_LANG_VERSIONS.contains(&v.as_str()) {
+            return Err(error_at(
+                Status::Invalid,
+                83,
+                0,
+                format!(
+                    "unsupported lang_version '{v}'; this build supports {}",
+                    SUPPORTED_LANG_VERSIONS.join(", ")
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Compiles an already-parsed (and merged) program to EIR.
 pub fn compile_program(mut parsed: ParsedProgram) -> Result<CompiledProgram> {
+    check_lang_version(&parsed)?;
     check_dimensions(&parsed)?;
     // Inline `part <other-shape>` references so render paths see concrete parts.
     expand_shapes(&mut parsed.model.shapes)?;
