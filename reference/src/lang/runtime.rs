@@ -20,6 +20,13 @@ pub struct LangRuntime {
     pub scene: Scene,
     pub program: PhysicsProgram,
     pub module: EirModule,
+    /// Cached execution order / call index for `optimized` (built once).
+    call_index: crate::eir::CallIndex,
+    /// Phase-3 optimizing tier: the same program after constant folding and
+    /// `Mul`/`Add` -> `Fma` fusion. `step_interpreter` executes this form; the
+    /// `jit` backend keeps the unoptimized EIR, so `step_cross` differentially
+    /// verifies the optimizer against the generic semantics.
+    pub(crate) optimized: EirModule,
     pub clock: u64,
     /// Seconds advanced per step (the `update` system's dt, else 1/60).
     pub sim_dt: f64,
@@ -159,10 +166,14 @@ impl LangRuntime {
             .filter_map(|s| s.string_params.get("prev").cloned())
             .collect();
         let soft_bonds = compiled.parsed.model.soft_bonds();
+        let optimized = module.optimize();
+        let call_index = optimized.prepare_index();
         Ok(Self {
             scene,
             program,
             module,
+            call_index,
+            optimized,
             clock: 0,
             sim_dt,
             hidden_fields,
@@ -444,8 +455,8 @@ impl LangRuntime {
         // The module was validated once at compile; executing skips the
         // dominance re-check every step (vital for unrolled field solvers).
         let writes = self
-            .module
-            .execute(&mut rt, &mut self.env, WorldId(0), WorldVersion(0))?;
+            .optimized
+            .execute_with_index(&mut rt, &mut self.env, &self.call_index)?;
         self.check_invariants(&writes)?;
         let overlays = rt.take_overlays();
         apply_writes(&mut self.scene, &writes)?;
@@ -501,9 +512,9 @@ impl LangRuntime {
 
         let mut env_a = base.clone();
         let mut rt_a = SceneRuntime::new(&a);
-        let int_writes = self
-            .module
-            .execute(&mut rt_a, &mut env_a, WorldId(0), WorldVersion(0))?;
+        let int_writes =
+            self.optimized
+                .execute_with_index(&mut rt_a, &mut env_a, &self.call_index)?;
 
         let mut env_b = base.clone();
         let mut rt_b = SceneRuntime::new(&b);

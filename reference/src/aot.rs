@@ -59,12 +59,19 @@ impl AotProgram {
     pub fn compile(module: &EirModule, target: u16) -> Result<Self> {
         module.validate(true)?;
         module.verify_linear_dominance()?;
+        // AOT performs the optimizing pass once at compile time (constant
+        // folding + Mul/Add -> Fma fusion); the frozen program executes the
+        // optimized form. Re-validate the result: the pass must preserve SSA
+        // dominance and types (a bug would fail closed here, not at run time).
+        let optimized = module.optimize();
+        optimized.validate(true)?;
+        optimized.verify_linear_dominance()?;
         // The artifact hash is SHA-256 over the canonical artifact bytes with
         // the hash field itself zeroed (mirrors RFC-0021's module envelope).
-        let zeroed = serialize_artifact(module, target, Hash256([0; 32]))?;
+        let zeroed = serialize_artifact(&optimized, target, Hash256([0; 32]))?;
         let artifact_hash = digest(&zeroed);
         Ok(Self {
-            eir: module.clone(),
+            eir: optimized,
             target,
             artifact_hash,
         })

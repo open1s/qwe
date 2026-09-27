@@ -86,8 +86,9 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - [ ] 物理 demo 断言纳入 CI
 
 ### Phase 3 — 高性能与多后端
-- [ ] 优化解释器（预译码/线程化/寄存器分配/SIMD）
-- [ ] 真 JIT/AOT（Cranelift 等），解释器为基线
+- [x] 解释器读路径优化：缓存规范组件 id（免 OnceLock 原子）、`pending`/`committed` 空覆盖快路径、覆盖表 BTreeMap→HashMap；缓存调用索引（`CallIndex`，免每步排序+哈希）。既有形态本已是"预译码"（扁平 `Vec<Instruction>` + 稠密寄存器 + 跳表分派）。
+- [x] 优化执行层（AOT/JIT 共用）：`EirModule::optimize` 做**常量折叠 + `Mul/Add→Fma` 超指令融合**（新增 opcode `Fma=235`，语义 = `(a*b)+c` 两次舍入，**位等价**）。`AotProgram::compile` 于编译期优化；`LangRuntime` 用优化模块执行、`jit` 保持通用 → `step_cross` 差分验证优化器。nbody-64 步进 ~7%；`Fma` 融合使算术指令 2048→784。
+- [ ] 真原生 JIT/AOT（Cranelift 或系统 `cc` 原生代码；`AotProgram.target` 处的后端边界）——需按 §12 评审依赖后实施
 - [ ] GPU/NPU 计算后端（WGSL）
 
 ### Phase 4 — 普适性与生态
@@ -104,6 +105,11 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 2. **太阳系演示科学修正**：真实轨道半径比例 + 真实质量 + **质心系初值**，月球真正绕地球（希尔半径 ~0.26 倍）。
 3. **工程基座**：CI、工具链、`cargo-deny`、`.cargo` 策略、无依赖基准。
 4. **性能度量**：基准暴露 `compile` O(n²) 与 `validate` 常数过高；已优化至 38ms。
+
+## 4b. Phase 3 进展（本次迭代）
+- 解释器读路径 + 调用索引优化；优化层的常量折叠与 FMA 融合（`Fma` opcode）。
+- 基准（release，本机）：`step_interpreter(nbody 64)` ≈ 2.21 ms（优化前 2.28），`step_cross` ≈ 4.5 ms，`compile(nbody 64)` ≈ 93 ms（优化在编译期，代价 +~24%）。
+- 差分验证：全部 `step_cross`/conformance 用例通过（优化模块 ≡ 通用模块，字节一致）。
 
 ## 5. 验收标准（关键项）
 - 运行路径 `unwrap=0`；CI 全绿；基准回归 >5% 报警。

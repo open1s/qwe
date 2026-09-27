@@ -126,15 +126,40 @@ pub mod field {
     pub const STATE_SLOT_BYTES: u32 = 8;
 }
 
+/// The canonical component ids used on the hot read/write path, resolved once
+/// per runtime instead of re-reading a `OnceLock` on every field access.
+#[derive(Clone, Copy)]
+struct CanonicalIds {
+    transform: ComponentTypeId,
+    velocity: ComponentTypeId,
+    rigid_body: ComponentTypeId,
+    state: ComponentTypeId,
+    active: ComponentTypeId,
+    sim_time: ComponentTypeId,
+}
+
+impl CanonicalIds {
+    fn resolve() -> Self {
+        Self {
+            transform: transform_id(),
+            velocity: velocity_id(),
+            rigid_body: rigid_body_id(),
+            state: state_id(),
+            active: active_id(),
+            sim_time: sim_time_id(),
+        }
+    }
+}
+
 /// A runtime adapter that reads component fields from a `Scene`, applying
 /// in-interpretation writes via an overlay so later reads observe them.
 pub struct SceneRuntime<'a> {
     pub scene: &'a Scene,
-    pending: std::collections::BTreeMap<(u128, ComponentTypeId, u32), u64>,
+    pending: std::collections::HashMap<(u128, ComponentTypeId, u32), u64>,
     /// Writes committed at the last system barrier. Committed reads use this
     /// (plus the scene), so every entity of a system sees one start-of-system
     /// snapshot while later systems see earlier systems' writes.
-    committed: std::collections::BTreeMap<(u128, ComponentTypeId, u32), u64>,
+    committed: std::collections::HashMap<(u128, ComponentTypeId, u32), u64>,
     /// A **dense** per-field overlay of cell values written so far this step,
     /// materialized lazily from the `Field` on the first grid write. Grid
     /// read-after-write therefore costs O(1), not a tree lookup per cell
@@ -145,6 +170,8 @@ pub struct SceneRuntime<'a> {
     field_ids: std::collections::BTreeMap<ComponentTypeId, &'a crate::field::Field>,
     /// Canonical parameter component id -> the parameter value.
     param_ids: std::collections::BTreeMap<ComponentTypeId, f64>,
+    /// Canonical component ids, resolved once (hot-path fast access).
+    ids: CanonicalIds,
 }
 
 impl<'a> SceneRuntime<'a> {
@@ -159,11 +186,12 @@ impl<'a> SceneRuntime<'a> {
         }
         Self {
             scene,
-            pending: std::collections::BTreeMap::new(),
-            committed: std::collections::BTreeMap::new(),
+            pending: std::collections::HashMap::new(),
+            committed: std::collections::HashMap::new(),
             field_overlay: std::collections::BTreeMap::new(),
             field_ids,
             param_ids,
+            ids: CanonicalIds::resolve(),
         }
     }
 }
@@ -175,16 +203,18 @@ impl SceneRuntime<'_> {
     /// preserving Newton's third law.
     fn read_field_impl(&self, target: ComponentRef, use_pending: bool) -> Result<u64> {
         let key = (target.entity, target.component, target.offset);
-        if use_pending {
+        if use_pending && !self.pending.is_empty() {
             if let Some(&v) = self.pending.get(&key) {
                 return Ok(v);
             }
         }
-        if let Some(&v) = self.committed.get(&key) {
-            return Ok(v);
+        if !self.committed.is_empty() {
+            if let Some(&v) = self.committed.get(&key) {
+                return Ok(v);
+            }
         }
         // The global simulation clock (`t`) does not belong to any entity.
-        if target.component == sim_time_id() {
+        if target.component == self.ids.sim_time {
             return Ok(self.scene.sim_time.to_bits());
         }
         // A model parameter: not tied to any entity. Checked first so a
@@ -227,7 +257,7 @@ impl SceneRuntime<'_> {
                     detail: 1,
                     byte_offset: 0,
                 })?;
-            if target.component == transform_id() {
+            if target.component == self.ids.transform {
                 let t = e.transform.ok_or(pwe_api::Error {
                     status: pwe_api::Status::HandleStale,
                     detail: 2,
@@ -239,7 +269,7 @@ impl SceneRuntime<'_> {
                     field::POS_Z => t.position.z.to_bits(),
                     _ => 0,
                 })
-            } else if target.component == velocity_id() {
+            } else if target.component == self.ids.velocity {
                 let v = e.velocity.ok_or(pwe_api::Error {
                     status: pwe_api::Status::HandleStale,
                     detail: 3,
@@ -251,7 +281,7 @@ impl SceneRuntime<'_> {
                     field::VEL_Z => v.linear.z.to_bits(),
                     _ => 0,
                 })
-            } else if target.component == rigid_body_id() {
+            } else if target.component == self.ids.rigid_body {
                 let rb = e.rigid_body.ok_or(pwe_api::Error {
                     status: pwe_api::Status::HandleStale,
                     detail: 4,
@@ -262,14 +292,14 @@ impl SceneRuntime<'_> {
                     field::IS_DYNAMIC => rb.is_dynamic as u64,
                     _ => 0,
                 })
-            } else if target.component == state_id() {
+            } else if target.component == self.ids.state {
                 // A body without an explicit state reads as all-zeros (default).
                 let Some(st) = e.state.as_ref() else {
                     return Ok(0);
                 };
                 let slot = (target.offset / field::STATE_SLOT_BYTES) as usize;
                 Ok(st.values.get(slot).copied().map(f64::to_bits).unwrap_or(0))
-            } else if target.component == active_id() {
+            } else if target.component == self.ids.active {
                 Ok(e.active as u64)
             } else {
                 Ok(0)
@@ -900,7 +930,7 @@ impl SceneRuntime<'_> {
         // State-slot reads prefer the committed (start-of-system) snapshot.
         let slot = |i: usize| -> Option<f64> {
             self.committed
-                .get(&(entity, state_id(), field::state_slot(i)))
+                .get(&(entity, self.ids.state, field::state_slot(i)))
                 .map(|v| f64::from_bits(*v))
                 .or_else(|| e.state.as_ref().and_then(|st| st.values.get(i).copied()))
         };
@@ -914,15 +944,15 @@ impl SceneRuntime<'_> {
         };
         let px = self
             .committed
-            .get(&(entity, transform_id(), field::POS_X))
+            .get(&(entity, self.ids.transform, field::POS_X))
             .map(|v| f64::from_bits(*v));
         let py = self
             .committed
-            .get(&(entity, transform_id(), field::POS_Y))
+            .get(&(entity, self.ids.transform, field::POS_Y))
             .map(|v| f64::from_bits(*v));
         let pz = self
             .committed
-            .get(&(entity, transform_id(), field::POS_Z))
+            .get(&(entity, self.ids.transform, field::POS_Z))
             .map(|v| f64::from_bits(*v));
         Vec3::new(
             px.unwrap_or(base.x),

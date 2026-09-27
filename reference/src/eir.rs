@@ -131,6 +131,11 @@ declare_opcodes! {
     Sqrt = 132 => f64,
     /// `pow(base, exponent)`.
     Pow = 133 => f64,
+    /// Fused multiply-add superinstruction: `(a*b) + c` with the **same two
+    /// roundings** as `Mul` then `Add` (not a single-rounding `mul_add`), so it
+    /// is bit-identical to the two-instruction form. Emitted by the optimizer
+    /// (`opt::optimize`) to cut one dispatch per fused pair.
+    Fma = 235 => f64,
     Eq = 32 => bool,
     Ne = 33 => bool,
     Lt = 34 => bool,
@@ -617,6 +622,13 @@ pub struct EirModule {
     pub functions: Vec<Function>,
 }
 
+/// Precomputed execution order and function-id -> index map for an
+/// [`EirModule`] (see [`EirModule::prepare_index`]).
+pub(crate) struct CallIndex {
+    pub(crate) order: Vec<usize>,
+    pub(crate) index_of: std::collections::HashMap<u64, usize>,
+}
+
 /// The SSA type of an instruction's result: an explicit annotation, else a
 /// constant's type, else an opcode-inferred default (`Const` yields the
 /// constant's type; comparisons and unknown ops default as before).
@@ -828,6 +840,18 @@ impl EirModule {
                     // arithmetic: operands must be a consistent numeric type.
                     let ty = numeric_type(&reg_types, &instruction.operands, index)?;
                     Some(ty)
+                }
+                Opcode::Fma => {
+                    // fused multiply-add: exactly three f64 operands, result f64.
+                    if instruction.operands.len() != 3 {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    for &id in &instruction.operands {
+                        if reg_types.get(id as usize).copied().flatten() != Some(ValueType::F64) {
+                            return Err(error(Status::EirInvalid, 13, index));
+                        }
+                    }
+                    Some(ValueType::F64)
                 }
                 Opcode::Atan2 | Opcode::Hypot => {
                     // binary f64 function: exactly two f64 operands, result f64.
@@ -1155,6 +1179,17 @@ impl EirModule {
     /// validate with the appropriate purity before delegating here. Callers
     /// that step the same immutable module repeatedly (the language runtime)
     /// validate once and then use this directly.
+    /// The deterministic execution order (functions sorted by id) and a
+    /// function-id -> index map, computed once so a steady-state step does not
+    /// re-sort/re-hash the function table every call.
+    pub(crate) fn prepare_index(&self) -> CallIndex {
+        let mut order: Vec<usize> = (0..self.functions.len()).collect();
+        order.sort_by_key(|&i| self.functions[i].id);
+        let index_of: std::collections::HashMap<u64, usize> =
+            order.iter().map(|&i| (self.functions[i].id, i)).collect();
+        CallIndex { order, index_of }
+    }
+
     pub(crate) fn execute(
         &self,
         rt: &mut dyn EirRuntime,
@@ -1163,14 +1198,19 @@ impl EirModule {
         version: WorldVersion,
     ) -> Result<Vec<WorldWrite>> {
         let _ = (world, version);
+        let index = self.prepare_index();
+        self.execute_with_index(rt, env, &index)
+    }
+
+    /// Executes all entry functions using a precomputed [`CallIndex`].
+    pub(crate) fn execute_with_index(
+        &self,
+        rt: &mut dyn EirRuntime,
+        env: &mut ExecEnv,
+        index: &CallIndex,
+    ) -> Result<Vec<WorldWrite>> {
         let mut writes: Vec<WorldWrite> = Vec::new();
-        // Deterministic id order without cloning the (potentially huge) function
-        // bodies; the index maps a function id to its position in `self.functions`.
-        let mut order: Vec<usize> = (0..self.functions.len()).collect();
-        order.sort_by_key(|&i| self.functions[i].id);
-        let index_of: std::collections::HashMap<u64, usize> =
-            order.iter().map(|&i| (self.functions[i].id, i)).collect();
-        for &entry in &order {
+        for &entry in &index.order {
             // Only argument-less functions are entry points; functions that take
             // arguments are reached exclusively via `CALL`.
             if self.functions[entry].argument_count == 0 {
@@ -1179,7 +1219,14 @@ impl EirModule {
                 if self.functions[entry].effect_mask & EIR_EFFECT_BARRIER != 0 {
                     rt.commit_barrier();
                 }
-                self.run_call_tree(rt, env, &self.functions, &index_of, entry, &mut writes)?;
+                self.run_call_tree(
+                    rt,
+                    env,
+                    &self.functions,
+                    &index.index_of,
+                    entry,
+                    &mut writes,
+                )?;
             }
         }
         Ok(writes)
@@ -1339,6 +1386,23 @@ impl EirModule {
                         }
                         _ => unreachable!(),
                     };
+                    stacks[depth - 1].insert(instruction.result_id, out);
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::Fma => {
+                    let a = stacks[depth - 1]
+                        .get(&instruction.operands[0])
+                        .copied()
+                        .ok_or(error(Status::EirInvalid, 16, 0))?;
+                    let b = stacks[depth - 1]
+                        .get(&instruction.operands[1])
+                        .copied()
+                        .ok_or(error(Status::EirInvalid, 17, 0))?;
+                    let c = stacks[depth - 1]
+                        .get(&instruction.operands[2])
+                        .copied()
+                        .ok_or(error(Status::EirInvalid, 18, 0))?;
+                    let out = Immediate::F64(as_f64(a) * as_f64(b) + as_f64(c));
                     stacks[depth - 1].insert(instruction.result_id, out);
                     pcs[depth - 1] += 1;
                 }
@@ -2362,6 +2426,195 @@ impl EirRuntime for NoopRuntime {
         _width: f64,
     ) -> Result<f64> {
         Ok(0.0)
+    }
+}
+
+impl EirModule {
+    /// A dependency-free, semantics-preserving optimizing pass (Phase 3):
+    /// **constant folding** and **Mul/Add -> Fma superinstruction fusion**.
+    ///
+    /// Every rewrite replaces an instruction in place, so instruction indices,
+    /// branch targets and SSA dominance are unchanged, and `Fma` keeps the two
+    /// roundings of `Mul;Add` — the optimized program is bit-identical to the
+    /// input (verified by the differential `step_cross` path). The interpreter
+    /// remains the semantic oracle.
+    pub fn optimize(&self) -> EirModule {
+        let mut out = self.clone();
+        for f in &mut out.functions {
+            fold_constants(&mut f.instructions);
+            fuse_fma(&mut f.instructions);
+        }
+        out
+    }
+}
+
+/// Folds instructions whose operands are compile-time constants into a single
+/// `Const` (IEEE results are identical to the runtime op).
+fn fold_constants(ins: &mut [Instruction]) {
+    let mut vals: std::collections::HashMap<u32, Immediate> = Default::default();
+    for i in ins.iter_mut() {
+        if i.opcode == Opcode::Const {
+            if let (Some(c), true) = (i.constant, i.result_id != 0) {
+                vals.insert(i.result_id, c);
+            }
+            continue;
+        }
+        if i.result_id == 0 || !i.target.is_none() {
+            continue;
+        }
+        let folded = eval_const(i, &vals);
+        if let Some(c) = folded {
+            let rid = i.result_id;
+            *i = Instruction {
+                opcode: Opcode::Const,
+                result_id: rid,
+                result_type: Some(c.ty()),
+                operands: Vec::new(),
+                constant: Some(c),
+                target: None,
+            };
+            vals.insert(rid, c);
+        }
+    }
+}
+
+/// Evaluates a pure numeric instruction over known-constant operands.
+fn eval_const(
+    i: &Instruction,
+    vals: &std::collections::HashMap<u32, Immediate>,
+) -> Option<Immediate> {
+    let op = i.opcode;
+    let arg = |k: usize| -> Option<Immediate> { vals.get(&i.operands.get(k).copied()?).copied() };
+    match op {
+        Opcode::Add | Opcode::Sub | Opcode::Mul | Opcode::Div | Opcode::Rem => {
+            let a = arg(0)?;
+            let b = arg(1)?;
+            if matches!(op, Opcode::Div | Opcode::Rem) {
+                divrem(op, a, b)
+            } else {
+                arith(op, a, b)
+            }
+        }
+        Opcode::Eq | Opcode::Ne | Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => {
+            compare(op, arg(0)?, arg(1)?)
+        }
+        Opcode::Fma => {
+            let a = as_f64(arg(0)?);
+            let b = as_f64(arg(1)?);
+            let c = as_f64(arg(2)?);
+            Some(Immediate::F64(a * b + c))
+        }
+        Opcode::Sin
+        | Opcode::Cos
+        | Opcode::Exp
+        | Opcode::Ln
+        | Opcode::Sqrt
+        | Opcode::Abs
+        | Opcode::Floor
+        | Opcode::Ceil
+        | Opcode::Round
+        | Opcode::Sign
+        | Opcode::Log10
+        | Opcode::Log2
+        | Opcode::Sinh
+        | Opcode::Cosh
+        | Opcode::Tanh
+        | Opcode::Asin
+        | Opcode::Acos
+        | Opcode::Atan => {
+            let x = as_f64(arg(0)?);
+            let v = match op {
+                Opcode::Sin => x.sin(),
+                Opcode::Cos => x.cos(),
+                Opcode::Exp => x.exp(),
+                Opcode::Ln => x.ln(),
+                Opcode::Sqrt => x.sqrt(),
+                Opcode::Abs => x.abs(),
+                Opcode::Floor => x.floor(),
+                Opcode::Ceil => x.ceil(),
+                Opcode::Round => x.round(),
+                Opcode::Sign => x.signum(),
+                Opcode::Log10 => x.log10(),
+                Opcode::Log2 => x.log2(),
+                Opcode::Sinh => x.sinh(),
+                Opcode::Cosh => x.cosh(),
+                Opcode::Tanh => x.tanh(),
+                Opcode::Asin => x.asin(),
+                Opcode::Acos => x.acos(),
+                _ => x.atan(),
+            };
+            Some(Immediate::F64(v))
+        }
+        Opcode::Select => {
+            let cond = arg(0)?;
+            if as_u64(cond) != 0 {
+                arg(1)
+            } else {
+                arg(2)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Fuses `Add(x, y)` where `x` is a single-use `Mul(a, b)` into `Fma(a, b, y)`,
+/// neutralising the now-dead `Mul`. Only f64 arithmetic is fused (integer math
+/// stays as-is), and only when the `Mul` result has exactly one use.
+fn fuse_fma(ins: &mut [Instruction]) {
+    let mut uses: std::collections::HashMap<u32, usize> = Default::default();
+    for i in ins.iter() {
+        for &o in &i.operands {
+            *uses.entry(o).or_default() += 1;
+        }
+    }
+    let mul_idx: std::collections::HashMap<u32, usize> = ins
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.opcode == Opcode::Mul && i.result_id != 0)
+        .map(|(k, i)| (i.result_id, k))
+        .collect();
+    for k in 0..ins.len() {
+        if ins[k].opcode != Opcode::Add || ins[k].operands.len() != 2 {
+            continue;
+        }
+        if infer_instruction_type(&ins[k]) != Some(ValueType::F64) {
+            continue;
+        }
+        let (ra, rb) = (ins[k].operands[0], ins[k].operands[1]);
+        for (want, other) in [(ra, rb), (rb, ra)] {
+            if uses.get(&want).copied() != Some(1) {
+                continue;
+            }
+            let Some(&mk) = mul_idx.get(&want) else {
+                continue;
+            };
+            if mk == k || infer_instruction_type(&ins[mk]) != Some(ValueType::F64) {
+                continue;
+            }
+            let m = &ins[mk];
+            if m.opcode != Opcode::Mul || m.operands.len() != 2 {
+                continue;
+            }
+            let (ma, mb) = (m.operands[0], m.operands[1]);
+            let res = ins[k].result_id;
+            ins[k] = Instruction {
+                opcode: Opcode::Fma,
+                result_id: res,
+                result_type: Some(ValueType::F64),
+                operands: vec![ma, mb, other],
+                constant: None,
+                target: None,
+            };
+            ins[mk] = Instruction {
+                opcode: Opcode::Nop,
+                result_id: 0,
+                result_type: None,
+                operands: Vec::new(),
+                constant: None,
+                target: None,
+            };
+            break;
+        }
     }
 }
 
