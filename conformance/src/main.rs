@@ -462,6 +462,7 @@ fn main() {
     simulation_determinism(&mut report);
     minimal_profile_scenario(&mut report);
     language_compile_cross(&mut report);
+    physics_sanity(&mut report);
     report.emit();
 }
 
@@ -496,6 +497,72 @@ fn language_compile_cross(report: &mut Report) {
     })();
     report.record(
         "PWE language compile->EIR + cross-backend run",
+        if result.is_ok() {
+            Case::Pass
+        } else {
+            Case::Fail
+        },
+    );
+}
+
+/// Phase-2 physical sanity: compile-time solver stability (86), conserved-quantity
+/// drift (87), and the finite-state blow-up check (88).
+fn physics_sanity(report: &mut Report) {
+    use pwe_reference::lang::LangRuntime;
+    let boom = || pwe_api::Error {
+        status: pwe_api::Status::Invalid,
+        detail: 0,
+        byte_offset: 0,
+    };
+    let result = (|| -> pwe_api::Result<()> {
+        // 86 — unstable explicit diffusion.
+        let unstable = "world { gravity=(0,0,0) field t { width=8; height=8; dx=1.0 } \
+            entity p { state=(0.0) } } \
+            systems { diffuse { field=t; rate=0.5 } update { on=p; dt=1.0 s0=s0+inte(0.0) } }";
+        match LangRuntime::compile(unstable) {
+            Err(e) if e.detail == 86 => {}
+            _ => return Err(boom()),
+        }
+        // 87 — a damped rule breaks the declared conserved energy.
+        let damped = "world { gravity=(0,0,0) entity o { state=(x=1.0, v=0.0) } } \
+            systems { update { on=o; dt=0.1 inte x = v; inte v = -4.0*x - 0.1*v } \
+                conserved { on=o; expr = 0.5*v*v + 2.0*x*x; tolerance = 1e-3 } }";
+        let mut rt = LangRuntime::compile(damped)?;
+        let mut hit = false;
+        for _ in 0..2000 {
+            if let Err(e) = rt.step_cross() {
+                if e.detail != 87 {
+                    return Err(e);
+                }
+                hit = true;
+                break;
+            }
+        }
+        if !hit {
+            return Err(boom());
+        }
+        // 88 — a divergent rule is caught by the finite check.
+        let blow = "world { gravity=(0,0,0) entity e { state=(x=1.0) } } \
+            systems { update { on=e; dt=1.0 x = x * 2.0 } }";
+        let mut rt = LangRuntime::compile(blow)?;
+        rt.set_finite_check(true);
+        let mut hit = false;
+        for _ in 0..2000 {
+            if let Err(e) = rt.step_cross() {
+                if e.detail != 88 {
+                    return Err(e);
+                }
+                hit = true;
+                break;
+            }
+        }
+        if !hit {
+            return Err(boom());
+        }
+        Ok(())
+    })();
+    report.record(
+        "physical sanity: stability(86) / conservation(87) / finiteness(88)",
         if result.is_ok() {
             Case::Pass
         } else {
