@@ -59,6 +59,7 @@ pub(crate) struct PweCtx {
     pub read_committed: unsafe extern "C" fn(*mut c_void, u64, u64, u32, u32, u32, u32, u32) -> f64,
     pub write: unsafe extern "C" fn(*mut c_void, u64, u64, u32, u32, u32, u32, u32, f64),
     pub div_guard: unsafe extern "C" fn(*mut c_void, f64) -> c_int,
+    pub trap: unsafe extern "C" fn(*mut c_void),
     pub env: *mut c_void,
 }
 
@@ -195,6 +196,18 @@ pub(crate) unsafe extern "C" fn pwe_div_guard(env: *mut c_void, divisor: f64) ->
     } else {
         0
     }
+}
+
+/// Records the RFC-0021 comparison trap (`EirInvalid` detail 18) for an
+/// unordered comparison (a NaN operand), so native comparisons fail the step
+/// exactly like the interpreter's `partial_cmp` returning `None`.
+///
+/// # Safety
+/// Same contract as [`pwe_read_view`].
+pub(crate) unsafe extern "C" fn pwe_trap(env: *mut c_void) {
+    let ctx = &mut *(env as *mut NativeCtx);
+    ctx.error
+        .get_or_insert_with(|| error(Status::EirInvalid, 18));
 }
 
 /// A loaded native library of EIR functions (`pwe_f_<id>`).
@@ -459,6 +472,7 @@ impl NativeProgram {
                 read_committed: pwe_read_committed,
                 write: pwe_write_view,
                 div_guard: pwe_div_guard,
+                trap: pwe_trap,
                 env: &mut ctx as *mut NativeCtx as *mut c_void,
             };
             let out = unsafe { func(&table as *const PweCtx as *mut c_void, args.as_ptr()) };
@@ -506,6 +520,7 @@ impl NativeProgram {
                 read_committed: pwe_read_committed,
                 write: pwe_write_view,
                 div_guard: pwe_div_guard,
+                trap: pwe_trap,
                 env: &mut ctx as *mut NativeCtx as *mut c_void,
             };
             let empty: [f64; 0] = [];
@@ -549,6 +564,7 @@ fn emit_module(functions: &[&Function]) -> String {
            double (*read_committed)(void*, unsigned long long, unsigned long long, unsigned, unsigned, unsigned, unsigned, unsigned);\n\
            void (*write)(void*, unsigned long long, unsigned long long, unsigned, unsigned, unsigned, unsigned, unsigned, double);\n\
            int (*div_guard)(void*, double);\n\
+           void (*trap)(void*);\n\
            void* env;\n\
          } PweCtx;\n\
          static int pwe_truthy(double v){ unsigned long long b; memcpy(&b, &v, 8); return b != 0ULL; }\n\n",
@@ -750,7 +766,12 @@ fn emit_function(f: &Function) -> String {
                 } else if let Some(op) = bin_op(other) {
                     format!("  r[{res}] = r[{}] {op} r[{}];\n", o[0], o[1])
                 } else if let Some(op) = cmp_op(other) {
-                    format!("  r[{res}] = (r[{}] {op} r[{}]) ? 1.0 : 0.0;\n", o[0], o[1])
+                    // Interpreter `compare` uses `partial_cmp`, which is `None`
+                    // (=> EirInvalid 18) when either operand is NaN; match it.
+                    format!(
+                        "  if (isnan(r[{}]) || isnan(r[{}])) {{ ((PweCtx*)ctx)->trap(((PweCtx*)ctx)->env); return NAN; }}\n  r[{res}] = (r[{}] {op} r[{}]) ? 1.0 : 0.0;\n",
+                        o[0], o[1], o[0], o[1]
+                    )
                 } else if let Some(fname) = unary_fn(other) {
                     format!("  r[{res}] = {fname}(r[{}]);\n", o[0])
                 } else {
@@ -853,6 +874,8 @@ mod tests {
             "sign(a) + sign(b)",
             "if(a, b, 0.0 - b)",
             "a % b",
+            "a < b",
+            "a == b",
         ];
         for body in bodies {
             let src = f2(body);
