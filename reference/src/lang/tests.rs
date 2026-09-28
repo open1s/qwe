@@ -3360,3 +3360,50 @@ fn module_export_privacy() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn module_directive_stripped_in_memory() {
+    // #65: `lang::compile` / `LangRuntime::compile` strip `module` lines too.
+    let src = "module util\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = x + 1.0 } }\n";
+    assert!(LangRuntime::compile(src).is_ok());
+}
+
+#[test]
+fn module_directive_inside_string_is_preserved() {
+    // #66: a `module …` line inside a multi-line string is content, not a directive.
+    let src = "world {\n  title = \"a\nmodule util\nb\"\n  gravity=(0,0,0)\n  entity e { state=(x=1.0) } }\nfuncs { f(x) { x + 1.0 } }\nsystems { update { on=e; dt=1.0 x = x + 1.0 } }\n";
+    let strip = crate::lang::compile::strip_directives(src);
+    assert!(
+        strip.declared_name.is_none(),
+        "string content is not a directive"
+    );
+    assert!(
+        strip.source.contains("module util"),
+        "string line preserved"
+    );
+    LangRuntime::compile(src).unwrap();
+}
+
+#[test]
+fn module_export_privacy_applies_to_funcs() {
+    // #67: qualified calls inside `funcs` bodies are privacy-checked too.
+    let dir = std::env::temp_dir().join(format!("pwe_pf_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(
+        dir.join("u.pwe"),
+        "module util\nworld { }\nfuncs { f(x) { x + 1.0 }  g(x) { x - 1.0 } }\nexport f\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("root.pwe"),
+        "import \"u\"\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nfuncs { h(x) { util.g(x) } }\nsystems { update { on=e; dt=1.0 x = h(x) } }\n",
+    )
+    .unwrap();
+    assert_eq!(
+        crate::lang::compile_file(&dir.join("root.pwe"))
+            .err()
+            .map(|e| e.detail),
+        Some(102)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

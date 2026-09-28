@@ -74,7 +74,26 @@ pub fn is_runnable(block: &Block) -> bool {
     block.info.starts_with("pwe")
         && !block.info.contains("ignore")
         && !block.info.contains("no-run")
-        && block.code.trim_start().starts_with("world")
+        && first_program_line(&block.code)
+            .map(|l| l.starts_with("world"))
+            .unwrap_or(false)
+}
+
+/// The first source line that is not a directive (`module`/`export`/`import`)
+/// or blank — so a block may open with directives before `world`.
+fn first_program_line(code: &str) -> Option<&str> {
+    code.lines().find_map(|l| {
+        let t = l.trim();
+        if t.is_empty()
+            || t.starts_with("module ")
+            || t.starts_with("export ")
+            || t.starts_with("import ")
+        {
+            None
+        } else {
+            Some(t)
+        }
+    })
 }
 
 /// A hard defect (compile error or unclosed fence).

@@ -1135,6 +1135,64 @@ pub(crate) fn parse_export_line(line: &str) -> Option<Vec<String>> {
     }
 }
 
+/// The result of removing directive lines from a module source.
+pub(crate) struct StripResult {
+    pub source: String,
+    pub declared_name: Option<String>,
+    pub exports: Option<Vec<String>>,
+    pub imports: Vec<(ImportDirective, String)>,
+}
+
+/// Removes `module` / `export` / `import` directive lines from `src` and
+/// collects them. **String-aware**: a directive-looking line inside a
+/// multi-line string literal is preserved verbatim (RFC-0045 / #66).
+pub(crate) fn strip_directives(src: &str) -> StripResult {
+    let mut source = String::new();
+    let mut declared_name = None;
+    let mut exports: Vec<String> = Vec::new();
+    let mut exports_declared = false;
+    let mut imports = Vec::new();
+    let mut in_string = false;
+    for line in src.lines() {
+        if in_string {
+            source.push_str(line);
+            source.push('\n');
+            if line.matches('"').count() % 2 == 1 {
+                in_string = false;
+            }
+            continue;
+        }
+        if let Some(n) = parse_module_line(line) {
+            declared_name = Some(n);
+            source.push('\n');
+            continue;
+        }
+        if let Some(ns) = parse_export_line(line) {
+            exports_declared = true;
+            exports.extend(ns);
+            source.push('\n');
+            continue;
+        }
+        if let Some((d, tail)) = parse_import_line(line) {
+            imports.push((d, tail.clone()));
+            source.push_str(&tail);
+            source.push('\n');
+            continue;
+        }
+        source.push_str(line);
+        source.push('\n');
+        if line.matches('"').count() % 2 == 1 {
+            in_string = true;
+        }
+    }
+    StripResult {
+        source,
+        declared_name,
+        exports: exports_declared.then_some(exports),
+        imports,
+    }
+}
+
 /// Parses a Python-style import directive at the start of a line, returning it
 /// and the remainder of the line (preserved so `world { import "x" }` keeps
 /// its brace).
@@ -1251,37 +1309,15 @@ pub(crate) fn collect_module(
         )
     })?;
     let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
-    let declared_name = raw.lines().find_map(parse_module_line);
-    let mut exported: Vec<String> = Vec::new();
-    let mut exports_declared = false;
-    let mut stripped = String::new();
-    let mut imports = Vec::new();
-    for line in raw.lines() {
-        if parse_module_line(line).is_some() {
-            // A `module <name>` directive is metadata, not source.
-            stripped.push('\n');
-            continue;
-        }
-        if let Some(names) = parse_export_line(line) {
-            exports_declared = true;
-            exported.extend(names);
-            stripped.push('\n');
-            continue;
-        }
-        match parse_import_line(line) {
-            Some((d, tail)) => {
-                let child = resolve_module_path(&dir, &d.path);
-                imports.push((d, child));
-                stripped.push_str(&tail);
-                stripped.push('\n');
-            }
-            None => {
-                stripped.push_str(line);
-                stripped.push('\n');
-            }
-        }
-    }
-    let parsed = parse(&stripped)?;
+    let strip = strip_directives(&raw);
+    let declared_name = strip.declared_name;
+    let exports = strip.exports;
+    let imports: Vec<(ImportDirective, std::path::PathBuf)> = strip
+        .imports
+        .iter()
+        .map(|(d, _)| (d.clone(), resolve_module_path(&dir, &d.path)))
+        .collect();
+    let parsed = parse(&strip.source)?;
     let children: Vec<(ImportDirective, std::path::PathBuf)> = imports.clone();
     let mut aliases = vec![ns.to_string()];
     if let Some(dn) = &declared_name {
@@ -1293,11 +1329,11 @@ pub(crate) fn collect_module(
         ns: ns.to_string(),
         aliases,
         path: path.to_path_buf(),
-        source: stripped,
+        source: strip.source,
         parsed,
         imports,
         declared_name,
-        exports: exports_declared.then_some(exported),
+        exports,
     });
     for (d, child) in children {
         let default_ns = d.alias.clone().unwrap_or_else(|| module_stem(&d.path));
@@ -1345,6 +1381,9 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
             imports: Vec::new(),
         });
     }
+    // RFC-0045: enforce duplicate declared module names here too (the
+    // no-filesystem rebuild path).
+    check_duplicate_module_names(&modules)?;
     // Inline shape references so every consumer (including the artifact `run`
     // path) sees concrete parts.
     let mut parsed = merge_modules(modules, src.aliases.clone())?;
@@ -1375,26 +1414,7 @@ fn load_program_sources_inner(
     let mut modules = Vec::new();
     let mut seen: std::collections::BTreeMap<std::path::PathBuf, usize> = Default::default();
     collect_module(path, "", &mut seen, &mut modules)?;
-    // RFC-0045: a duplicate declared module name is a hard error.
-    {
-        let mut names: std::collections::BTreeMap<String, String> = Default::default();
-        for m in &modules {
-            if let Some(n) = &m.declared_name {
-                if let Some(prev) = names.get(n) {
-                    return Err(error_at(
-                        Status::Invalid,
-                        101,
-                        0,
-                        format!(
-                            "duplicate module name `{n}` (in {prev} and {})",
-                            m.path.display()
-                        ),
-                    ));
-                }
-                names.insert(n.clone(), m.path.display().to_string());
-            }
-        }
-    }
+    check_duplicate_module_names(&modules)?;
     // RFC-0045: deterministic merge order (root first; the rest by namespace
     // then path), independent of filesystem discovery order.
     if modules.len() > 1 {
@@ -1403,24 +1423,12 @@ fn load_program_sources_inner(
         modules.insert(0, root);
     }
     if let Some(root) = root_override {
-        // Mirror `collect_module`'s handling: strip `import` lines before
-        // parsing (they are directives, not part of the `world` grammar).
-        let mut stripped = String::new();
-        for line in root.lines() {
-            match parse_import_line(line) {
-                Some((_d, tail)) => {
-                    stripped.push_str(&tail);
-                    stripped.push('\n');
-                }
-                None => {
-                    stripped.push_str(line);
-                    stripped.push('\n');
-                }
-            }
-        }
+        let strip = strip_directives(root);
         if let Some(m0) = modules.first_mut() {
-            m0.source = stripped.clone();
-            m0.parsed = parse(&stripped)?;
+            m0.declared_name = strip.declared_name;
+            m0.exports = strip.exports;
+            m0.source = strip.source.clone();
+            m0.parsed = parse(&strip.source)?;
         }
     }
     // Resolve `from … import …` alias requests against the child's namespace.
@@ -1494,6 +1502,28 @@ pub fn compile_file(path: &std::path::Path) -> Result<CompiledProgram> {
 /// systems are world content and merge flatly (duplicate names are an error);
 /// functions and parameters are namespaced (`module::name`), with `from`
 /// imports additionally bound bare.
+/// RFC-0045: a duplicate declared module name is a hard error (101).
+fn check_duplicate_module_names(modules: &[ModuleInfo]) -> Result<()> {
+    let mut names: std::collections::BTreeMap<String, String> = Default::default();
+    for m in modules {
+        if let Some(n) = &m.declared_name {
+            if let Some(prev) = names.get(n) {
+                return Err(error_at(
+                    Status::Invalid,
+                    101,
+                    0,
+                    format!(
+                        "duplicate module name `{n}` (in {prev} and {})",
+                        m.path.display()
+                    ),
+                ));
+            }
+            names.insert(n.clone(), m.path.display().to_string());
+        }
+    }
+    Ok(())
+}
+
 /// RFC-0045: rejects a cross-module reference to a name a module did not
 /// `export` (detail 102). Modules without an `export` declaration are fully
 /// public (backward compatible).
@@ -1550,6 +1580,32 @@ fn check_module_privacy(
             if let Some((ns, item)) = n.rsplit_once('.') {
                 if let Some(ex) = exports.get(ns) {
                     if !ex.contains(item) && ns != sys.namespace {
+                        return Err(error_at(
+                            Status::Invalid,
+                            102,
+                            0,
+                            format!("`{item}` is not exported by module `{ns}`"),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    // Function bodies (`funcs`) may also make qualified calls (#67).
+    for f in &parsed.funcs {
+        let mut names = Vec::new();
+        calls(&f.body, &mut names);
+        for st in &f.stmts {
+            if let crate::lang::UpdateStmt::Let(_, t, _) = st {
+                if let Ok(e) = parse_expr_str(t) {
+                    calls(&e, &mut names);
+                }
+            }
+        }
+        for n in names {
+            if let Some((ns, item)) = n.rsplit_once('.') {
+                if let Some(ex) = exports.get(ns) {
+                    if !ex.contains(item) && ns != f.namespace {
                         return Err(error_at(
                             Status::Invalid,
                             102,
@@ -2125,7 +2181,9 @@ right-hand side has `{rhs_name}`"
 
 /// Compiles PWE source end-to-end: parse → build systems → lower to EIR.
 pub fn compile(source: &str) -> Result<CompiledProgram> {
-    compile_program(parse(source)?)
+    // Strip directive lines (`module`/`export`/`import`) so the in-memory path
+    // (LSP, `LangRuntime::compile`) parses module-declaring sources too.
+    compile_program(parse(&strip_directives(source).source)?)
 }
 
 /// The language semantics this build implements (frozen at v0.3). A model may
