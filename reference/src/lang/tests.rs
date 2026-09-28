@@ -3248,3 +3248,24 @@ fn threaded_dispatch_matches_jump_table() {
         "threaded must match the jump table"
     );
 }
+
+#[test]
+fn formatting_preserves_compiled_artifact() {
+    // `pwe fmt` must be semantics-preserving: the compiled artifact of the
+    // original and the formatted source are byte-identical.
+    let messy = "world {\n   gravity=(0,0,0)\n     entity e { state=(x=0.0,y=0.0) }\n}\n\n\nsystems {\n update { on=e\n    dt=1.0\n x = x + 1.0   \n }\n}\n";
+    let encode = |src: &str| -> Vec<u8> {
+        crate::lang::compile_program(crate::lang::parse(src).unwrap())
+            .unwrap()
+            .eir
+            .encode()
+            .unwrap()
+    };
+    let original = encode(messy);
+    let formatted = crate::lang::format_source(messy);
+    assert_eq!(
+        original,
+        encode(&formatted),
+        "formatting changed the compiled artifact"
+    );
+}

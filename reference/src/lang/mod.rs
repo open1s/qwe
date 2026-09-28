@@ -76,6 +76,8 @@ pub use systems::*;
 mod runtime;
 pub use runtime::*;
 
+mod format;
+pub use format::format_source;
 mod migrate;
 pub use migrate::{migrate_v02_to_v03, Migration};
 

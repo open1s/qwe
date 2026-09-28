@@ -102,7 +102,8 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 ### Phase 4 — 普适性与生态
 - [~] 语义化模块系统；fmt/REPL/LSP；doctest
   - [x] **playground**：`pwe playground [--port P]` —— 本地浏览器编辑器 + 实时 3D 视图（`present.rs::serve_playground`；驱动线程独占 runtime，经通道接收源码，复用 `present` 的 `/view` viewer 与 `/state`）。`POST /api/source` 编译并返回诊断，成功则实时步进渲染。含 `playground_page_has_editor_and_viewer` 测试；端到端手工验证（编译样例 + `/state` 帧 + 错误诊断）。
-  - [ ] `pwe fmt` / `pwe repl` / LSP / doctest
+  - [x] **`pwe fmt`**：token-preserving 重格式化（4 空格缩进、去尾空白、折叠空行；`--check`/`-w`）。保证**语义不变**：仅改前导空白/行尾/空行，EIR 逐字节一致（测试 `format_is_idempotent`/`format_preserves_tokens`/`formatting_preserves_compiled_artifact`）。
+  - [ ] `pwe repl` / LSP / doctest
   - [ ] 语义化模块系统
 - [ ] 分布式/插件沙箱、fuzz/Miri
 - [ ] EIR 升级为显式 SSA CFG；RFC↔conformance ≥80%

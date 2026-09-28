@@ -36,6 +36,7 @@ fn main() {
         Some("present") => cmd_run(&args[1..], Some(8000)),
         Some("migrate") => cmd_migrate(&args[1..]),
         Some("playground") => cmd_playground(&args[1..]),
+        Some("fmt") => cmd_fmt(&args[1..]),
         Some("-h") | Some("--help") | None => {
             usage();
             0
@@ -365,6 +366,65 @@ fn cmd_compile(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// fmt
+// ---------------------------------------------------------------------------
+
+/// Formats PWE source (token-preserving). Default: print to stdout; `--write`
+/// rewrites in place; `--check` exits non-zero when a file is not formatted.
+fn cmd_fmt(args: &[String]) -> i32 {
+    let mut input: Option<String> = None;
+    let mut check = false;
+    let mut write = false;
+    for a in args {
+        match a.as_str() {
+            "--check" => check = true,
+            "-w" | "--write" => write = true,
+            other if other.starts_with('-') => {
+                eprintln!("pwe fmt: unknown option '{other}'");
+                return 2;
+            }
+            other => {
+                if input.is_some() {
+                    eprintln!("pwe fmt: unexpected extra argument '{other}'");
+                    return 2;
+                }
+                input = Some(other.to_string());
+            }
+        }
+    }
+    let Some(input) = input else {
+        eprintln!("pwe fmt: missing <src.pwe>");
+        return 2;
+    };
+    let src = match std::fs::read_to_string(&input) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("pwe: cannot read {input}: {e}");
+            return 1;
+        }
+    };
+    let formatted = pwe_reference::lang::format_source(&src);
+    if check {
+        if formatted == src {
+            return 0;
+        }
+        eprintln!("pwe fmt: not formatted: {input}");
+        return 1;
+    }
+    if write {
+        if formatted != src {
+            if let Err(e) = std::fs::write(&input, &formatted) {
+                eprintln!("pwe: cannot write {input}: {e}");
+                return 1;
+            }
+        }
+        return 0;
+    }
+    print!("{formatted}");
+    0
 }
 
 // ---------------------------------------------------------------------------
