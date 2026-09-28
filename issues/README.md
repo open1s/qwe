@@ -271,4 +271,24 @@ Fix-verification pass 6 (`c7e7e3bd`, pass 13 — closure of 0039):
    byte-equal, `Select`/`sign` do not over-trap (no regressions).
    Gates: fmt, clippy, 318 tests (naga live), conformance 18/18.
 
+Review/test pass 14 (`b57ab005` + `93f69931` + `5f0429b9`, closure of 0040):
+
+1. 0040 verified fixed, closed: the trap-after-write repro now behaves
+   identically with native JIT ON and OFF (step 101 `Err d18`,
+   `w=0 x=7`, native_exec=37, cross axis too) — was a swallowed trap
+   with double-applied writes. `native_for`'s all-entries filter also
+   deopts before mutation on a mixed-eligibility module (probe:
+   `native_exec=0`, ON≡OFF); side finding: nondeterministic modules
+   already failed `validate(true)` up front, so that path was
+   defense-in-depth — the corruption was the `?`-propagation gap.
+2. `b57ab005` gpu-verify crate independently executed on this machine:
+   Apple M2 Max Metal adapter asserted, benign 64-lane kernel matches
+   the CPU oracle, div-by-zero sets the device trap flag — first real
+   device execution of emitted shaders; sticky-trap entry read keeps
+   the trap binding alive under wgpu auto-layout. `5f0429b9` gitignore
+   chore correct (`gpu-verify/target` untracked, sources tracked).
+3. Gates on the tree: fmt, clippy, 319 tests (incl. the new #40
+   regression test), conformance 18/18; full probe battery green
+   (53 WGSL/edge PASS, t39 22/22, nrem/wcmp parity, jit-all 5 kernels).
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
