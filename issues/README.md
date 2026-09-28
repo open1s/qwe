@@ -88,6 +88,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0059](https://github.com/open1s/qwe/issues/59) | Low | pwe lsp diagnostic ranges are 0:0 for warnings (85/100/94) and parse errors: Ok-path hardcodes `diag_json(..., 0, ...)` ignoring `d.byte_offset`, and upstream push_diag sites record 0 (error_at errors like 52 map correctly - positive control) | cli/src/lsp.rs (diagnostics), reference/src/lang/diagnostics.rs |
 | [0060](https://github.com/open1s/qwe/issues/60) | Low | pwe lsp/json non-BMP handling: `\uD800-\uDFFF` surrogate escapes decode independently to U+FFFD (document text corrupted for escaping clients); `pos_at` counts code points, not UTF-16 units (astral columns off; BMP/CJK unaffected) | cli/src/json.rs (string), cli/src/lsp.rs (pos_at) |
 | [0061](https://github.com/open1s/qwe/issues/61) | Low | fuzz ALPHABET has no digits/`_`/`@`/`~`/`^` - numeric-literal, slot-index and unit-annotation paths never fuzzed (0% of samples contain a digit); single hard-coded seed, 160-byte cap | reference/tests/fuzz.rs (parser_and_compiler_never_panic_on_random_source) |
+| [0062](https://github.com/open1s/qwe/issues/62) | Medium | import documents compile from DISK, not the client buffer: any text containing substring `import` routes didOpen/didChange through `load_program_sources(path)` -> buffer errors vanish, phantom disk errors appear | cli/src/lsp.rs (diagnostics, `text.contains("import")`) |
+| [0063](https://github.com/open1s/qwe/issues/63) | Low | warning-range heuristic `backtick_name` + `text.find(name)` matches the first substring anywhere: unknown slot `x` ranges to `x` inside `xyzzy` in a comment on another line | cli/src/lsp.rs (diag_json, backtick_name) |
 
 ## Suggested order
 
@@ -632,5 +634,37 @@ Review pass 18 (`61e38bd6` fuzz + Miri, filed 0061):
    numeric literals, `sN` slot indices and unit annotations are structurally
    unreachable for the fuzzer; single fixed seed + 160-byte cap. Coverage gap
    only - the heavier digit-inclusive hunt found no product bug.
+
+Review pass 19 (three commits at once — `26ebc5ee` serde_json refactor,
+`e8ce691e` fix(#57), `004aadd1` fix(#58-#61); closed 0057-0061, filed 0062-0063):
+
+1. Snapshot `004aadd1` (includes both earlier commits) gates green: fmt,
+   clippy `-D warnings`, 387 tests (README claim verified), conformance 18/18;
+   release `pwe` built for black-box probing.
+2. 0057 (e8ce691e) verified live: warning-only block prints
+   `file:line: warning: [85] ...` (rc 0; rc 1 with `--strict`); unclosed fence
+   = failure + rc 1; 4-backtick pwe fence now checked (inner `nope` -> error 59,
+   rc 1); shipped default sweep 13 blocks rc 0 clean; `--strict` not treated as
+   a filename.
+3. 0058 verified for `file://`: import doc at a resolvable path publishes
+   empty diagnostics (was bogus 60). BUT found the fix compiles the disk file
+   instead of the sent buffer (`contains("import")` gate) — buffer edits
+   ignored, phantom disk errors on clean buffers; non-import control still
+   buffer-based. Filed 0062 (Medium).
+4. 0059 verified: ghost warning range now line 1 character 40 (was 0:0).
+   Residual: `text.find(name)` matches any earlier substring — `x` located
+   inside `xyzzy` in a comment on line 0. Filed 0063 (Low).
+5. 0060 verified across both commits: `pos_at` counts UTF-16 units
+   (`position_helpers`); hand-rolled JSON parser replaced by serde_json
+   (26ebc5ee) — readback via formatting edit shows the real 😀 for a literal
+   `😀` escape, no U+FFFD.
+6. 0061 verified: alphabet gains digits/units/`sN`, 3 seeds, 400-byte cap;
+   fuzz tests pass.
+7. 26ebc5ee behavior parity re-probed end-to-end on the new build: initialize
+   capabilities, didOpen/didChange diagnostics, formatting (edit + no-op),
+   garbage JSON tolerated, unknown method -> null, shutdown -> null, exit 0 —
+   all unchanged.
+8. Issues closed this pass: 0057, 0058 (residuals noted), 0059 (residual
+   filed), 0060, 0061. Open: 0045, 0053, 0062, 0063.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
