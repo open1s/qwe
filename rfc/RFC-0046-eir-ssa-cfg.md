@@ -1,7 +1,5 @@
 # RFC-0046: EIR as an explicit SSA CFG
-**Status:** Proposed. This RFC makes EIR's control-flow graph **first-class in
-the representation** (basic blocks and edges) instead of a flat instruction list
-from which blocks are derived at verification time.
+**Status:** Accepted (implemented, representation + wire form). EIR's CFG is now first-class: the *view* is explicit (`EirModule::blocks` returns each function's basic blocks with terminators; `verify_cfg` runs the CFG dominance gate, and `verify_linear_dominance` now uses real blocks instead of one block per function), and the **RFC-0021 FUNCTIONS section encodes explicit basic blocks** for branched functions (`block_count > 1`; a straight-line function keeps the legacy single-block layout, so older artifacts are byte-identical and still decode). The decoder concatenates blocks deterministically, so interpreter == JIT == AOT and re-encoding is byte-identical. Remaining (future, needs no format change): SSA block **parameters** (the field is reserved) and cross-block optimizations (DCE/GVN).
 
 ## Motivation
 

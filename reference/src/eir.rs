@@ -47,6 +47,8 @@ pub const TARGET_NPU: u16 = 3;
 const KIND_TYPES: u16 = 1;
 const KIND_FUNCTIONS: u16 = 4;
 const KIND_MAX: u16 = 7;
+/// RFC-0046: upper bound on explicit blocks per function (decode guard).
+const MAX_BLOCKS: usize = 1 << 20;
 const HEADER_LEN: usize = 120;
 const DIR_ENTRY_LEN: usize = 32;
 const MODULE_HASH_OFFSET: usize = 16;
@@ -717,18 +719,30 @@ impl EirModule {
     /// semantic reference and is untouched.
     pub fn verify_linear_dominance(&self) -> Result<()> {
         for function in &self.functions {
-            let terminator = match function.instructions.last().map(|i| i.opcode) {
-                Some(Opcode::Trap) => crate::dominance::Terminator::Trap,
-                _ => crate::dominance::Terminator::Return,
-            };
-            let block = crate::dominance::Block::new(0, 0, function.instructions.len(), terminator);
+            let blocks = blocks_from_instructions(&function.instructions);
             crate::dominance::verify_dominance_with_args(
                 &function.instructions,
-                &[block],
+                &blocks,
                 function.argument_count,
             )?;
         }
         Ok(())
+    }
+
+    /// RFC-0046: the **explicit basic blocks** of function `index` — a
+    /// first-class view of the CFG (block ranges + terminators), derived
+    /// deterministically from the instruction stream.
+    pub fn blocks(&self, index: usize) -> Option<Vec<crate::dominance::Block>> {
+        self.functions
+            .get(index)
+            .map(|f| blocks_from_instructions(&f.instructions))
+    }
+
+    /// RFC-0046: runs the explicit-CFG dominance gate for every function (the
+    /// same check the AOT/JIT link paths enforce). Thin alias of
+    /// [`EirModule::verify_linear_dominance`], which now uses real blocks.
+    pub fn verify_cfg(&self) -> Result<()> {
+        self.verify_linear_dominance()
     }
 
     fn validate_function(
@@ -2069,12 +2083,30 @@ impl EirModule {
             out.u64(f.id)?;
             out.u32(0)?; // signature_type
             out.u32(f.effect_mask)?;
-            out.u32(1)?; // block_count
-            out.u32(0)?; // block_id
-            out.u32(f.argument_count)?;
-            out.u32(f.instructions.len() as u32)?;
-            for ins in &f.instructions {
-                encode_instruction(&mut out, ins)?;
+            // RFC-0046: emit explicit basic blocks. A straight-line function
+            // keeps the original single-block layout (byte-identical to legacy
+            // artifacts); a branched function emits >1 block (block_count > 1),
+            // which old readers reject and new readers decode by concatenation.
+            let blocks = blocks_from_instructions(&f.instructions);
+            if blocks.len() <= 1 {
+                out.u32(1)?; // block_count
+                out.u32(0)?; // block_id
+                out.u32(f.argument_count)?;
+                out.u32(f.instructions.len() as u32)?;
+                for ins in &f.instructions {
+                    encode_instruction(&mut out, ins)?;
+                }
+            } else {
+                out.u32(blocks.len() as u32)?;
+                out.u32(f.argument_count)?;
+                for b in &blocks {
+                    out.u32(b.id)?; // block_id
+                    out.u32(0)?; // block params (reserved)
+                    out.u32((b.end - b.start) as u32)?;
+                    for ins in &f.instructions[b.start..b.end] {
+                        encode_instruction(&mut out, ins)?;
+                    }
+                }
             }
         }
         Ok(out.finish())
@@ -2378,15 +2410,33 @@ fn decode_functions_section(bytes: &[u8]) -> Result<Vec<Function>> {
         let _signature_type = input.u32()?;
         let effect_mask = input.u32()?;
         let block_count = input.u32()?;
-        if block_count != 1 {
-            return Err(error(Status::EirInvalid, 30, input.offset()));
-        }
-        let _block_id = input.u32()?;
-        let argument_count = input.u32()?;
-        let instruction_count = input.u32()? as usize;
-        let mut instructions = Vec::with_capacity(instruction_count);
-        for _ in 0..instruction_count {
-            instructions.push(decode_instruction(&mut input)?);
+        let mut instructions: Vec<Instruction>;
+        let argument_count: u32;
+        if block_count == 1 {
+            // Legacy / straight-line single-block layout.
+            let _block_id = input.u32()?;
+            argument_count = input.u32()?;
+            let instruction_count = input.u32()? as usize;
+            instructions = Vec::with_capacity(instruction_count);
+            for _ in 0..instruction_count {
+                instructions.push(decode_instruction(&mut input)?);
+            }
+        } else {
+            // RFC-0046 explicit blocks: concatenating the blocks reproduces the
+            // flat instruction stream deterministically.
+            if block_count == 0 || block_count as usize > MAX_BLOCKS {
+                return Err(error(Status::EirInvalid, 30, input.offset()));
+            }
+            argument_count = input.u32()?;
+            instructions = Vec::new();
+            for _ in 0..block_count {
+                let _block_id = input.u32()?;
+                let _params = input.u32()?;
+                let ic = input.u32()? as usize;
+                for _ in 0..ic {
+                    instructions.push(decode_instruction(&mut input)?);
+                }
+            }
         }
         functions.push(Function {
             id,
@@ -4135,4 +4185,48 @@ mod tests {
         assert_eq!(run(Opcode::Tanh, 0.0), 0.0);
         assert_eq!(run(Opcode::Sinh, 0.0), 0.0);
     }
+}
+
+#[test]
+fn eir_cfg_blocks_round_trip() {
+    // RFC-0046: a branched function encodes as explicit basic blocks
+    // (block_count > 1) and round-trips byte-identically.
+    let ins = |opcode, result_id, operands: Vec<u32>, constant| Instruction {
+        opcode,
+        result_id,
+        result_type: None,
+        operands,
+        constant,
+        target: None,
+    };
+    let module = EirModule {
+        module_hash: Hash256([0; 32]),
+        schema_set_hash: Hash256([0; 32]),
+        domain_ir_hash: Hash256([0; 32]),
+        target_kind: 0,
+        functions: vec![Function {
+            id: 1,
+            effect_mask: 0,
+            argument_count: 0,
+            instructions: vec![
+                ins(Opcode::Const, 1, vec![], Some(Immediate::F64(1.0))),
+                ins(Opcode::CondBr, 0, vec![1, 3, 5], None),
+                ins(Opcode::Return, 0, vec![], None),
+                ins(Opcode::Const, 2, vec![], Some(Immediate::F64(2.0))),
+                ins(Opcode::Return, 0, vec![2], None),
+                ins(Opcode::Const, 3, vec![], Some(Immediate::F64(3.0))),
+                ins(Opcode::Return, 0, vec![3], None),
+            ],
+        }],
+    };
+    module.validate(true).unwrap();
+    assert!(module.verify_cfg().is_ok());
+    let blocks = module.blocks(0).unwrap();
+    assert!(blocks.len() >= 3, "a branch should create multiple blocks");
+    let encoded = module.encode().unwrap();
+    let decoded = EirModule::decode(&encoded).unwrap();
+    decoded.validate(true).unwrap();
+    assert_eq!(decoded.functions[0].instructions.len(), 7);
+    // Deterministic: re-encoding the decoded module is byte-identical.
+    assert_eq!(decoded.encode().unwrap(), encoded);
 }

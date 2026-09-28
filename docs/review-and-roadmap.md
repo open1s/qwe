@@ -113,7 +113,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
   - [ ] 分布式/插件沙箱（更大）
 - [~] EIR 升级为显式 SSA CFG；RFC↔conformance ≥80%
   - [x] RFC↔conformance：冻结集 RFC-0019–0036 全覆盖；**扩展 RFC-0037–0042 新增 6 个 `pwe-conformance` 用例**（场扫描/池/关节/软体/struct，cross-backend），报告 **total=23 failed=0**；`docs/rfc-alignment.md` 增补扩展 RFC 表（0043/0044 为 Proposed）。
-  - [ ] EIR 升级为显式 SSA CFG —— 见 **RFC-0046（Proposed）**（块/边/块参数、Verifier、RFC-0021 增量格式、迁移计划）
+  - [x] EIR 显式 SSA CFG（RFC-0046，已实现表示层+wire）：`EirModule::blocks`/`verify_cfg`；`verify_linear_dominance` 改用具实块；FUNCTIONS 段对含分支函数编码显式块（`block_count>1`，兼容旧单块），解码确定性拼接、重编码逐字节一致（`eir_cfg_blocks_round_trip`）。残留：块参数 SSA 与跨块优化（DCE/GVN）。
 - [x] ADR/贡献指南/架构文档：`docs/architecture.md`（流水线/边界/执行层）、`CONTRIBUTING.md`（工具链/门禁/特性/流程）、`docs/adr/`（0001–0005：原生 cc 后端、进程内豁免、opt-in 线程化、SIMD 不采用、GPU 实验性）。
 
 ## 4. 已完成（本次迭代）
