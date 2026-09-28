@@ -103,7 +103,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - [ ] 语义化模块系统；fmt/REPL/LSP；doctest
 - [ ] 分布式/插件沙箱、fuzz/Miri
 - [ ] EIR 升级为显式 SSA CFG；RFC↔conformance ≥80%
-- [ ] ADR/贡献指南/架构文档
+- [x] ADR/贡献指南/架构文档：`docs/architecture.md`（流水线/边界/执行层）、`CONTRIBUTING.md`（工具链/门禁/特性/流程）、`docs/adr/`（0001–0005：原生 cc 后端、进程内豁免、opt-in 线程化、SIMD 不采用、GPU 实验性）。
 
 ## 4. 已完成（本次迭代）
 
