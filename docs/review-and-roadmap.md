@@ -96,6 +96,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - [~] **GPU f32 卸载（Metal on Mac，`--features gpu`，实验性）**：`gpu.rs` 用 Metal 计算着色器（MSL）在 GPU 上跑**场 stencil（diffuse）**；`pwe run --gpu` 启用（`SceneRuntime::field_diffuse` 走 GPU，其余回落 CPU）；`metal` 按 `target_os="macos"` 门控，非 macOS/CI 不构建。**f32 近似**（CPU f64 为基准）。**实测慢于 CPU**（#41：256² 上 CPU 129µs vs GPU 244µs；各尺寸 1.34×–2.55× 慢）——原因是每步 `f64↔f32` 主机转换 + 上传/回读 + 同步，而非算法。**属于正确性已验证的卸载路径，非加速器**；要真正提速需设备常驻场状态（fix #1，未实现）。基准记录见 `benches/throughput.rs::bench_gpu`。
 - [x] WGSL **执行验证（Metal on Mac）**：`gpu-verify/`（独立 crate，自带 `[workspace]`，CI 不受影响）用 `wgpu` 的 **Metal** 后端在真实 GPU（Apple M2 Max）上执行产出的 WGSL，与 CPU oracle/解释器在 f32 容差内一致（64 lane），并验证除零 **trap 标志**置位。运行：`cargo run --release --manifest-path gpu-verify/Cargo.toml`。
 - [x] 真 JIT（hotness→原生→deopt）：`CpuJit` 在模组达 `NATIVE_PROMOTE`(=64) 次调用后把单元提升为**原生代码**执行（`native_for` 懒编译并缓存失败以 deopt 回解释器）；提升发生在 JIT 生命周期门（Validate/CapabilityCheck/Publish，`ready()`）**之后**，故合规。`LangRuntime::enable_native_jit` / `pwe run --native-jit` 启用；差分测试 `native_jit_promotes_and_matches_interpreter` 断言提升后确有原生执行（`native_executions>0`）且 `step_cross` 逐步字节一致。
+- [x] 线程化分派（threaded dispatch）：**评测后不采用**——在代表性 opcode 混合上，`match`/跳表分派 1.87µs 优于函数指针「直接线程化」2.53µs 与「表+再匹配」2.40µs（Rust `match` 生成良预测跳表，间接调用每次额外一次 BTB 开销）。故保留现有跳表分派。
 - [x] SIMD：**评测后不采用**——场 stencil 内点循环为无分支单位步长，LLVM 已自动向量化；显式 2-lane（SSE2/NEON）实测**更慢**（256 宽行 0.128µs vs 标量 0.096µs），故保留标量（由 LLVM 向量化）并记录测量。
 
 ### Phase 4 — 普适性与生态
