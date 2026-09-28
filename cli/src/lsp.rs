@@ -40,7 +40,7 @@ pub fn run<R: BufRead, W: Write>(mut input: R, out: &mut W) -> i32 {
             "exit" => break,
             "textDocument/didOpen" | "textDocument/didChange" => {
                 if let Some((uri, text)) = doc_change(&method, params) {
-                    let diags = diagnostics(&text);
+                    let diags = diagnostics(&uri, &text);
                     docs.insert(uri.clone(), text);
                     publish(out, &uri, diags);
                 }
@@ -98,10 +98,24 @@ fn doc_change(method: &str, params: Option<&Value>) -> Option<(String, String)> 
 }
 
 /// Diagnostics for a document (errors as severity 1, warnings as 2).
-fn diagnostics(text: &str) -> Vec<Value> {
+///
+/// A document that uses `import` is compiled **from its file path** so modules
+/// resolve (`load_program_sources`), like the CLI; otherwise it is compiled
+/// in-memory.
+fn diagnostics(uri: &str, text: &str) -> Vec<Value> {
     pwe_reference::lang::clear_diagnostics();
     let mut diags = Vec::new();
-    match pwe_reference::lang::compile(text) {
+    let compiled: Result<(), pwe_api::Error> = if text.contains("import") {
+        match uri_file_path(uri) {
+            Some(path) => pwe_reference::lang::load_program_sources(std::path::Path::new(&path))
+                .and_then(|(parsed, _sources)| pwe_reference::lang::compile_program(parsed))
+                .map(|_| ()),
+            None => pwe_reference::lang::compile(text).map(|_| ()),
+        }
+    } else {
+        pwe_reference::lang::compile(text).map(|_| ())
+    };
+    match compiled {
         Ok(_) => {
             for d in pwe_reference::lang::take_diagnostics() {
                 diags.push(diag_json(d.detail, &d.message, 0, text, 2));
@@ -128,6 +142,15 @@ fn diagnostics(text: &str) -> Vec<Value> {
 }
 
 fn diag_json(detail: u32, message: &str, offset: usize, text: &str, severity: u32) -> Value {
+    // Warnings record offset 0; locate the offending name from the message
+    // (`` `name` ``) so the range points at it rather than at 0:0.
+    let offset = if offset == 0 {
+        backtick_name(message)
+            .and_then(|name| text.find(&name))
+            .unwrap_or(0)
+    } else {
+        offset
+    };
     let (line, character) = pos_at(text, offset);
     json!({
         "range": {
@@ -162,10 +185,32 @@ fn pos_at(text: &str, offset: usize) -> (usize, usize) {
             line += 1;
             col = 0;
         } else {
-            col += 1;
+            // LSP `character` is a UTF-16 code unit offset.
+            col += c.len_utf16();
         }
     }
     (line, col)
+}
+
+/// The first `` `name` `` in a diagnostic message, if any.
+fn backtick_name(message: &str) -> Option<String> {
+    let start = message.find('`')? + 1;
+    let end = message[start..].find('`')? + start;
+    (end > start).then(|| message[start..end].to_string())
+}
+
+/// `file:///path` -> `/path` (basic; `%`-decoding omitted).
+fn uri_file_path(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("file://")?;
+    if rest.is_empty() {
+        return None;
+    }
+    // `file://host/path` or `file:///path`: drop an optional authority.
+    if let Some(after) = rest.strip_prefix('/') {
+        Some(format!("/{after}"))
+    } else {
+        rest.split_once('/').map(|(_, p)| format!("/{p}"))
+    }
 }
 
 fn respond<W: Write>(out: &mut W, id: Option<Value>, result: Value) {
@@ -242,6 +287,34 @@ mod tests {
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("documentFormattingProvider"));
         assert!(s.contains("\"id\":2"));
+    }
+
+    #[test]
+    fn position_helpers() {
+        // UTF-16 code units: an emoji is a surrogate pair (2), then "x".
+        assert_eq!(pos_at("a\u{1f600}x", "a\u{1f600}".len()), (0, 3));
+        assert_eq!(
+            backtick_name("unknown identifier `ghost` — reads 0.0").as_deref(),
+            Some("ghost")
+        );
+        assert_eq!(
+            uri_file_path("file:///tmp/t.pwe").as_deref(),
+            Some("/tmp/t.pwe")
+        );
+        assert_eq!(uri_file_path("untitled:Untitled-1"), None);
+    }
+
+    #[test]
+    fn warning_range_points_at_the_name() {
+        let d = diag_json(
+            85,
+            "unknown identifier `ghost` — reads 0.0",
+            0,
+            "x = ghost + 1",
+            2,
+        );
+        // `ghost` starts at character 4 on line 0.
+        assert_eq!(d["range"]["start"]["character"], 4);
     }
 
     #[test]

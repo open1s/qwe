@@ -58,19 +58,27 @@ fn decoders_never_panic_on_random_bytes() {
 #[test]
 fn parser_and_compiler_never_panic_on_random_source() {
     const ALPHABET: &[u8] =
-        b"world{}()[]=,.+-*/%<>!&|#\"'\n\t systems entity state update on dt inte deriv funcs let if else return for in random at periodic vec3 struct chan field camera color;:";
-    let mut rng = Rng::new(0xdead_beef_cafe_f00d);
-    for _ in 0..iters(3000) {
-        let n = rng.below(160);
-        let s: String = (0..n)
-            .map(|_| ALPHABET[rng.below(ALPHABET.len())] as char)
-            .collect();
-        // Parsing must return a Result, never panic.
-        let _ = lang::parse(&s);
-        let _ = lang::LangRuntime::compile(&s);
-        // The formatter must never panic and must be idempotent.
-        let once = lang::format_source(&s);
-        let twice = lang::format_source(&once);
-        assert_eq!(once, twice, "format not idempotent on {s:?}");
+        b"world{}()[]=,.+-*/%<>!&|#\"'\n\t 0123456789 systems entity state update on dt inte deriv funcs let if else return for in random at periodic vec3 struct chan field camera color [m] [m/s] s0 s7 ghost;:,..";
+    // Several seeds and varied lengths exercise numeric literals, unit
+    // annotations, `sN` slots, and long inputs.
+    for seed in [
+        0xdead_beef_cafe_f00d,
+        0x1234_5678_9abc_def0,
+        0x0f0f_0f0f_0f0f_0f0f,
+    ] {
+        let mut rng = Rng::new(seed);
+        for _ in 0..iters(1500) {
+            let n = rng.below(400);
+            let s: String = (0..n)
+                .map(|_| ALPHABET[rng.below(ALPHABET.len())] as char)
+                .collect();
+            // Parsing must return a Result, never panic.
+            let _ = lang::parse(&s);
+            let _ = lang::LangRuntime::compile(&s);
+            // The formatter must never panic and must be idempotent.
+            let once = lang::format_source(&s);
+            let twice = lang::format_source(&once);
+            assert_eq!(once, twice, "format not idempotent on {s:?}");
+        }
     }
 }
