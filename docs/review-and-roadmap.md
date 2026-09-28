@@ -92,7 +92,10 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - [x] 契约：#35 —— `NativeProgram` 先 `validate`+`verify_linear_dominance`（从不跳过 Validate）、按内容哈希标识产物（RFC-0035 风格，同时修 #31）、0700 唯一临时目录并在 Drop 清理；**RFC-0027 增补条款**定义了「进程内原生内核」窄豁免（CapabilityCheck/Publish 跳过、其余照旧）。**该后端尚未接入 `pwe run`/`present` 等生产入口**——接入前必须实现完整生命周期（manifest/CapabilityCheck/Publish）。
 - [x] 世界访问型原生内核：`ReadView`/`ReadCommitted`/`WriteView` 经 `#[repr(C)]` 函数指针表（`PweCtx`）回调进 `NativeCtx{rt,writes}`；`execute_entries` 复刻解释器的系统屏障/顺序语义。差分测试 `native_world_kernel_matches_interpreter_writes` 通过（nbody 写入逐位一致）。基准：nbody-64 步进 1323µs vs 解释器 2355µs（~1.8×）。
 - [x] GPU/NPU 计算后端（WGSL，`wgsl.rs` + `WGSL_TARGET`）：把数据并行的 map 核（无世界访问/无调用/无分支的直线函数）下降为 WGSL 计算着色器（`@compute` / `@workgroup_size` / storage buffers）。**设备语义为 f32**（WebGPU 无 f64），故为**近似**设备后端、非逐位等价。验证：依赖无关的结构校验器 + f32 CPU oracle 与解释器在 f32 容差内一致（`wgsl::tests`）。
-- [ ] WGSL 执行验证：本机浏览器无 WebGPU 宿主（`navigator.gpu` 缺失），无法执行着色器；需 WebGPU 宿主或以 `naga`（dev-only，受 MSRV 约束）做离线编译校验后再接入运行。
+- [x] WGSL **离线校验**：`naga`（dev-dependency）对每个产出的着色器做 parse+validate；`sign`/`round`/`hypot`/`Rem`/`Select` 以显式 helper 复刻 CPU 语义（#37/#38），oracle 与之镜像，边界矩阵覆盖 ±0/±inf/NaN/subnormal/半值/大值。
+- [ ] WGSL **执行验证**：本机浏览器无 WebGPU 宿主（`navigator.gpu` 缺失），无法在真实设备执行着色器并对比；需 WebGPU 宿主。
+- [ ] 真 JIT（hotness→原生特化→deopt）：当前 `jit.rs` 仍是「校验过的缓存」（执行解释器），原生后端仅为按模块 AOT，尚未接入 hotness 触发的原生特化。
+- [ ] SIMD：解释器/场扫描的显式向量化尚未实现。
 
 ### Phase 4 — 普适性与生态
 - [ ] 语义化模块系统；fmt/REPL/LSP；doctest
