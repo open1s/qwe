@@ -3145,3 +3145,48 @@ fn native_jit_promotes_and_matches_interpreter() {
         );
     }
 }
+
+#[test]
+fn native_jit_trap_propagates_without_re_execution() {
+    // #40: a native step that traps after a write must propagate the trap, not
+    // fall through to the interpreter on the partially-mutated runtime.
+    let src = "world { gravity=(0,0,0) entity e { state=(v=7.0,w=100.0,x=0.0) } } \
+               systems { update { on=e; dt=1.0 w = w - 1.0  x = v / w } }";
+    let run = |native: bool| -> (Option<u32>, [f64; 3], u64) {
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.enable_native_jit(native);
+        let mut err = None;
+        for _ in 0..150 {
+            if let Err(e) = rt.step_jit() {
+                err = Some(e.detail);
+                break;
+            }
+        }
+        let st = rt
+            .scene
+            .get(pwe_api::EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap();
+        (
+            err,
+            [st.values[0], st.values[1], st.values[2]],
+            rt.native_executions(),
+        )
+    };
+    let (off_err, off_state, _) = run(false);
+    let (on_err, on_state, nat) = run(true);
+    assert_eq!(off_err, Some(18), "interpreter traps on div-by-zero");
+    assert_eq!(
+        on_err,
+        Some(18),
+        "native path must propagate the trap (#40)"
+    );
+    assert_eq!(
+        off_state.map(f64::to_bits),
+        on_state.map(f64::to_bits),
+        "state after the trap must match the interpreter (no double-apply)"
+    );
+    let _ = nat;
+}

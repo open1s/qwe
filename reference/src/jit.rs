@@ -136,7 +136,19 @@ impl CpuJit {
         if let Some(entry) = cache.get(key) {
             return entry.clone();
         }
-        let built = NativeProgram::compile(module).ok().map(Arc::new);
+        // Only use the native program if EVERY entry function was compiled;
+        // otherwise deopt (the interpreter runs) rather than risk a runtime
+        // "function not compiled" error mid-step.
+        let built = NativeProgram::compile(module)
+            .ok()
+            .filter(|np| {
+                module
+                    .functions
+                    .iter()
+                    .filter(|f| f.argument_count == 0)
+                    .all(|f| np.has(f.id))
+            })
+            .map(Arc::new);
         cache.insert(*key, built.clone());
         built
     }
@@ -257,10 +269,9 @@ impl CpuJit {
         // module has no natively-lowerable entry point).
         if self.native_jit && hot {
             if let Some(native) = self.native_for(key, &code.eir) {
-                if let Ok(writes) = native.execute_entries(&code.eir, rt) {
-                    self.native_executions.fetch_add(1, Ordering::Relaxed);
-                    return Ok(writes);
-                }
+                let writes = native.execute_entries(&code.eir, rt)?;
+                self.native_executions.fetch_add(1, Ordering::Relaxed);
+                return Ok(writes);
             }
         }
         code.eir.interpret_with_env(rt, env, world, version)
@@ -292,10 +303,14 @@ impl CpuJit {
         // module has no natively-lowerable entry point).
         if self.native_jit && hot {
             if let Some(native) = self.native_for(key, &code.eir) {
-                if let Ok(writes) = native.execute_entries(&code.eir, rt) {
-                    self.native_executions.fetch_add(1, Ordering::Relaxed);
-                    return Ok(writes);
-                }
+                // A native *execution* error (trap/stale handle) is propagated:
+                // the runtime is already partially mutated, so re-running the
+                // interpreter here would double-apply writes and could swallow
+                // the trap. Deopt only happens when native is unavailable
+                // (`native_for` returned `None`), before any mutation.
+                let writes = native.execute_entries(&code.eir, rt)?;
+                self.native_executions.fetch_add(1, Ordering::Relaxed);
+                return Ok(writes);
             }
         }
         code.eir.execute(rt, env, world, version)
