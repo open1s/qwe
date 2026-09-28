@@ -93,6 +93,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0064](https://github.com/open1s/qwe/issues/64) | Low | docs/rfc-alignment.md extension table stops at 0044 (despite carrying Proposed rows 0043/0044): filed Proposed RFC-0045/0046 missing while roadmap + book SUMMARY index them | docs/rfc-alignment.md (Extension RFCs table) |
 | [0065](https://github.com/open1s/qwe/issues/65) | Medium | `module` directive stripped only by `collect_module`: in-memory paths (`lang::compile`, LSP `with_root` buffer override) report bogus error 60 on valid module files; doctest skips module blocks; `merge_sources` skips the 101 dup check | reference/src/lang/compile.rs (collect_module vs lang::compile/load_program_sources_with_root) |
 | [0066](https://github.com/open1s/qwe/issues/66) | Low | module-line stripping is string-blind: a multi-line string containing a `module x` line silently loses it (compile succeeds, title/content corrupted) | reference/src/lang/compile.rs (collect_module strip loop) |
+| [0067](https://github.com/open1s/qwe/issues/67) | Medium | detail 102 privacy check walks only `parsed.systems`: `util.g` (unexported) compiles from a `funcs` body; non-`when` system params not walked either | reference/src/lang/compile.rs (check_module_privacy) |
 
 ## Suggested order
 
@@ -746,5 +747,29 @@ deterministic merge order; filed 0065-0066):
    position, non-import control unchanged; C phantom-60, comment-ghost,
    untitled-60, import-drift residuals still exactly as recorded on the open
    0062/0063/0058 notes — no behavioral change from this commit.
+
+Review pass 24 (`582bed3a` RFC-0045 slice 2: `export` surface + privacy detail
+102; filed 0067, commented 0064/0065/0066):
+
+1. Snapshot gates green: fmt, clippy `-D warnings`, **389** tests (388 + new
+   `module_export_privacy`), conformance 23/23, release build.
+2. Verified working: `export f` and `export { f }` both parse; unexported
+   `util.g` in a **system** rule → `error 102` (CLI); exported `util.f`
+   compiles; detail 102 documented en+zh; privacy check runs after merge in
+   the file-loader path.
+3. 0067 filed (Medium): privacy walks only system expressions — root
+   `funcs { h(x) { util.g(x) } }` compiles rc 0 (proven), so the documented
+   "cross-module reference to an unexported function is rejected" claim has a
+   funcs-body hole; non-`when` system params also unwalked.
+4. 0065 commented: `export` lines hit the same in-memory strip gap (LSP bogus
+   60 on module+export docs, with and without imports; CLI rc 0 on the same
+   source), and `merge_sources` hard-codes `exports: None` so 102 never runs
+   on the rebuild path.
+5. 0066 commented: `export f` line inside a multi-line `title` silently
+   stripped, compile rc 0 (same string-blind loop).
+6. 0064 commented: 0045 row added but placed between 0043/0044, header still
+   (0037-0044), 0046 row still missing, row says Done while the RFC says
+   Accepted + Remaining items, and "Accepted" is off-convention (0037-0042
+   implemented extensions all use `Status: Normative`).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
