@@ -24,6 +24,9 @@ use pwe_reference::present::{self, CameraVisual, LiveState};
 use pwe_reference::sha256::digest;
 use std::sync::{Arc, RwLock};
 
+mod json;
+mod lsp;
+
 /// Artifact container magic and format version.
 const MAGIC: &[u8; 4] = b"PWEB";
 const VERSION: u16 = 2;
@@ -39,6 +42,7 @@ fn main() {
         Some("fmt") => cmd_fmt(&args[1..]),
         Some("repl") => cmd_repl(),
         Some("doctest") => cmd_doctest(&args[1..]),
+        Some("lsp") => cmd_lsp(),
         Some("-h") | Some("--help") | None => {
             usage();
             0
@@ -63,6 +67,7 @@ fn usage() {
            pwe playground [--port P]              # browser editor + live viewer\n  \
            pwe repl                               # interactive compile/run/step\n  \
            pwe doctest [FILES...]                 # compile runnable code blocks in docs\n  \
+           pwe lsp                                # Language Server over stdio (diagnostics/format)\n  \
            pwe fmt <src.pwe> [--check] [-w]       # format source (stdout by default)\n  \
            pwe migrate <src.pwe> [-o <out.pwe>]   # upgrade a pre-v0.3 source\n\
          \n\
@@ -372,6 +377,18 @@ fn cmd_compile(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// lsp
+// ---------------------------------------------------------------------------
+
+/// Runs the Language Server over stdio (diagnostics + formatting).
+fn cmd_lsp() -> i32 {
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    lsp::run(stdin.lock(), &mut out)
 }
 
 // ---------------------------------------------------------------------------

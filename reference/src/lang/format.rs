@@ -92,10 +92,11 @@ pub fn format_source(src: &str) -> String {
         out.push('\n');
         wrote_any = true;
 
-        let opens = code.matches('{').count();
-        let closes = code.matches('}').count();
-        depth = depth.saturating_sub(closes);
-        depth += opens;
+        // Net brace change with signed arithmetic so a balanced single-line
+        // block (`world { entity e { … } }`) does not inflate the depth.
+        let opens = code.matches('{').count() as isize;
+        let closes = code.matches('}').count() as isize;
+        depth = (depth as isize + opens - closes).max(0) as usize;
     }
     out
 }
@@ -141,6 +142,15 @@ mod tests {
         // The comment lines are preserved (indented, content intact).
         assert!(out.contains("# a \" quote in a comment"));
         assert!(out.contains("// { { { comment"));
+    }
+
+    #[test]
+    fn single_line_block_keeps_depth() {
+        let src =
+            "world { entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = x } }\n";
+        let out = format_source(src);
+        // The second top-level line must stay at column 0.
+        assert!(out.contains("\nsystems {"), "depth inflated:\n{out}");
     }
 
     #[test]
