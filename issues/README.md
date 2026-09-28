@@ -76,6 +76,9 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0047](https://github.com/open1s/qwe/issues/47) | Medium | Playground control endpoints accept cross-origin requests (no Origin/Host check + `ACAO:*`): any website can compile/run source, reset and pause; frames readable via `/state` | reference/src/present.rs (handle_playground) |
 | [0048](https://github.com/open1s/qwe/issues/48) | Low | `/api/pause?on=0` can never resume - query string stripped before parsing, so `contains("on=0")` is dead code and the endpoint only ever pauses | reference/src/present.rs (handle_playground) |
 | [0049](https://github.com/open1s/qwe/issues/49) | Low | Playground silently freezes on runtime step errors - driver pauses and discards the diagnostic, error pane stays empty | reference/src/present.rs (playground_driver) |
+| [0050](https://github.com/open1s/qwe/issues/50) | Medium | `pwe fmt` is not string-aware: mutates multi-line string tokens (trim/collapse inside quotes) and counts braces/`#` inside strings for depth, so `format_preserves_tokens` is false for legal sources | reference/src/lang/format.rs |
+| [0051](https://github.com/open1s/qwe/issues/51) | Low | `pwe fmt src \| head` panics on Broken pipe (rc 101) via bare `print!`, violating no-panic-in-runtime-paths | cli/src/main.rs (cmd_fmt) |
+| [0052](https://github.com/open1s/qwe/issues/52) | Low | usage()/--help omits `playground` and `fmt`; both commit messages claim "usage updated" | cli/src/main.rs:53 |
 
 ## Suggested order
 
@@ -451,5 +454,25 @@ Review pass 11 (`8c3ed183` playground, filed 0047-0049):
    the earlier usage gap, fixed in `e428e2dd` for run flags); a `Load` whose
    compile exceeds the handler's 10 s `recv_timeout` still lands later from
    the driver queue after the client saw "compile timed out".
+
+Review pass 12 (`a10b32f2` `pwe fmt`, filed 0050-0052):
+
+1. Snapshot `git archive a10b32f2`; full gates green: `cargo fmt --check`,
+   clippy `-D warnings`, 364 tests (+3 fmt), conformance 18/18.
+2. CLI semantics verified: `--check` rc 0 formatted / rc 1 messy; `-w` then
+   `--check` rc 0; `pwe run` output identical pre/post-format on the dev's
+   fixtures; EIR-identity test passes but its fixture contains no strings.
+3. 0050 filed (Medium): `format_source` is not string-aware. Multi-line
+   strings are legal (`string = @\{ ... (!\"" ~ ANY)* ... \}`, ANY includes
+   \n) but every line is trimmed and blank lines dropped, so
+   `title = 'A   \n\n\n      B'` becomes `'A\n\n    B'` - token value
+   changed, contract in module docs and `format_preserves_tokens` broken.
+   Braces/`#` inside strings are also counted for depth (`title = "}"` emits
+   the following block at indent 0). Fix: scan with in-string state; never
+   trim/drop inside a literal.
+4. 0051 filed (Low): `pwe fmt big.pwe | head -1` panics rc 101
+   "failed printing to stdout: Broken pipe" (stdio.rs) - AGENTS §13.
+5. 0052 filed (Low): usage() lists only compile/run/present/migrate; the
+   `fmt` and `playground` commits both claim "usage updated" (false twice).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
