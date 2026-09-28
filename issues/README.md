@@ -809,4 +809,34 @@ stripping; module privacy in funcs; closed 0065-0067, filed 0068-0069):
    C/#63 residuals unchanged, untitled+import EMPTY, non-import control fine —
    no behavioral drift beyond the fixes.
 
+Review pass 26 (`ddc88472` fix(#45,#53,#62,#63): finish the partial fixes;
+issue triage; closed 0045/0062/0063/0069 as completed, 0053 as won't-fix):
+
+1. Snapshot gates green: fmt, clippy `-D warnings`, **393** tests (392 + 1),
+   conformance 23/23, release build.
+2. 0045 closed (completed): threaded call errors (32/33/34) now carry `m.pc` —
+   depth-cap program reports `EirInvalid (33) at 2` under **both** dispatchers
+   (threaded said `at 0`); threaded per-operand details use
+   `th_get_d(…, 16/17/18)` matching the jump-table arms.
+3. 0062 closed (completed): `collect_module` accepts an in-memory root and
+   skips the disk parse — disk `BROKEN {` + valid buffer → EMPTY (was phantom
+   60); buffer-added import resolves → EMPTY (was false 59); buffer syntax
+   errors surface at buffer positions; untitled+import still EMPTY.
+4. 0063 closed (completed): `find_ident` masks comments/strings — original
+   `xyzzy` evidence now reports line 1, char 32 (was line 0, char 55);
+   comment-ghost range moved onto the code line.
+5. 0069 closed (completed, side effect of the #62 refactor): LSP now reports
+   error 101 for a buffer-declared module collision; LSP and CLI agree.
+6. 0053 closed (won't-fix) after re-verification — main defects already fixed
+   in the previous build (step-error rendering, retained program, exit 1,
+   malformed-arg rejection); ddc88472 added step index + had_error coverage.
+   Residual `cmd_repl()` ignoring argv (`pwe repl --typo` starts the REPL)
+   deemed cosmetic — documented in the close comment.
+7. Still open and re-confirmed: 0064 (alignment header/order/vocabulary
+   untouched by this commit), 0068 (odd-quote comment poisons the stripper →
+   CLI and LSP both still report bogus 60 at 2:1).
+8. Regression battery green: A/C/untitled/controls EMPTY as expected;
+   `funcs`-body 102, string-preserve, dup 101 all hold; buffer-REMOVES-import
+   59 is correct content (usage kept, import dropped), not drift.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
