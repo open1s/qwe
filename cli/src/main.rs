@@ -35,6 +35,7 @@ fn main() {
         Some("run") => cmd_run(&args[1..], None),
         Some("present") => cmd_run(&args[1..], Some(8000)),
         Some("migrate") => cmd_migrate(&args[1..]),
+        Some("playground") => cmd_playground(&args[1..]),
         Some("-h") | Some("--help") | None => {
             usage();
             0
@@ -363,6 +364,39 @@ fn cmd_compile(args: &[String]) -> i32 {
             eprintln!("{}", lang::diagnose(&sources.root, &e));
             1
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// playground
+// ---------------------------------------------------------------------------
+
+/// Serves the browser playground (editor + live viewer) until interrupted.
+fn cmd_playground(args: &[String]) -> i32 {
+    let mut port: u16 = 8080;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--port" | "-p" => {
+                let Some(v) = it.next().and_then(|s| s.parse::<u16>().ok()) else {
+                    eprintln!("pwe: --port needs a u16");
+                    return 2;
+                };
+                port = v;
+            }
+            other => {
+                eprintln!("pwe: unknown playground option '{other}'");
+                return 2;
+            }
+        }
+    }
+    if let Err(e) = pwe_reference::present::serve_playground(port) {
+        eprintln!("pwe: cannot serve playground on 127.0.0.1:{port}: {e}");
+        return 1;
+    }
+    println!("pwe playground: open http://localhost:{port}  (Ctrl-C to stop)");
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3600));
     }
 }
 

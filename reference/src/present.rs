@@ -1717,3 +1717,284 @@ mod tests {
         assert_eq!(frame.channels[0].value, 42.0);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Playground: an editor + live viewer served locally. The browser submits
+// source to `POST /api/source`; a single driver thread (owning the runtime, so
+// no cross-thread `Send` requirement on backends) compiles it, steps it, and
+// publishes frames to the same `/state` the `present` viewer polls.
+// ---------------------------------------------------------------------------
+
+enum PgCmd {
+    Load(String, std::sync::mpsc::Sender<String>),
+    Reset,
+    Pause(bool),
+}
+
+/// Serves the PWE playground on `127.0.0.1:port` (editor at `/`, viewer at
+/// `/view`). Returns once the listener is bound; work happens on background
+/// threads (Ctrl-C stops the process).
+pub fn serve_playground(port: u16) -> std::io::Result<()> {
+    let (tx, rx) = std::sync::mpsc::channel::<PgCmd>();
+    let state = Arc::new(RwLock::new(LiveState::default()));
+    let listener = TcpListener::bind(("127.0.0.1", port))?;
+    let page = playground_html();
+    let viewer = live_viewer_html();
+    {
+        let state = Arc::clone(&state);
+        std::thread::spawn(move || playground_driver(rx, state));
+    }
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let tx = tx.clone();
+            let state = Arc::clone(&state);
+            let page = page.clone();
+            let viewer = viewer.clone();
+            std::thread::spawn(move || {
+                let mut stream = stream;
+                let _ = handle_playground(&mut stream, &tx, &state, &page, &viewer);
+            });
+        }
+    });
+    Ok(())
+}
+
+fn publish(state: &Arc<RwLock<LiveState>>, rt: &crate::lang::LangRuntime, step: u64, note: &str) {
+    let frame = rt.present_frame(None);
+    let info = vec![if note.is_empty() {
+        format!("step {step}")
+    } else {
+        format!("{note} · step {step}")
+    }];
+    let mut g = state.write().unwrap_or_else(|e| e.into_inner());
+    g.step = step;
+    g.frame = frame;
+    g.info = info;
+}
+
+fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<LiveState>>) {
+    let mut rt: Option<crate::lang::LangRuntime> = None;
+    let mut last_src: Option<String> = None;
+    let mut paused = true;
+    let mut step = 0u64;
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(16)) {
+            Ok(PgCmd::Load(src, reply)) => match crate::lang::LangRuntime::compile(&src) {
+                Ok(r) => {
+                    rt = Some(r);
+                    last_src = Some(src);
+                    step = 0;
+                    paused = false;
+                    let _ = reply.send("ok".to_string());
+                    if let Some(r) = &rt {
+                        publish(&state, r, 0, "compiled");
+                    }
+                }
+                Err(e) => {
+                    let _ = reply.send(crate::lang::diagnose(&src, &e));
+                }
+            },
+            Ok(PgCmd::Reset) => {
+                if let Some(src) = last_src.clone() {
+                    if let Ok(r) = crate::lang::LangRuntime::compile(&src) {
+                        rt = Some(r);
+                        step = 0;
+                        if let Some(r) = &rt {
+                            publish(&state, r, 0, "reset");
+                        }
+                    }
+                }
+            }
+            Ok(PgCmd::Pause(p)) => paused = p,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if !paused {
+                    if let Some(r) = &mut rt {
+                        match r.step_interpreter() {
+                            Ok(_) => {
+                                step += 1;
+                                publish(&state, r, step, "");
+                            }
+                            Err(_) => {
+                                paused = true;
+                                let _ = crate::lang::take_diagnostics();
+                            }
+                        }
+                    }
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+}
+
+fn read_http(stream: &mut TcpStream) -> std::io::Result<(String, String, Vec<u8>)> {
+    let mut data: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&buf[..n]);
+        if let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&data[..pos]).to_string();
+            let method = head.split_whitespace().next().unwrap_or("GET").to_string();
+            let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
+            let content_length = head
+                .lines()
+                .find_map(|l| {
+                    let (k, v) = l.split_once(':')?;
+                    k.eq_ignore_ascii_case("content-length")
+                        .then(|| v.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            let body_start = pos + 4;
+            while data.len() < body_start + content_length {
+                let n = stream.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buf[..n]);
+            }
+            let end = (body_start + content_length).min(data.len());
+            let body = data[body_start..end].to_vec();
+            return Ok((method, path, body));
+        }
+    }
+    Ok(("GET".to_string(), "/".to_string(), Vec::new()))
+}
+
+fn respond(stream: &mut TcpStream, ctype: &str, body: &[u8]) -> std::io::Result<()> {
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(header.as_bytes())?;
+    stream.write_all(body)?;
+    stream.flush()
+}
+
+fn handle_playground(
+    stream: &mut TcpStream,
+    tx: &std::sync::mpsc::Sender<PgCmd>,
+    state: &Arc<RwLock<LiveState>>,
+    page: &str,
+    viewer: &str,
+) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(std::time::Duration::from_millis(2000)))?;
+    let (method, path, body) = read_http(stream)?;
+    let path = path.split('?').next().unwrap_or("/").to_string();
+
+    if method == "POST" && path == "/api/source" {
+        let src = String::from_utf8_lossy(&body).to_string();
+        let (rtx, rrx) = std::sync::mpsc::channel::<String>();
+        if tx.send(PgCmd::Load(src, rtx)).is_err() {
+            return respond(stream, "text/plain; charset=utf-8", b"driver stopped");
+        }
+        let msg = rrx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap_or_else(|_| "compile timed out".to_string());
+        return respond(stream, "text/plain; charset=utf-8", msg.as_bytes());
+    }
+    if path == "/api/reset" {
+        let _ = tx.send(PgCmd::Reset);
+        return respond(stream, "text/plain", b"ok");
+    }
+    if path.starts_with("/api/pause") {
+        let on = path.contains("on=0");
+        let _ = tx.send(PgCmd::Pause(!on));
+        return respond(
+            stream,
+            "text/plain",
+            if on { b"running" } else { b"paused" },
+        );
+    }
+    if path == "/view" {
+        return respond(stream, "text/html; charset=utf-8", viewer.as_bytes());
+    }
+    if path == "/" {
+        return respond(stream, "text/html; charset=utf-8", page.as_bytes());
+    }
+    if let Some(asset) = vendor_file(&path) {
+        return respond(stream, "text/javascript; charset=utf-8", asset.as_bytes());
+    }
+    if path == "/state" {
+        let live = state.read().unwrap_or_else(|e| e.into_inner());
+        return respond(
+            stream,
+            "application/json",
+            live_state_json(&live).as_bytes(),
+        );
+    }
+    respond(stream, "text/plain", b"not found")
+}
+
+/// The playground page: a plain-text editor, Run, error pane, and the viewer in
+/// an iframe (reloaded on a successful compile).
+fn playground_html() -> String {
+    r#"<!doctype html><html><head><meta charset="utf-8">
+<title>PWE playground</title>
+<style>
+  html,body{margin:0;height:100%;font-family:ui-monospace,Menlo,monospace;background:#0b0e14;color:#cdd6f4}
+  #wrap{display:flex;height:100%}
+  #left{width:44%;min-width:320px;display:flex;flex-direction:column;border-right:1px solid #313244}
+  #bar{padding:8px;display:flex;gap:8px;align-items:center;background:#11131a}
+  button{background:#3a4a6b;color:#fff;border:0;padding:6px 12px;border-radius:5px;cursor:pointer}
+  button:hover{background:#4a5f88}
+  textarea{flex:1;width:100%;box-sizing:border-box;background:#0b0e14;color:#cdd6f4;border:0;padding:12px;
+           font:13px/1.5 ui-monospace,Menlo,monospace;resize:none;outline:none}
+  #err{padding:8px 12px;color:#f38ba8;white-space:pre-wrap;font-size:12px;min-height:0;max-height:30%;overflow:auto}
+  #view{flex:1;border:0;background:#0b0e14}
+  .hint{color:#6c7086;font-size:12px}
+</style></head><body>
+<div id="wrap">
+  <div id="left">
+    <div id="bar"><button id="run">Run</button><button id="reset">Reset</button>
+      <span class="hint">Ctrl/Cmd-Enter to run</span></div>
+    <textarea id="src" spellcheck="false"></textarea>
+    <div id="err"></div>
+  </div>
+  <iframe id="view" src="/view"></iframe>
+</div>
+<script>
+const SAMPLE = `world {
+  gravity = (0, -9.81, 0)
+  entity ball  { position = (0, 6, 0); velocity = (1.2, 0, 0); shape = sphere; color = 0x89b4fa }
+  entity ball2 { position = (1.5, 9, 0); velocity = (-0.8, 0, 0); shape = sphere; color = 0xf38ba8 }
+}
+systems {
+  gravity        { gravity_y = -9.81; dt = 0.016 }
+  integrate      { dt = 0.016 }
+  ground_contact { restitution = 0.85 }
+}`;
+const src = document.getElementById('src');
+src.value = SAMPLE;
+const err = document.getElementById('err');
+const view = document.getElementById('view');
+async function run(){
+  err.textContent = 'compiling…';
+  try{
+    const r = await fetch('/api/source', { method:'POST', body: src.value });
+    const t = await r.text();
+    if (t === 'ok'){ err.textContent = ''; view.src = '/view?t=' + Date.now(); }
+    else { err.textContent = t; }
+  }catch(e){ err.textContent = String(e); }
+}
+document.getElementById('run').onclick = run;
+document.getElementById('reset').onclick = () => fetch('/api/reset').then(()=>{ view.src='/view?t='+Date.now(); });
+src.addEventListener('keydown', e => { if((e.metaKey||e.ctrlKey) && e.key==='Enter'){ e.preventDefault(); run(); }});
+</script></body></html>"#
+        .to_string()
+}
+
+#[cfg(test)]
+mod playground_tests {
+    #[test]
+    fn playground_page_has_editor_and_viewer() {
+        let html = super::playground_html();
+        for needle in ["id=\"src\"", "id=\"run\"", "/api/source", "/view", "SAMPLE"] {
+            assert!(html.contains(needle), "playground page missing {needle}");
+        }
+    }
+}
