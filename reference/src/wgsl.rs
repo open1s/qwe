@@ -165,7 +165,6 @@ fn bin_op(op: Opcode) -> Option<&'static str> {
         Opcode::Sub => "-",
         Opcode::Mul => "*",
         Opcode::Div => "/",
-        Opcode::Rem => "%",
         _ => return None,
     })
 }
@@ -210,6 +209,17 @@ fn emit_instruction(ins: &crate::eir::Instruction) -> Result<String> {
     let o = &ins.operands;
     let res = ins.result_id;
     let line = match ins.opcode {
+        // WGSL's `%` is integer-only; floats need an explicit fmod. EIR `Rem`
+        // has C `fmod` semantics (sign of the dividend) => trunc-based form.
+        Opcode::Rem => format!(
+            "  r[{res}] = r[{}] - r[{}] * trunc(r[{}] / r[{}]);\n",
+            o[0], o[1], o[0], o[1]
+        ),
+        // WGSL has no `hypot` builtin.
+        Opcode::Hypot => format!(
+            "  r[{res}] = sqrt(r[{}] * r[{}] + r[{}] * r[{}]);\n",
+            o[0], o[0], o[1], o[1]
+        ),
         Opcode::Nop => String::new(),
         Opcode::Const => format!(
             "  r[{res}] = {};\n",
@@ -218,7 +228,6 @@ fn emit_instruction(ins: &crate::eir::Instruction) -> Result<String> {
         Opcode::Fma => format!("  r[{res}] = fma(r[{}], r[{}], r[{}]);\n", o[0], o[1], o[2]),
         Opcode::Pow => format!("  r[{res}] = pow(r[{}], r[{}]);\n", o[0], o[1]),
         Opcode::Atan2 => format!("  r[{res}] = atan2(r[{}], r[{}]);\n", o[0], o[1]),
-        Opcode::Hypot => format!("  r[{res}] = hypot(r[{}], r[{}]);\n", o[0], o[1]),
         Opcode::Log10 => format!("  r[{res}] = log(r[{}]) / log(10.0f);\n", o[0]),
         Opcode::Log2 => format!("  r[{res}] = log2(r[{}]);\n", o[0]),
         Opcode::Select => format!(
