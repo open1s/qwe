@@ -91,6 +91,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0062](https://github.com/open1s/qwe/issues/62) | Medium | import documents compile from DISK, not the client buffer: any text containing substring `import` routes didOpen/didChange through `load_program_sources(path)` -> buffer errors vanish, phantom disk errors appear | cli/src/lsp.rs (diagnostics, `text.contains("import")`) |
 | [0063](https://github.com/open1s/qwe/issues/63) | Low | warning-range heuristic `backtick_name` + `text.find(name)` matches the first substring anywhere: unknown slot `x` ranges to `x` inside `xyzzy` in a comment on another line | cli/src/lsp.rs (diag_json, backtick_name) |
 | [0064](https://github.com/open1s/qwe/issues/64) | Low | docs/rfc-alignment.md extension table stops at 0044 (despite carrying Proposed rows 0043/0044): filed Proposed RFC-0045/0046 missing while roadmap + book SUMMARY index them | docs/rfc-alignment.md (Extension RFCs table) |
+| [0065](https://github.com/open1s/qwe/issues/65) | Medium | `module` directive stripped only by `collect_module`: in-memory paths (`lang::compile`, LSP `with_root` buffer override) report bogus error 60 on valid module files; doctest skips module blocks; `merge_sources` skips the 101 dup check | reference/src/lang/compile.rs (collect_module vs lang::compile/load_program_sources_with_root) |
+| [0066](https://github.com/open1s/qwe/issues/66) | Low | module-line stripping is string-blind: a multi-line string containing a `module x` line silently loses it (compile succeeds, title/content corrupted) | reference/src/lang/compile.rs (collect_module strip loop) |
 
 ## Suggested order
 
@@ -719,5 +721,30 @@ Review pass 22 (`8fec1ebc` book SUMMARY index for RFC-0041..0046; filed 0064):
    `docs/rfc-alignment.md`'s extension table (0037-0044) — which already
    carries unimplemented Proposed rows 0043/0044 — omits both. Filed 0064
    (Low).
+
+Review pass 23 (`f765dcad` RFC-0045 slice: `module` directive + detail 101 +
+deterministic merge order; filed 0065-0066):
+
+1. Snapshot gates green: fmt, clippy `-D warnings`, **388** tests (387 + new
+   `module_declaration_and_collision`), conformance 23/23, release build.
+2. Verified working: CLI `compile_file` strips `module <name>` (rc 0) and the
+   declared name resolves as a qualified alias (`util.f`) with no import;
+   duplicate declared names in imported files → `error 101` with both paths
+   (CLI rc 1 and through the LSP); detail 101 documented en+zh; module line
+   replaced by a blank line (offsets preserved).
+3. 0065 filed (Medium): the directive is stripped only in `collect_module`.
+   In-memory paths disagree with the loader on the same source — LSP
+   `didOpen` of a valid module file (with or without imports) publishes bogus
+   `error 60 @1:1` (also masking real buffer errors); doctest reports `0
+   runnable block(s)` for a module block (unchecked); `merge_sources` never
+   re-runs the 101 check.
+4. 0066 filed (Low): quote-free `module` lines inside multi-line strings are
+   stripped pre-parse → `title = "…\nmodule util\n…"` compiles rc 0 with the
+   line silently deleted (string corrupted). The import analogue cannot occur
+   inside one string (quotes close it first).
+5. Regression battery (pass-21 probes) re-run on this build: A/B, xyzzy
+   position, non-import control unchanged; C phantom-60, comment-ghost,
+   untitled-60, import-drift residuals still exactly as recorded on the open
+   0062/0063/0058 notes — no behavioral change from this commit.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
