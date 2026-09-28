@@ -393,6 +393,7 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
     );
     let mut buffer = String::new();
     let mut runtime: Option<(LangRuntime, pwe_reference::scene::Scene, String)> = None;
+    let mut had_error = false;
     let mut line = String::new();
     loop {
         let _ = write!(out, "pwe> ");
@@ -439,6 +440,13 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
                     }
                 },
                 "run" => {
+                    if let Some(a) = arg {
+                        if a.parse::<u64>().is_err() {
+                            let _ = writeln!(out, ":run expects a step count, got '{a}'");
+                            had_error = true;
+                            continue;
+                        }
+                    }
                     let steps: u64 = arg.and_then(|a| a.parse().ok()).unwrap_or(60);
                     if buffer.trim().is_empty() {
                         let _ = writeln!(out, "(buffer is empty: type source first)");
@@ -446,32 +454,40 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
                     }
                     match LangRuntime::compile(&buffer) {
                         Ok(mut rt) => {
+                            // Keep the compiled program even if the first run
+                            // traps, so :step/:reset still work on it.
                             let initial = rt.scene.clone();
                             let src = buffer.clone();
-                            match repl_steps(&mut rt, steps, out) {
-                                Ok(()) => {
-                                    repl_report(&rt, steps, out);
-                                    runtime = Some((rt, initial, src));
-                                }
-                                Err(e) => {
-                                    let _ = writeln!(out, "{}", lang::diagnose(&src, &e));
-                                }
+                            if repl_steps(&mut rt, steps, out) {
+                                repl_report(&rt, steps, out);
+                            } else {
+                                had_error = true;
                             }
+                            runtime = Some((rt, initial, src));
                         }
                         Err(e) => {
                             let _ = writeln!(out, "{}", lang::diagnose(&buffer, &e));
+                            had_error = true;
                         }
                     }
                 }
                 "step" => {
+                    if let Some(a) = arg {
+                        if a.parse::<u64>().is_err() {
+                            let _ = writeln!(out, ":step expects a step count, got '{a}'");
+                            had_error = true;
+                            continue;
+                        }
+                    }
                     let n: u64 = arg.and_then(|a| a.parse().ok()).unwrap_or(1);
                     match runtime.as_mut() {
-                        Some((rt, _initial, src)) => match repl_steps(rt, n, out) {
-                            Ok(()) => repl_report(rt, n, out),
-                            Err(e) => {
-                                let _ = writeln!(out, "{}", lang::diagnose(src, &e));
+                        Some((rt, _initial, _src)) => {
+                            if repl_steps(rt, n, out) {
+                                repl_report(rt, n, out);
+                            } else {
+                                had_error = true;
                             }
-                        },
+                        }
                         None => {
                             let _ = writeln!(out, "(no program yet: use :run first)");
                         }
@@ -496,23 +512,24 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
             buffer.push('\n');
         }
     }
-    0
+    if had_error {
+        1
+    } else {
+        0
+    }
 }
 
-fn repl_steps(
-    rt: &mut LangRuntime,
-    n: u64,
-    out: &mut dyn std::io::Write,
-) -> Result<(), pwe_api::Error> {
+fn repl_steps(rt: &mut LangRuntime, n: u64, out: &mut dyn std::io::Write) -> bool {
     for _ in 0..n {
         if let Err(e) = rt.step_interpreter() {
+            let _ = writeln!(out, "step failed: {e}");
             for d in lang::take_diagnostics() {
                 let _ = writeln!(out, "  [{}] {}", d.detail, d.message);
             }
-            return Err(e);
+            return false;
         }
     }
-    Ok(())
+    true
 }
 
 fn repl_report(rt: &LangRuntime, steps: u64, out: &mut dyn std::io::Write) {
@@ -1036,6 +1053,32 @@ mod repl_tests {
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("ran 3 step(s)"), "output:\n{s}");
         assert!(s.contains("ran 2 step(s)"), "output:\n{s}");
+    }
+
+    #[test]
+    fn repl_step_error_has_detail_and_keeps_program() {
+        let script = "world { gravity=(0,0,0) entity e { state=(a=1.0, x=0.0) } }\n\
+                      systems { update { on=e; dt=1.0  a = a - 1.0  x = 1.0 / a } }\n\
+                      :run 5\n:step 1\n:quit\n";
+        let mut out = Vec::new();
+        let code = run_repl(std::io::Cursor::new(script), &mut out);
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("step failed:"), "output:\n{s}");
+        // `:step` after the failed `:run` must still have a program.
+        assert!(!s.contains("(no program yet"), "output:\n{s}");
+        assert_eq!(code, 1, "errors must make the repl exit non-zero");
+    }
+
+    #[test]
+    fn repl_rejects_malformed_step_count() {
+        let script = "world { gravity=(0,0,0) entity e { state=(x=0.0) } }\n\
+                      systems { update { on=e; dt=1.0 x = x + inte(1.0) } }\n\
+                      :run abc\n:quit\n";
+        let mut out = Vec::new();
+        let code = run_repl(std::io::Cursor::new(script), &mut out);
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains(":run expects a step count"), "output:\n{s}");
+        assert_eq!(code, 1);
     }
 
     #[test]

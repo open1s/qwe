@@ -3269,3 +3269,21 @@ fn formatting_preserves_compiled_artifact() {
         "formatting changed the compiled artifact"
     );
 }
+
+#[test]
+fn assignment_to_unknown_slot_warns() {
+    // #54: a write to a name that is not a state slot must warn, like an
+    // unknown read (detail 85) — it is otherwise silently dropped.
+    clear_diagnostics();
+    LangRuntime::compile(
+        "world { gravity=(0,0,0) entity e { state=(x=1.0) } } \
+         systems { update { on=e; dt=1.0  foo = 2.0  x = x + 1.0 } }",
+    )
+    .unwrap();
+    let ds = take_diagnostics();
+    assert!(
+        ds.iter().any(|d| d.detail == 100),
+        "expected detail 100 warning, got {ds:?}"
+    );
+    clear_diagnostics();
+}

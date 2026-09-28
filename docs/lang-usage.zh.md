@@ -765,6 +765,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 94 | 状态槽名与系统参数名冲突 —— 警告。 |
 | 95 | `nbody` 物体暴露槽 7/8/9 但未设 `orient = true` —— 警告。 |
 | 96 | 规则写入槽 7/8/9 但未设 `orient = true` —— 警告。 |
+| 100 | 赋值给未知状态槽（被忽略）—— 警告。 |
 
 **调试流程**：缩减到一个实体 + 一个系统；核对模型（§0.6）；核对积分/赋值陷阱；加
 `invariant`；`run … --steps N` 读打印状态。

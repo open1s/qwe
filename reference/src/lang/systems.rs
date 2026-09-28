@@ -110,9 +110,18 @@ impl EirSystem for UpdateSystem {
         let mut slots = self.slots_hint;
         for (lhs, expr) in &self.rules {
             let idx: Option<usize> = numeric_slot(lhs).or_else(|| sn.get(lhs).copied());
-            if let Some(idx) = idx {
-                slots = slots.max(idx + 1);
-                resolved.push((idx, expr));
+            match idx {
+                Some(idx) => {
+                    slots = slots.max(idx + 1);
+                    resolved.push((idx, expr));
+                }
+                None => crate::lang::push_diag(
+                    100,
+                    0,
+                    format!(
+                        "assignment to unknown slot `{lhs}` — ignored (not in this entity's state; typo?)"
+                    ),
+                ),
             }
         }
         // `let` locals may also read own slots (e.g. `temp`) that are not rule
@@ -429,7 +438,16 @@ impl EirSystem for UpdateSystem {
             for (lhs, expr) in &self.assigns {
                 let idx = match numeric_slot(lhs).or_else(|| sn.get(lhs).copied()) {
                     Some(i) => i,
-                    None => continue,
+                    None => {
+                        crate::lang::push_diag(
+                            100,
+                            0,
+                            format!(
+                                "assignment to unknown slot `{lhs}` — ignored (not in this entity's state; typo?)"
+                            ),
+                        );
+                        continue;
+                    }
                 };
                 if idx >= slots {
                     continue;
@@ -645,9 +663,18 @@ impl EirSystem for Rk4System {
         let mut slots = self.slots_hint;
         for (lhs, expr) in &self.rules {
             let idx: Option<usize> = numeric_slot(lhs).or_else(|| sn.get(lhs).copied());
-            if let Some(idx) = idx {
-                slots = slots.max(idx + 1);
-                resolved.push((idx, expr));
+            match idx {
+                Some(idx) => {
+                    slots = slots.max(idx + 1);
+                    resolved.push((idx, expr));
+                }
+                None => crate::lang::push_diag(
+                    100,
+                    0,
+                    format!(
+                        "assignment to unknown slot `{lhs}` — ignored (not in this entity's state; typo?)"
+                    ),
+                ),
             }
         }
         // `let` locals may also read own slots (e.g. `temp`) that are not rule
