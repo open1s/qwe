@@ -69,6 +69,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0040](https://github.com/open1s/qwe/issues/40) | Medium | Native JIT deopt re-executes a step on partially-committed native writes — trap swallowed, state double-applied (`enable_native_jit` + `step_jit`) | reference/src/native.rs:198 |
 | [0041](https://github.com/open1s/qwe/issues/41) | Medium | GPU field-sweep backend is net-slower than the CPU at every tested size (per-step buffer alloc + full f64↔f32 conversion + sync readback; 2.55×/2.0×/1.34× slower at 0.26M/2.1M/16.8M cells on M2 Max) | reference/src/gpu.rs:91 |
 | [0042](https://github.com/open1s/qwe/issues/42) | Low | `pwe run --gpu` without the backend reports "error 5: unspecified compile error" — feature/device/platform failures collapse into one misleading diagnostic | cli/src/main.rs:480 |
+| [0043](https://github.com/open1s/qwe/issues/43) | Low | `Gpu::new` doc comment still cites "detail 5" after the 98/99 diagnostics split — public API doc contradicts the actual error contract | reference/src/gpu.rs:63 |
 
 ## Suggested order
 
@@ -357,5 +358,21 @@ Fix-verification pass 7 (`81a46dd3`, pass 17 — closure of 0042):
 3. Gates: fmt, clippy `--all-features`, 359 tests, 346 tests
    `--features gpu`, conformance 18/18. 0041 (GPU path net-slower)
    remains open, untouched by this commit.
+
+Fix-verification pass 8 (`03170cc5`, pass 18 — closure of 0041, nit filed as 0043):
+
+1. 0041 resolved via offered fix direction 3 (relabel + benchmark record),
+   closed: experimental-offload labels in `reference/Cargo.toml`, CLI banner
+   and roadmap (ratios 1.34x-2.55x match the issue's measurements); the new
+   `benches/throughput.rs::bench_gpu` verified live on Apple M2 Max at
+   131.089us (CPU) vs 233.617us (GPU) — matches the commit's 129/244us claim;
+   device-buffer pooling landed (my e2e 262k-cell/500-step GPU wall 0.51s ->
+   0.33s vs CPU 0.199s, field totals unchanged). Device-resident field state
+   (direction 1) documented in the roadmap as not implemented.
+2. 0043 filed (Low): `Gpu::new` doc comment still says "Errors (detail 5)"
+   — real details are now 98 (no device) / 99 (kernel compile); first noted
+   in the 0042 close comment, still unfixed in this commit.
+3. Gates: fmt, clippy `--all-features`, 359 tests, 346 tests
+   `--features gpu`, conformance 18/18. Open issues after this pass: 0043.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
