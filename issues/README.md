@@ -291,4 +291,23 @@ Review/test pass 14 (`b57ab005` + `93f69931` + `5f0429b9`, closure of 0040):
    regression test), conformance 18/18; full probe battery green
    (53 WGSL/edge PASS, t39 22/22, nrem/wcmp parity, jit-all 5 kernels).
 
+Review/test pass 15 (`48492885` — native JIT on by default for `pwe run`):
+
+1. Scope: `cmd_run` flips `native_jit = true` with a new `--no-native-jit`
+   opt-out (`--native-jit` kept); library default stays opt-in, so tests
+   and embedders are unaffected. `present` shares `cmd_run`, so it also
+   defaults on (commit message mentions only `run` — noted, not a defect).
+2. Gates on the tree: fmt, clippy, 359 tests green, conformance 18/18.
+3. CLI e2e: 5000-step default run output byte-identical to both
+   `--no-native-jit` and `--native-jit`; 300000-step default run
+   byte-identical to interpreter run; promotion in the default path
+   observed live (`pwe_native_*` dir at t=200ms) and cleaned up at exit
+   (`Drop`); PATH-stripped no-`cc` default run rc=0, identical to
+   interpreter (graceful deopt).
+4. Observation (cosmetic, pre-existing pattern): `usage()` documents none
+   of the run options (`--steps`/`--param`/`--native-jit`/`--no-native-jit`);
+   left as a note rather than an issue.
+5. Uncommitted WIP observed, untouched: `reference/Cargo.toml` gains an
+   opt-in `gpu` feature (target-gated `metal` 0.33, `pwe run --gpu`).
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
