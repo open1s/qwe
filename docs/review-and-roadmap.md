@@ -106,14 +106,14 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
   - [x] **`pwe repl`**：交互式输入源码并 `:run [N]`/`:step [N]`/`:reset`/`:show`/`:clear`/`:load`/`:quit`；核心 `run_repl<R:BufRead,W:Write>` 可脚本化并单测（`repl_script_compiles_runs_and_steps`、`repl_reports_diagnostics`）。
   - [x] **doctest**：`pwe doctest [FILES...]` 编译 Markdown 中可运行的 ```` ```pwe ```` 完整程序块（以 `world` 开头；`pwe ignore` 标记示例片段跳过）；`doctest.rs` 含抽取/选择/文档回归测试（`shipped_docs_compile` 校验 README/lang-usage en+zh）。
   - [x] **LSP**：`pwe lsp`（stdio，无依赖）——全文档同步、`publishDiagnostics`（开/改/关，`lang::compile`+`diagnose`）、`textDocument/formatting`（`format_source`）；自带 JSON 解析/序列化（`json.rs`）与单测。
-  - [ ] 语义化模块系统
+  - [ ] 语义化模块系统 —— 见 **RFC-0045（Proposed）**（稳定模块名、显式 export/私有、确定性合并与冲突报错、模块集纳入 artifact 身份）
   - [ ] 语义化模块系统
 - [~] 分布式/插件沙箱、fuzz/Miri
   - [x] **fuzz（依赖无关、CI 可跑）**：`reference/tests/fuzz.rs` 用确定性 PRNG 向所有公开解码边界（EIR/extension/channel）与 parser/compiler/formatter 灌入随机字节/源码，断言**不 panic**、解析返回 `Result`、`format_source` **幂等**。Miri 用法记于 CONTRIBUTING（`cargo +nightly miri test --test fuzz`；`cfg!(miri)` 下自动减迭代）。
   - [ ] 分布式/插件沙箱（更大）
 - [~] EIR 升级为显式 SSA CFG；RFC↔conformance ≥80%
   - [x] RFC↔conformance：冻结集 RFC-0019–0036 全覆盖；**扩展 RFC-0037–0042 新增 6 个 `pwe-conformance` 用例**（场扫描/池/关节/软体/struct，cross-backend），报告 **total=23 failed=0**；`docs/rfc-alignment.md` 增补扩展 RFC 表（0043/0044 为 Proposed）。
-  - [ ] EIR 升级为显式 SSA CFG（更大）
+  - [ ] EIR 升级为显式 SSA CFG —— 见 **RFC-0046（Proposed）**（块/边/块参数、Verifier、RFC-0021 增量格式、迁移计划）
 - [x] ADR/贡献指南/架构文档：`docs/architecture.md`（流水线/边界/执行层）、`CONTRIBUTING.md`（工具链/门禁/特性/流程）、`docs/adr/`（0001–0005：原生 cc 后端、进程内豁免、opt-in 线程化、SIMD 不采用、GPU 实验性）。
 
 ## 4. 已完成（本次迭代）
