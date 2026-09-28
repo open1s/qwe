@@ -90,6 +90,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0061](https://github.com/open1s/qwe/issues/61) | Low | fuzz ALPHABET has no digits/`_`/`@`/`~`/`^` - numeric-literal, slot-index and unit-annotation paths never fuzzed (0% of samples contain a digit); single hard-coded seed, 160-byte cap | reference/tests/fuzz.rs (parser_and_compiler_never_panic_on_random_source) |
 | [0062](https://github.com/open1s/qwe/issues/62) | Medium | import documents compile from DISK, not the client buffer: any text containing substring `import` routes didOpen/didChange through `load_program_sources(path)` -> buffer errors vanish, phantom disk errors appear | cli/src/lsp.rs (diagnostics, `text.contains("import")`) |
 | [0063](https://github.com/open1s/qwe/issues/63) | Low | warning-range heuristic `backtick_name` + `text.find(name)` matches the first substring anywhere: unknown slot `x` ranges to `x` inside `xyzzy` in a comment on another line | cli/src/lsp.rs (diag_json, backtick_name) |
+| [0064](https://github.com/open1s/qwe/issues/64) | Low | docs/rfc-alignment.md extension table stops at 0044 (despite carrying Proposed rows 0043/0044): filed Proposed RFC-0045/0046 missing while roadmap + book SUMMARY index them | docs/rfc-alignment.md (Extension RFCs table) |
 
 ## Suggested order
 
@@ -707,5 +708,16 @@ Review pass 21 (`e394054e` fix(#62,#63); both kept open, partial):
 4. Probe battery on the build: import A/B controls, untitled fallback (still
    parse 60, accepted per 0058 close), non-import buffer control — all as
    expected.
+
+Review pass 22 (`8fec1ebc` book SUMMARY index for RFC-0041..0046; filed 0064):
+
+1. Docs-only change: 6 new SUMMARY.md entries. All six target files verified
+   to exist with exactly matching names (`rfc/RFC-0041-…` … `RFC-0046-…`);
+   no broken book links. No code touched — no gates required.
+2. Cross-index consistency sweep triggered by the commit: roadmap references
+   0045/0046 (Proposed) ✓, RFC files exist with `Status: Proposed` ✓, but
+   `docs/rfc-alignment.md`'s extension table (0037-0044) — which already
+   carries unimplemented Proposed rows 0043/0044 — omits both. Filed 0064
+   (Low).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
