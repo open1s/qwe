@@ -91,7 +91,8 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - [x] 真原生 AOT/JIT（`native.rs` + `NATIVE_TARGET`）：纯 `funcs`（无世界访问）与**世界访问型内核**（`ReadView`/`ReadCommitted`/`WriteView`，经 `#[repr(C)]` shim 表 `PweCtx` 回调）均生成 C、用系统 `cc -O2 -ffp-contract=off` 编译为 `.dylib`/`.so`、`dlopen` 加载。差分测试：纯函数（含除零 trap/`signum`/位精确条件的输入矩阵）、nbody 写入逐位一致；基准 nbody-64 步进 1323µs vs 解释器 2355µs（~1.8×）。依赖仅系统 C 编译器（缺失返回错误）。
 - [x] 契约：#35 —— `NativeProgram` 先 `validate`+`verify_linear_dominance`（从不跳过 Validate）、按内容哈希标识产物（RFC-0035 风格，同时修 #31）、0700 唯一临时目录并在 Drop 清理；**RFC-0027 增补条款**定义了「进程内原生内核」窄豁免（CapabilityCheck/Publish 跳过、其余照旧）。**该后端尚未接入 `pwe run`/`present` 等生产入口**——接入前必须实现完整生命周期（manifest/CapabilityCheck/Publish）。
 - [x] 世界访问型原生内核：`ReadView`/`ReadCommitted`/`WriteView` 经 `#[repr(C)]` 函数指针表（`PweCtx`）回调进 `NativeCtx{rt,writes}`；`execute_entries` 复刻解释器的系统屏障/顺序语义。差分测试 `native_world_kernel_matches_interpreter_writes` 通过（nbody 写入逐位一致）。基准：nbody-64 步进 1323µs vs 解释器 2355µs（~1.8×）。
-- [ ] GPU/NPU 计算后端（WGSL）：本机浏览器无 WebGPU 宿主（`navigator.gpu` 缺失），无法在本环境执行验证；需要有 WebGPU 的宿主或离线校验器（naga/tint）后才能实施并验证
+- [x] GPU/NPU 计算后端（WGSL，`wgsl.rs` + `WGSL_TARGET`）：把数据并行的 map 核（无世界访问/无调用/无分支的直线函数）下降为 WGSL 计算着色器（`@compute` / `@workgroup_size` / storage buffers）。**设备语义为 f32**（WebGPU 无 f64），故为**近似**设备后端、非逐位等价。验证：依赖无关的结构校验器 + f32 CPU oracle 与解释器在 f32 容差内一致（`wgsl::tests`）。
+- [ ] WGSL 执行验证：本机浏览器无 WebGPU 宿主（`navigator.gpu` 缺失），无法执行着色器；需 WebGPU 宿主或以 `naga`（dev-only，受 MSRV 约束）做离线编译校验后再接入运行。
 
 ### Phase 4 — 普适性与生态
 - [ ] 语义化模块系统；fmt/REPL/LSP；doctest
