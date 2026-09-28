@@ -107,9 +107,12 @@ fn diagnostics(uri: &str, text: &str) -> Vec<Value> {
     let mut diags = Vec::new();
     let compiled: Result<(), pwe_api::Error> = if text.contains("import") {
         match uri_file_path(uri) {
-            Some(path) => pwe_reference::lang::load_program_sources(std::path::Path::new(&path))
-                .and_then(|(parsed, _sources)| pwe_reference::lang::compile_program(parsed))
-                .map(|_| ()),
+            Some(path) => pwe_reference::lang::load_program_sources_with_root(
+                std::path::Path::new(&path),
+                text,
+            )
+            .and_then(|(parsed, _sources)| pwe_reference::lang::compile_program(parsed))
+            .map(|_| ()),
             None => pwe_reference::lang::compile(text).map(|_| ()),
         }
     } else {
@@ -146,7 +149,7 @@ fn diag_json(detail: u32, message: &str, offset: usize, text: &str, severity: u3
     // (`` `name` ``) so the range points at it rather than at 0:0.
     let offset = if offset == 0 {
         backtick_name(message)
-            .and_then(|name| text.find(&name))
+            .and_then(|name| find_ident(text, &name))
             .unwrap_or(0)
     } else {
         offset
@@ -190,6 +193,24 @@ fn pos_at(text: &str, offset: usize) -> (usize, usize) {
         }
     }
     (line, col)
+}
+
+/// The first whole-token occurrence of `name` in `text` (an identifier boundary
+/// before and after — so a short name is not matched inside a longer word).
+fn find_ident(text: &str, name: &str) -> Option<usize> {
+    if name.is_empty() {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'.';
+    for (i, _) in text.match_indices(name) {
+        let before = i == 0 || !is_ident(bytes[i - 1]);
+        let after = i + name.len() >= bytes.len() || !is_ident(bytes[i + name.len()]);
+        if before && after {
+            return Some(i);
+        }
+    }
+    None
 }
 
 /// The first `` `name` `` in a diagnostic message, if any.

@@ -1285,9 +1285,47 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
 /// Loads a program file and its module imports, returning both the merged
 /// program and the sources needed to rebuild it without the filesystem.
 pub fn load_program_sources(path: &std::path::Path) -> Result<(ParsedProgram, ProgramSources)> {
+    load_program_sources_inner(path, None)
+}
+
+/// Like [`load_program_sources`], but uses `root` as the **root module's
+/// source** (an editor buffer) while still resolving imports from the filesystem
+/// relative to `path`. Used by the LSP so diagnostics track unsaved edits.
+pub fn load_program_sources_with_root(
+    path: &std::path::Path,
+    root: &str,
+) -> Result<(ParsedProgram, ProgramSources)> {
+    load_program_sources_inner(path, Some(root))
+}
+
+fn load_program_sources_inner(
+    path: &std::path::Path,
+    root_override: Option<&str>,
+) -> Result<(ParsedProgram, ProgramSources)> {
     let mut modules = Vec::new();
     let mut seen: std::collections::BTreeMap<std::path::PathBuf, usize> = Default::default();
     collect_module(path, "", &mut seen, &mut modules)?;
+    if let Some(root) = root_override {
+        // Mirror `collect_module`'s handling: strip `import` lines before
+        // parsing (they are directives, not part of the `world` grammar).
+        let mut stripped = String::new();
+        for line in root.lines() {
+            match parse_import_line(line) {
+                Some((_d, tail)) => {
+                    stripped.push_str(&tail);
+                    stripped.push('\n');
+                }
+                None => {
+                    stripped.push_str(line);
+                    stripped.push('\n');
+                }
+            }
+        }
+        if let Some(m0) = modules.first_mut() {
+            m0.source = stripped.clone();
+            m0.parsed = parse(&stripped)?;
+        }
+    }
     // Resolve `from … import …` alias requests against the child's namespace.
     let mut aliases: Vec<(String, String)> = Vec::new();
     for m in &modules {
