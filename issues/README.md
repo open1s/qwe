@@ -63,6 +63,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0034](https://github.com/open1s/qwe/issues/34) | Medium | Native CondBr/Select conditions: IEEE `!= 0.0` vs interpreter bit-test (`-0.0` diverges); differential-test coverage gap | reference/src/native.rs:326 |
 | [0035](https://github.com/open1s/qwe/issues/35) | Medium | Native backend bypasses RFC-0027 normative lifecycle (no Validate/CapabilityCheck/manifest/artifact identity) | reference/src/native.rs:122 |
 | [0036](https://github.com/open1s/qwe/issues/36) | Medium | f64 comparisons with NaN: interpreter traps EirInvalid 18, native returns IEEE result — tier divergence, semantics unspecified | reference/src/eir.rs:2776 |
+| [0037](https://github.com/open1s/qwe/issues/37) | Medium | WGSL `Select` condition: IEEE `!= 0.0f` vs interpreter bit-test (`-0.0` flips); CPU oracle shares the bug | reference/src/wgsl.rs:234 |
+| [0038](https://github.com/open1s/qwe/issues/38) | Medium | Emitted WGSL builtins diverge from the CPU oracle (sign/round/hypot/Rem); emitter never validated by `naga` despite the doc claim | reference/src/wgsl.rs:195 |
 
 ## Suggested order
 
@@ -172,5 +174,25 @@ re-verification of the pass-7 reopens):
    `if <cond>` is reachable through `truthy()`'s `Ne(reg, 0.0)`
    (lower.rs:947); no RFC defines the semantics; the differential
    matrix has NaN inputs but no comparison bodies.
+
+WGSL-backend review batch (0037–0038, commit `aee7ae30`):
+
+1. 0037 — mirror of 0034 for the device backend: the emitted `Select`
+   condition and the CPU oracle both use IEEE `!= 0.0f`, so `-0.0`
+   flips the branch versus the interpreter's bit-test; the oracle ↔
+   interpreter test grid never contains `-0.0`, so it stays green.
+2. 0038 — the emitter is never executed or parsed: WGSL `sign(±0)`
+   (spec: 0) ≠ Rust `signum` (±1), WGSL `round` is ties-to-even while
+   Rust/interpreter are half-away-from-zero, the `hypot` `sqrt(a*a)`
+   form overflows f32 at 1e20 where the oracle does not, and the
+   `trunc`-based `Rem` emulation diverges from `fmodf` on 1.85M/4.1M
+   sampled pairs (up to inf-vs-finite). The doc's "`naga` validation
+   is added as a dev-dependency" claim is false — no `naga`/`wgpu`
+   anywhere in the workspace; `validate_shader` is a bracket check.
+3. Scope note added to 0036: `eligible()` also admits kernels whose
+   interpreter run always traps (e.g. `a / 0.0`) while a device kernel
+   would return inf/NaN — trap semantics need one decision for all
+   backends. Both new backends remain un-wired (zero callers outside
+   their modules), consistent with the RFC-0027 posture.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
