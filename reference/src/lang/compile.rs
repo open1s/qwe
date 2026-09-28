@@ -1079,6 +1079,8 @@ pub(crate) struct ModuleInfo {
     imports: Vec<(ImportDirective, std::path::PathBuf)>,
     /// A declared `module <name>` (RFC-0045), if any — the module's stable id.
     declared_name: Option<String>,
+    /// A declared `module <name> <version>` version, if any (recorded).
+    declared_version: Option<String>,
     /// A declared `export …` surface (RFC-0045); `None` = everything public.
     exports: Option<Vec<String>>,
 }
@@ -1097,13 +1099,14 @@ pub(crate) fn ident_tokens(text: &str) -> Option<Vec<String>> {
 
 /// Parses a `module <dotted.name>` line directive (RFC-0045): a module's stable
 /// identity, independent of its file path. Returns the declared name.
-pub(crate) fn parse_module_line(line: &str) -> Option<String> {
+pub(crate) fn parse_module_line(line: &str) -> Option<(String, Option<String>)> {
     let t = line.trim();
     let rest = t.strip_prefix("module")?;
     if !rest.starts_with(|c: char| c.is_whitespace()) {
         return None;
     }
-    let name = rest.trim();
+    let mut it = rest.split_whitespace();
+    let name = it.next()?;
     if name.is_empty()
         || !name
             .chars()
@@ -1111,7 +1114,8 @@ pub(crate) fn parse_module_line(line: &str) -> Option<String> {
     {
         return None;
     }
-    Some(name.to_string())
+    let version = it.next().map(str::to_string);
+    Some((name.to_string(), version))
 }
 
 /// Parses an `export a, b` (or `export { a, b }`) line directive (RFC-0045):
@@ -1139,6 +1143,7 @@ pub(crate) fn parse_export_line(line: &str) -> Option<Vec<String>> {
 pub(crate) struct StripResult {
     pub source: String,
     pub declared_name: Option<String>,
+    pub declared_version: Option<String>,
     pub exports: Option<Vec<String>>,
     pub imports: Vec<(ImportDirective, String)>,
 }
@@ -1170,6 +1175,7 @@ fn scan_string_state(line: &str, mut in_string: bool) -> bool {
 pub(crate) fn strip_directives(src: &str) -> StripResult {
     let mut source = String::new();
     let mut declared_name = None;
+    let mut declared_version = None;
     let mut exports: Vec<String> = Vec::new();
     let mut exports_declared = false;
     let mut imports = Vec::new();
@@ -1181,8 +1187,9 @@ pub(crate) fn strip_directives(src: &str) -> StripResult {
             in_string = scan_string_state(line, in_string);
             continue;
         }
-        if let Some(n) = parse_module_line(line) {
+        if let Some((n, v)) = parse_module_line(line) {
             declared_name = Some(n);
+            declared_version = v;
             source.push('\n');
             continue;
         }
@@ -1205,6 +1212,7 @@ pub(crate) fn strip_directives(src: &str) -> StripResult {
     StripResult {
         source,
         declared_name,
+        declared_version,
         exports: exports_declared.then_some(exports),
         imports,
     }
@@ -1335,6 +1343,7 @@ pub(crate) fn collect_module(
     let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
     let strip = strip_directives(&raw);
     let declared_name = strip.declared_name;
+    let declared_version = strip.declared_version;
     let exports = strip.exports;
     let imports: Vec<(ImportDirective, std::path::PathBuf)> = strip
         .imports
@@ -1357,6 +1366,7 @@ pub(crate) fn collect_module(
         parsed,
         imports,
         declared_name,
+        declared_version,
         exports,
     });
     for (d, child) in children {
@@ -1386,7 +1396,14 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
         ns: String::new(),
         aliases: vec![String::new()],
         path: std::path::PathBuf::from("<root>"),
-        declared_name: src.root.lines().find_map(parse_module_line),
+        declared_name: src
+            .root
+            .lines()
+            .find_map(|l| parse_module_line(l).map(|(n, _)| n)),
+        declared_version: src
+            .root
+            .lines()
+            .find_map(|l| parse_module_line(l).and_then(|(_, v)| v)),
         exports: None,
         source: src.root.clone(),
         parsed: root_parsed,
@@ -1398,7 +1415,12 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
             ns: ns.clone(),
             aliases: aliases.clone(),
             path: std::path::PathBuf::from(path),
-            declared_name: source.lines().find_map(parse_module_line),
+            declared_name: source
+                .lines()
+                .find_map(|l| parse_module_line(l).map(|(n, _)| n)),
+            declared_version: source
+                .lines()
+                .find_map(|l| parse_module_line(l).and_then(|(_, v)| v)),
             exports: None,
             source: source.clone(),
             parsed,
@@ -1443,10 +1465,28 @@ fn load_program_sources_inner(
     // then path), independent of filesystem discovery order.
     if modules.len() > 1 {
         let root = modules.remove(0);
-        modules.sort_by(|a, b| a.ns.cmp(&b.ns).then_with(|| a.path.cmp(&b.path)));
+        modules.sort_by(|a, b| {
+            a.ns.cmp(&b.ns)
+                .then_with(|| a.declared_version.cmp(&b.declared_version))
+                .then_with(|| a.path.cmp(&b.path))
+        });
         modules.insert(0, root);
     }
-    // Resolve `from … import …` alias requests against the child's namespace.
+    // Module exports by namespace, for `from … import …` privacy (RFC-0045).
+    let mut exports_by_ns: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        Default::default();
+    for m in &modules {
+        if let Some(ex) = &m.exports {
+            let set: std::collections::BTreeSet<String> = ex.iter().cloned().collect();
+            for a in &m.aliases {
+                if !a.is_empty() {
+                    exports_by_ns.insert(a.clone(), set.clone());
+                }
+            }
+        }
+    }
+    // Resolve `from … import …` alias requests against the child's namespace,
+    // enforcing its `export` surface (detail 102).
     let mut aliases: Vec<(String, String)> = Vec::new();
     for m in &modules {
         for (d, child) in &m.imports {
@@ -1458,6 +1498,16 @@ fn load_program_sources_inner(
                     .map(|i| modules[i].ns.clone())
                     .unwrap_or_else(|| module_stem(&d.path));
                 for n in names {
+                    if let Some(ex) = exports_by_ns.get(&child_ns) {
+                        if !ex.contains(n) {
+                            return Err(error_at(
+                                Status::Invalid,
+                                102,
+                                0,
+                                format!("`{n}` is not exported by module `{child_ns}`"),
+                            ));
+                        }
+                    }
                     aliases.push((n.clone(), format!("{child_ns}.{n}")));
                 }
             }

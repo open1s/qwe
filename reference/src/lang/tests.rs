@@ -3420,3 +3420,55 @@ fn module_directive_after_quoted_comment_is_stripped() {
     );
     LangRuntime::compile(src).unwrap();
 }
+
+#[test]
+fn from_import_respects_export_surface() {
+    let dir = std::env::temp_dir().join(format!("pwe_fi_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(
+        dir.join("u.pwe"),
+        "module util\nworld { }\nfuncs { f(x) { x + 1.0 }  g(x) { x - 1.0 } }\nexport f\n",
+    )
+    .unwrap();
+    // `from … import g` (unexported) is rejected (102)...
+    std::fs::write(
+        dir.join("root.pwe"),
+        "from \"u\" import g\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = g(x) } }\n",
+    )
+    .unwrap();
+    assert_eq!(
+        crate::lang::compile_file(&dir.join("root.pwe"))
+            .err()
+            .map(|e| e.detail),
+        Some(102)
+    );
+    // ...but importing the exported `f` is fine.
+    std::fs::write(
+        dir.join("root.pwe"),
+        "from \"u\" import f\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = f(x) } }\n",
+    )
+    .unwrap();
+    assert!(crate::lang::compile_file(&dir.join("root.pwe")).is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn module_declaration_may_carry_a_version() {
+    let dir = std::env::temp_dir().join(format!("pwe_mv_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(
+        dir.join("u.pwe"),
+        "module util 1.2\nworld { }\nfuncs { f(x) { x + 1.0 } }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("root.pwe"),
+        "import \"u\"\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = util.f(x) } }\n",
+    )
+    .unwrap();
+    assert!(crate::lang::compile_file(&dir.join("root.pwe")).is_ok());
+    let strip = crate::lang::compile::strip_directives("module util 1.2\nworld { }\n");
+    assert_eq!(strip.declared_name.as_deref(), Some("util"));
+    assert_eq!(strip.declared_version.as_deref(), Some("1.2"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

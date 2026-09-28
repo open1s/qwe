@@ -590,6 +590,54 @@ fn extensions(report: &mut Report) {
     );
 }
 
+/// RFC-0045: the semantic module system — a two-module program compiles, runs
+/// cross-backend, and its `export` surface is enforced.
+fn modules(report: &mut Report) {
+    let dir = std::env::temp_dir().join(format!("pwe_conf_mod_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(
+        dir.join("u.pwe"),
+        "module util\nworld { }\nfuncs { f(x) { x + 1.0 }  g(x) { x - 1.0 } }\nexport f\n",
+    );
+    let _ = std::fs::write(
+        dir.join("root.pwe"),
+        "import \"u\"\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = util.f(x) } }\n",
+    );
+    let run_ok = (|| -> Result<(), pwe_api::Error> {
+        let compiled = pwe_reference::lang::compile_file(&dir.join("root.pwe"))?;
+        let scene = compiled.parsed.model.build_scene();
+        let mut rt = pwe_reference::lang::LangRuntime::from_compiled_region(
+            compiled,
+            scene,
+            pwe_api::RegionId(1),
+        )?;
+        rt.step_cross_n(20)?;
+        Ok(())
+    })()
+    .is_ok();
+    report.record(
+        "RFC-0045 semantic modules (import + export, cross-backend)",
+        if run_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // The unexported `g` is rejected across the module boundary (detail 102).
+    let _ = std::fs::write(
+        dir.join("root.pwe"),
+        "import \"u\"\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = util.g(x) } }\n",
+    );
+    let privacy = matches!(
+        pwe_reference::lang::compile_file(&dir.join("root.pwe"))
+            .err()
+            .map(|e| e.detail),
+        Some(102)
+    );
+    report.record(
+        "RFC-0045 module export surface enforced (detail 102)",
+        if privacy { Case::Pass } else { Case::Fail },
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn main() {
     let mut report = Report::new();
     wir_round_trip(&mut report);
@@ -604,6 +652,7 @@ fn main() {
     language_compile_cross(&mut report);
     physics_sanity(&mut report);
     extensions(&mut report);
+    modules(&mut report);
     report.emit();
 }
 

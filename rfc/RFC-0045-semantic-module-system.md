@@ -1,9 +1,5 @@
 # RFC-0045: Semantic module system
-**Status:** Accepted (implemented, RFC-0045 slice 1-2). A first-class module
-system with an explicit surface. Implemented: `module <dotted.name>` (stable
-identity + alias), `export a, b` surface with privacy enforcement (detail 102),
-duplicate-module detection (101), and deterministic (layout-independent) merge
-order. Remaining: `from … import …` privacy, module versions.
+**Status:** Accepted (fully implemented). A first-class module system: `module <dotted.name> [<version>]` (stable identity + alias, version recorded), `export` surface with privacy enforced for qualified calls **and** `from … import …` (detail 102), duplicate-module detection (101), deterministic (layout-independent) merge order, string-aware directive stripping on every code path, and module sources folded into the artifact identity (a module change changes the artifact hash). Conformance: `pwe-conformance` RFC-0045 cases (cross-backend + privacy); tests `module_declaration_and_collision`, `module_export_privacy`, `module_export_privacy_applies_to_funcs`, `from_import_respects_export_surface`, `module_declaration_may_carry_a_version`.
 
 ## Motivation
 
