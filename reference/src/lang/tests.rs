@@ -3111,3 +3111,37 @@ fn orient_slot_write_warning() {
     );
     clear_diagnostics();
 }
+
+#[test]
+fn native_jit_promotes_and_matches_interpreter() {
+    // A fully-native-eligible kernel (nbody) run past the promotion threshold:
+    // `step_cross` compares the interpreter against the JIT each step, so once
+    // the native backend engages it is differentially verified byte-for-byte.
+    let mut src = String::from("world { gravity=(0,0,0)\n");
+    for i in 0..4 {
+        let a = i as f64 * 0.37;
+        src += &format!(
+            "  entity b{i} {{ state = ({:.4}, {:.4}, 0, 0, 0, 0, 1.0) }}\n",
+            a.cos() * 5.0,
+            a.sin() * 5.0
+        );
+    }
+    src += "}\nsystems { nbody { G = 0.001; dt = 0.001 } }\n";
+    let mut rt = LangRuntime::compile(&src).unwrap();
+    rt.enable_native_jit(true);
+    rt.step_cross_n(crate::jit::NATIVE_PROMOTE + 32).unwrap();
+    // If a C compiler is available, promotion must have run native code.
+    if std::process::Command::new("cc")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        assert!(
+            rt.native_executions() > 0,
+            "native JIT must promote and run on a hot, eligible kernel"
+        );
+    }
+}

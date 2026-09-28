@@ -11,10 +11,12 @@
 //! resumes generic semantics.
 
 use crate::eir::{EirModule, WorldWrite};
+use crate::native::NativeProgram;
 use crate::sha256::digest;
 use pwe_api::{Access, Error, Hash256, Result, Status, WorldId, WorldVersion};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 fn error(status: Status, detail: u32) -> Error {
     Error {
@@ -84,7 +86,17 @@ pub struct CpuJit {
     grants: Option<Access>,
     /// The manifest a compiled unit must present to be installed.
     required_manifest: Option<Hash256>,
+    /// RFC-0010 JIT: when enabled, a hot unit is promoted to native code
+    /// (validated by differential tests against the interpreter).
+    native_jit: bool,
+    /// Lazily-built native programs per unit (`None` = compile failed; deopt).
+    native: Mutex<BTreeMap<CodeCacheKey, Option<Arc<NativeProgram>>>>,
+    /// Count of executions that actually ran native code (verification aid).
+    native_executions: AtomicU64,
 }
+
+/// Invocation count at which a hot unit is promoted to the native backend.
+pub const NATIVE_PROMOTE: u64 = 64;
 
 impl CpuJit {
     pub fn new() -> Self {
@@ -100,6 +112,33 @@ impl CpuJit {
     /// executable runs without a capability manifest).
     pub fn require_manifest(&mut self, manifest: Hash256) {
         self.required_manifest = Some(manifest);
+    }
+
+    /// The number of steps executed by the native backend (0 until a unit is
+    /// promoted and native execution succeeds).
+    pub fn native_executions(&self) -> u64 {
+        self.native_executions.load(Ordering::Relaxed)
+    }
+
+    /// Enables hotness-based promotion to the native backend (opt-in). When a
+    /// unit reaches [`NATIVE_PROMOTE`] invocations it is compiled to native code
+    /// and executed natively; if that is impossible the interpreter runs instead
+    /// (deopt). The native path is validated to be byte-identical to the
+    /// interpreter by the differential (`step_cross`) tests.
+    pub fn set_native_jit(&mut self, on: bool) {
+        self.native_jit = on;
+    }
+
+    /// Returns the native program for a unit, compiling it once (caching a
+    /// failure as `None` so a non-native unit is not recompiled every step).
+    fn native_for(&self, key: &CodeCacheKey, module: &EirModule) -> Option<Arc<NativeProgram>> {
+        let mut cache = self.native.lock().ok()?;
+        if let Some(entry) = cache.get(key) {
+            return entry.clone();
+        }
+        let built = NativeProgram::compile(module).ok().map(Arc::new);
+        cache.insert(*key, built.clone());
+        built
     }
 
     /// COMPILE: validate the EIR and fold it into a compilation unit. Emits an
@@ -147,6 +186,7 @@ impl CpuJit {
     /// PUBLISH: install a compiled unit atomically.
     pub fn publish(&mut self, code: CompiledCode) -> Result<()> {
         self.ready(&code)?;
+        self.invocations.entry(code.key).or_default();
         self.code.insert(code.key, code);
         Ok(())
     }
@@ -208,8 +248,20 @@ impl CpuJit {
         {
             return code.eir.interpret_with_env(rt, env, world, version);
         }
-        if let Some(counter) = self.invocations.get(key) {
-            counter.fetch_add(1, Ordering::Relaxed);
+        let hot = if let Some(counter) = self.invocations.get(key) {
+            counter.fetch_add(1, Ordering::Relaxed) + 1 >= NATIVE_PROMOTE
+        } else {
+            false
+        };
+        // Promote a hot unit to native code (deopt to the interpreter if the
+        // module has no natively-lowerable entry point).
+        if self.native_jit && hot {
+            if let Some(native) = self.native_for(key, &code.eir) {
+                if let Ok(writes) = native.execute_entries(&code.eir, rt) {
+                    self.native_executions.fetch_add(1, Ordering::Relaxed);
+                    return Ok(writes);
+                }
+            }
         }
         code.eir.interpret_with_env(rt, env, world, version)
     }
@@ -231,8 +283,20 @@ impl CpuJit {
     ) -> Result<Vec<WorldWrite>> {
         let code = self.code.get(key).ok_or(error(Status::HandleStale, 9))?;
         self.ready(code)?;
-        if let Some(counter) = self.invocations.get(key) {
-            counter.fetch_add(1, Ordering::Relaxed);
+        let hot = if let Some(counter) = self.invocations.get(key) {
+            counter.fetch_add(1, Ordering::Relaxed) + 1 >= NATIVE_PROMOTE
+        } else {
+            false
+        };
+        // Promote a hot unit to native code (deopt to the interpreter if the
+        // module has no natively-lowerable entry point).
+        if self.native_jit && hot {
+            if let Some(native) = self.native_for(key, &code.eir) {
+                if let Ok(writes) = native.execute_entries(&code.eir, rt) {
+                    self.native_executions.fetch_add(1, Ordering::Relaxed);
+                    return Ok(writes);
+                }
+            }
         }
         code.eir.execute(rt, env, world, version)
     }

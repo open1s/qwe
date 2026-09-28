@@ -364,6 +364,7 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     let mut port = present_default;
     let mut params: Vec<(String, f64)> = Vec::new();
     let mut check = false;
+    let mut native_jit = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -391,6 +392,9 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
             }
             "--check" => {
                 check = true;
+            }
+            "--native-jit" => {
+                native_jit = true;
             }
             "--port" | "-p" => {
                 let Some(v) = it.next().and_then(|s| s.parse::<u16>().ok()) else {
@@ -456,6 +460,11 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     }
     if check {
         rt.set_finite_check(true);
+    }
+    if native_jit {
+        // Phase-3 hotness JIT: promote hot units to native code (goes through
+        // the JIT lifecycle Validate/CapabilityCheck/Publish gate).
+        rt.enable_native_jit(true);
     }
     match port {
         None => {

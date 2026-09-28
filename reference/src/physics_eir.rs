@@ -474,9 +474,9 @@ impl EirRuntime for SceneRuntime<'_> {
             for j in 0..h {
                 let row = (k * h + j) * w;
                 if w > 2 {
-                    // Branch-free interior (unit-stride reads) — vectorizable.
-                    // Off-edge neighbour rows fall back to `row` (== centre for
-                    // the zero-flux stencil).
+                    // Branch-free interior (unit-stride reads) — autovectorized
+                    // by LLVM. Off-edge neighbour rows fall back to `row` (==
+                    // centre for the zero-flux stencil).
                     let ui = if j > 0 { row - w } else { row };
                     let di = if j + 1 < h { row + w } else { row };
                     let bi = if k > 0 { row - w * h } else { row };

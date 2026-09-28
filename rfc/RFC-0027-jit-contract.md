@@ -52,3 +52,15 @@ the differential matrix in the same change.
 Any integration that lifts condition (4) (wiring native code into a production
 entry point) MUST first implement the full lifecycle (CapabilityCheck with a
 manifest, Publish) or obtain a further addendum.
+
+### Supported production path: execution through the JIT
+
+The lifecycle-compliant way to run native code is **through the CPU JIT**
+(`CpuJit`), not the standalone `NativeProgram` API. A hot unit is promoted to
+native code only *after* the JIT has carried out Validate (`compile`),
+CapabilityCheck (`ready`, manifest + grants) and Publish (`publish`), and the
+promotion is skipped (deopt to the interpreter) if the unit is not published or
+its assumptions fail. `pwe run --native-jit` (and `LangRuntime::enable_native_jit`)
+enable this path. The standalone `NativeProgram::compile`/`execute_entries` API
+remains exempt (condition (3) holds: no capability surface beyond the caller's
+own world) and is not wired to `pwe run`/`present`.

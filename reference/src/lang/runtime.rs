@@ -60,6 +60,17 @@ pub struct LangRuntime {
 }
 
 impl LangRuntime {
+    /// Enables hotness-based promotion to the native JIT backend (opt-in;
+    /// verifies byte-identical to the interpreter via `step_cross`).
+    pub fn enable_native_jit(&mut self, on: bool) {
+        self.jit.set_native_jit(on);
+    }
+
+    /// Number of steps the native JIT backend executed.
+    pub fn native_executions(&self) -> u64 {
+        self.jit.native_executions()
+    }
+
     /// Compiles source and boots a runtime with an executable scene.
     pub fn compile(source: &str) -> Result<Self> {
         let compiled = compile(source)?;

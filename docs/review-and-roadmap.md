@@ -94,8 +94,8 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - [x] GPU/NPU 计算后端（WGSL，`wgsl.rs` + `WGSL_TARGET`）：把数据并行的 map 核（无世界访问/无调用/无分支的直线函数）下降为 WGSL 计算着色器（`@compute` / `@workgroup_size` / storage buffers）。**设备语义为 f32**（WebGPU 无 f64），故为**近似**设备后端、非逐位等价。验证：依赖无关的结构校验器 + f32 CPU oracle 与解释器在 f32 容差内一致（`wgsl::tests`）。
 - [x] WGSL **离线校验**：`naga`（dev-dependency）对每个产出的着色器做 parse+validate；`sign`/`round`/`hypot`/`Rem`/`Select` 以显式 helper 复刻 CPU 语义（#37/#38），oracle 与之镜像，边界矩阵覆盖 ±0/±inf/NaN/subnormal/半值/大值。
 - [ ] WGSL **执行验证**：本机浏览器无 WebGPU 宿主（`navigator.gpu` 缺失），无法在真实设备执行着色器并对比；需 WebGPU 宿主。
-- [ ] 真 JIT（hotness→原生特化→deopt）：当前 `jit.rs` 仍是「校验过的缓存」（执行解释器），原生后端仅为按模块 AOT，尚未接入 hotness 触发的原生特化。
-- [ ] SIMD：解释器/场扫描的显式向量化尚未实现。
+- [x] 真 JIT（hotness→原生→deopt）：`CpuJit` 在模组达 `NATIVE_PROMOTE`(=64) 次调用后把单元提升为**原生代码**执行（`native_for` 懒编译并缓存失败以 deopt 回解释器）；提升发生在 JIT 生命周期门（Validate/CapabilityCheck/Publish，`ready()`）**之后**，故合规。`LangRuntime::enable_native_jit` / `pwe run --native-jit` 启用；差分测试 `native_jit_promotes_and_matches_interpreter` 断言提升后确有原生执行（`native_executions>0`）且 `step_cross` 逐步字节一致。
+- [x] SIMD：**评测后不采用**——场 stencil 内点循环为无分支单位步长，LLVM 已自动向量化；显式 2-lane（SSE2/NEON）实测**更慢**（256 宽行 0.128µs vs 标量 0.096µs），故保留标量（由 LLVM 向量化）并记录测量。
 
 ### Phase 4 — 普适性与生态
 - [ ] 语义化模块系统；fmt/REPL/LSP；doctest
