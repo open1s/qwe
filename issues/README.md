@@ -87,6 +87,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0058](https://github.com/open1s/qwe/issues/58) | Medium | pwe lsp publishes a bogus parse failure (code 60, range 0:0) for any document with `import` - in-memory `lang::compile` = `parse+compile_program` has no module loader while CLI `compile_file` uses `load_program_sources`; same root cause makes doctest unable to check import doc blocks | cli/src/lsp.rs (diagnostics), reference/src/lang/compile.rs:1908 |
 | [0059](https://github.com/open1s/qwe/issues/59) | Low | pwe lsp diagnostic ranges are 0:0 for warnings (85/100/94) and parse errors: Ok-path hardcodes `diag_json(..., 0, ...)` ignoring `d.byte_offset`, and upstream push_diag sites record 0 (error_at errors like 52 map correctly - positive control) | cli/src/lsp.rs (diagnostics), reference/src/lang/diagnostics.rs |
 | [0060](https://github.com/open1s/qwe/issues/60) | Low | pwe lsp/json non-BMP handling: `\uD800-\uDFFF` surrogate escapes decode independently to U+FFFD (document text corrupted for escaping clients); `pos_at` counts code points, not UTF-16 units (astral columns off; BMP/CJK unaffected) | cli/src/json.rs (string), cli/src/lsp.rs (pos_at) |
+| [0061](https://github.com/open1s/qwe/issues/61) | Low | fuzz ALPHABET has no digits/`_`/`@`/`~`/`^` - numeric-literal, slot-index and unit-annotation paths never fuzzed (0% of samples contain a digit); single hard-coded seed, 160-byte cap | reference/tests/fuzz.rs (parser_and_compiler_never_panic_on_random_source) |
 
 ## Suggested order
 
@@ -612,5 +613,24 @@ Review pass 17 (`c5509c60` `pwe lsp`, filed 0058-0060):
    push_diag sites also record 0; `error_at` errors (52) map correctly (control).
 6. 0060 filed (Low): non-BMP - surrogate-pair escapes decode to U+FFFD and
    `pos_at` counts code points instead of UTF-16 (astral-only; CJK fine).
+
+Review pass 18 (`61e38bd6` fuzz + Miri, filed 0061):
+
+1. Snapshot gates green: fmt, clippy `-D warnings`, 384 tests (README badge,
+   prose and suite table all match actual; breakdown 334+18+4+3+2+23 verified),
+   conformance 18/18.
+2. Shipped fuzz verified: `cargo test -p pwe-reference --test fuzz` passes in
+   0.10 s (deterministic seeds, CI-cheap); `cfg!(miri)` reduces iterations.
+3. Documented Miri command verified verbatim: `rustup component add miri
+   --toolchain nightly` then `cargo +nightly miri test -p pwe-reference
+   --test fuzz` -> 2 passed, 0 failed (62.7 s).
+4. Stress-hunted beyond the shipped suite (out-of-tree, not committed): 5 seeds
+   x 20 000 formatter inputs with digits/`_`/`@`/`~` added + 4 x 50 000 decoder
+   byte inputs + 2 x 20 000 compile inputs -> zero panics, zero idempotence
+   failures. Invariants hold under heavier fuzzing.
+5. 0061 filed (Low): shipped ALPHABET contains no digits (nor `_@~^`), so
+   numeric literals, `sN` slot indices and unit annotations are structurally
+   unreachable for the fuzzer; single fixed seed + 160-byte cap. Coverage gap
+   only - the heavier digit-inclusive hunt found no product bug.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
