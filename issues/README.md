@@ -343,4 +343,19 @@ Review/test pass 16 (`55457ff1` — Metal GPU backend for field sweeps):
    single `scene_rt` helper would collapse them; the commit message
    repeats the already-landed native-JIT-default line.
 
+Fix-verification pass 7 (`81a46dd3`, pass 17 — closure of 0042):
+
+1. 0042 verified fixed, closed: stub `enable_gpu` now returns detail 97
+   ("GPU backend not built (rebuild with --features gpu on macOS)",
+   covering the non-macOS case too) and `Gpu::new` failures return
+   detail 98 ("no Metal GPU device available"); both names registered in
+   `detail_name`, no collisions. Observed live: no-feature build rc=1
+   with the new message; feature build banner + rc=0.
+2. Residuals noted in the close comment (not filed): `Gpu::new` doc
+   still says detail 5; MSL compile failure conflated with no-device in
+   d98 (practically unreachable for the fixed inline kernel).
+3. Gates: fmt, clippy `--all-features`, 359 tests, 346 tests
+   `--features gpu`, conformance 18/18. 0041 (GPU path net-slower)
+   remains open, untouched by this commit.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
