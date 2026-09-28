@@ -37,6 +37,7 @@ fn main() {
         Some("migrate") => cmd_migrate(&args[1..]),
         Some("playground") => cmd_playground(&args[1..]),
         Some("fmt") => cmd_fmt(&args[1..]),
+        Some("repl") => cmd_repl(),
         Some("-h") | Some("--help") | None => {
             usage();
             0
@@ -366,6 +367,169 @@ fn cmd_compile(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// repl
+// ---------------------------------------------------------------------------
+
+/// Interactive REPL: accumulate source lines, then `:run [N]` / `:step [N]`.
+/// The core is `run_repl`, which reads from any `BufRead` and writes to any
+/// `Write`, so it is scriptable and unit-tested.
+fn cmd_repl() -> i32 {
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    run_repl(stdin.lock(), &mut out)
+}
+
+fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -> i32 {
+    let _ = writeln!(
+        out,
+        "PWE REPL — type source (lines accumulate), then `:run [N]`; `:help` for commands."
+    );
+    let mut buffer = String::new();
+    let mut runtime: Option<(LangRuntime, pwe_reference::scene::Scene, String)> = None;
+    let mut line = String::new();
+    loop {
+        let _ = write!(out, "pwe> ");
+        let _ = out.flush();
+        line.clear();
+        match input.read_line(&mut line) {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        let text = line.trim_end();
+        if let Some(cmd) = text.strip_prefix(':') {
+            let mut parts = cmd.split_whitespace();
+            let name = parts.next().unwrap_or("");
+            let arg = parts.next();
+            match name {
+                "q" | "quit" | "exit" => break,
+                "help" => {
+                    let _ = writeln!(
+                        out,
+                        ":run [N]  compile the buffer and run N steps (default 60)\n\
+                         :step [N] step the current program N times (default 1)\n\
+                         :reset    restart the current program from step 0\n\
+                         :show     print the buffer   :clear  empty the buffer\n\
+                         :load P   load source from file P   :quit  exit"
+                    );
+                }
+                "show" => {
+                    let _ = write!(out, "{buffer}");
+                }
+                "clear" => buffer.clear(),
+                "load" => match arg {
+                    Some(path) => match std::fs::read_to_string(path) {
+                        Ok(s) => {
+                            buffer = s;
+                            let _ = writeln!(out, "loaded {path} ({} bytes)", buffer.len());
+                        }
+                        Err(e) => {
+                            let _ = writeln!(out, "cannot read {path}: {e}");
+                        }
+                    },
+                    None => {
+                        let _ = writeln!(out, ":load needs a path");
+                    }
+                },
+                "run" => {
+                    let steps: u64 = arg.and_then(|a| a.parse().ok()).unwrap_or(60);
+                    if buffer.trim().is_empty() {
+                        let _ = writeln!(out, "(buffer is empty: type source first)");
+                        continue;
+                    }
+                    match LangRuntime::compile(&buffer) {
+                        Ok(mut rt) => {
+                            let initial = rt.scene.clone();
+                            let src = buffer.clone();
+                            match repl_steps(&mut rt, steps, out) {
+                                Ok(()) => {
+                                    repl_report(&rt, steps, out);
+                                    runtime = Some((rt, initial, src));
+                                }
+                                Err(e) => {
+                                    let _ = writeln!(out, "{}", lang::diagnose(&src, &e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = writeln!(out, "{}", lang::diagnose(&buffer, &e));
+                        }
+                    }
+                }
+                "step" => {
+                    let n: u64 = arg.and_then(|a| a.parse().ok()).unwrap_or(1);
+                    match runtime.as_mut() {
+                        Some((rt, _initial, src)) => match repl_steps(rt, n, out) {
+                            Ok(()) => repl_report(rt, n, out),
+                            Err(e) => {
+                                let _ = writeln!(out, "{}", lang::diagnose(src, &e));
+                            }
+                        },
+                        None => {
+                            let _ = writeln!(out, "(no program yet: use :run first)");
+                        }
+                    }
+                }
+                "reset" => match runtime.as_mut() {
+                    Some((rt, initial, _)) => {
+                        rt.reset_to(initial.clone());
+                        let _ = writeln!(out, "reset to step 0");
+                    }
+                    None => {
+                        let _ = writeln!(out, "(no program yet: use :run first)");
+                    }
+                },
+                "" => {}
+                other => {
+                    let _ = writeln!(out, "unknown command ':{other}' — try :help");
+                }
+            }
+        } else if !text.is_empty() {
+            buffer.push_str(text);
+            buffer.push('\n');
+        }
+    }
+    0
+}
+
+fn repl_steps(
+    rt: &mut LangRuntime,
+    n: u64,
+    out: &mut dyn std::io::Write,
+) -> Result<(), pwe_api::Error> {
+    for _ in 0..n {
+        if let Err(e) = rt.step_interpreter() {
+            for d in lang::take_diagnostics() {
+                let _ = writeln!(out, "  [{}] {}", d.detail, d.message);
+            }
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+fn repl_report(rt: &LangRuntime, steps: u64, out: &mut dyn std::io::Write) {
+    let _ = writeln!(
+        out,
+        "ran {steps} step(s); sim time {:.3}s",
+        rt.scene.sim_time
+    );
+    for e in &rt.present_frame(None).entities {
+        let p = e.position;
+        let _ = writeln!(
+            out,
+            "  #{:<3} {:<14} pos = ({:8.3}, {:8.3}, {:8.3})",
+            e.id, e.name, p.x, p.y, p.z
+        );
+    }
+    for (name, f) in &rt.scene.fields {
+        let _ = writeln!(out, "  field {name}: total={:.6}", f.total());
+    }
+    let _ = out.flush();
 }
 
 // ---------------------------------------------------------------------------
@@ -843,5 +1007,33 @@ fn report(rt: &LangRuntime, steps: u64) {
     }
     for line in rt.logs() {
         println!("  {line}");
+    }
+}
+
+#[cfg(test)]
+mod repl_tests {
+    use super::run_repl;
+
+    #[test]
+    fn repl_script_compiles_runs_and_steps() {
+        let script = "world { gravity=(0,0,0) entity e { state=(x=0.0) } }\n\
+                      systems { update { on=e; dt=1.0  x = x + inte(1.0) } }\n\
+                      :run 3\n:step 2\n:show\n:quit\n";
+        let mut out = Vec::new();
+        let code = run_repl(std::io::Cursor::new(script), &mut out);
+        assert_eq!(code, 0);
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("ran 3 step(s)"), "output:\n{s}");
+        assert!(s.contains("ran 2 step(s)"), "output:\n{s}");
+    }
+
+    #[test]
+    fn repl_reports_diagnostics() {
+        let script = "world { entity e { state=(x=0.0) } }\n\
+                      systems { update { on=e; dt=1.0 x = nope(1.0) } }\n:run 1\n:quit\n";
+        let mut out = Vec::new();
+        run_repl(std::io::Cursor::new(script), &mut out);
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("error 59"), "output:\n{s}");
     }
 }
