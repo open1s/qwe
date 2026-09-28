@@ -2,16 +2,23 @@
 //! that emits C, compiles it with the system C compiler (`cc -O2`), and loads
 //! the result with `dlopen`.
 //!
-//! This is a *real* native backend (not a validated cache): the emitted code is
-//! machine code produced by the platform compiler. It sits at the
-//! [`crate::aot::AotProgram`] `target` boundary ([`NATIVE_TARGET`]).
+//! This is a *real* native backend (machine code from the platform compiler).
+//! It sits at the [`crate::aot::AotProgram`] `target` boundary ([`NATIVE_TARGET`]).
 //!
-//! Scope: pure functions *and* functions that read/write world components
-//! (`ReadView`/`ReadCommitted`/`WriteView`) through `extern "C"` shims into a
-//! [`NativeCtx`]. Functions with effects (`time`/`random`/events/IO), spatial
-//! queries, or grid-field access are ineligible and stay on the interpreter.
-//! The interpreter remains the semantic oracle: the differential test runs the
-//! same program natively and interpretively and requires identical writes.
+//! **Scope / contract (RFC-0027 addendum).** Only *in-process* functions with no
+//! world capability surface beyond component reads/writes are compiled; this is
+//! a defined exemption from the full JIT lifecycle (see the addendum at the end
+//! of `rfc/RFC-0027-jit-contract.md`). The module is validated (SSA types +
+//! linear dominance) before any code is emitted, the artifact is content-hash
+//! identified, and functions with effects (time/random/io/atomic/resources) or
+//! spatial/field access stay on the interpreter. This backend is **not wired
+//! into `pwe run`/`present`** — it is reachable only from its own API/tests, and
+//! a future integration must run the full lifecycle.
+//!
+//! The interpreter remains the semantic oracle: the differential tests run the
+//! same program natively and interpretively and require identical results,
+//! including divisION-by-zero traps (detail 18), `signum` of ±0.0/NaN, and
+//! bit-exact condition tests.
 //!
 //! Availability: requires a system `cc`; [`NativeProgram::compile`] returns an
 //! error (detail 5) when no compiler is present, so this never becomes a hard
@@ -21,7 +28,7 @@ use crate::eir::{
     ComponentRef, EirModule, EirRuntime, Function, Immediate, Opcode, WorldWrite,
     EIR_EFFECT_BARRIER, EIR_EFFECT_READ_WORLD, EIR_EFFECT_WRITE_WORLD,
 };
-use pwe_api::{ComponentTypeId, Error, Result, Status};
+use pwe_api::{ComponentTypeId, Error, Hash256, Result, Status};
 use std::os::raw::{c_char, c_int, c_void};
 
 /// The `target` value selecting the native C backend at the AOT boundary.
@@ -44,15 +51,6 @@ extern "C" {
 
 const RTLD_NOW: c_int = 2;
 
-/// The execution context handed to native world-access shims: a borrowed
-/// runtime plus the write accumulator, and a slot for the first runtime error
-/// (C cannot unwind, so shims record and the caller re-raises).
-pub(crate) struct NativeCtx<'a> {
-    pub rt: &'a mut dyn EirRuntime,
-    pub writes: &'a mut Vec<WorldWrite>,
-    pub error: Option<Error>,
-}
-
 /// The C-ABI function table passed to generated code (so the compiled library
 /// resolves runtime calls through pointers, not exported symbols).
 #[repr(C)]
@@ -60,7 +58,17 @@ pub(crate) struct PweCtx {
     pub read: unsafe extern "C" fn(*mut c_void, u64, u64, u32, u32, u32, u32, u32) -> f64,
     pub read_committed: unsafe extern "C" fn(*mut c_void, u64, u64, u32, u32, u32, u32, u32) -> f64,
     pub write: unsafe extern "C" fn(*mut c_void, u64, u64, u32, u32, u32, u32, u32, f64),
+    pub div_guard: unsafe extern "C" fn(*mut c_void, f64) -> c_int,
     pub env: *mut c_void,
+}
+
+/// The execution context handed to native shims: a borrowed runtime plus the
+/// write accumulator, and the first runtime error (C cannot unwind, so shims
+/// record and the caller re-raises).
+pub(crate) struct NativeCtx<'a> {
+    pub rt: &'a mut dyn EirRuntime,
+    pub writes: &'a mut Vec<WorldWrite>,
+    pub error: Option<Error>,
 }
 
 fn limbs(component: ComponentTypeId) -> (u32, u32, u32, u32) {
@@ -98,12 +106,12 @@ fn target_of(
     }
 }
 
-/// World-access shims (`#[no_mangle]` so the emitted C can call them).
+/// World-access shims (`extern "C"`, called through [`PweCtx`]).
 ///
 /// # Safety
 /// `env` must be a non-null pointer to a live [`NativeCtx`] for the duration of
-/// the native call; that is guaranteed by [`NativeProgram::execute_entries`],
-/// which only calls generated code with a pointer it created.
+/// the native call; [`NativeProgram`] only calls generated code with a pointer
+/// it created for exactly that purpose.
 pub(crate) unsafe extern "C" fn pwe_read_view(
     env: *mut c_void,
     entity_lo: u64,
@@ -171,12 +179,44 @@ pub(crate) unsafe extern "C" fn pwe_write_view(
     });
 }
 
+/// RFC-0021 division/remainder guard: returns 1 (and records `EirInvalid` 18)
+/// when `divisor` is exactly zero (`+0.0` or `-0.0`), else 0. Generated code
+/// returns early on 1, so a divide-by-zero fails the step exactly like the
+/// interpreter instead of yielding `inf`/`NaN`.
+///
+/// # Safety
+/// Same contract as [`pwe_read_view`].
+pub(crate) unsafe extern "C" fn pwe_div_guard(env: *mut c_void, divisor: f64) -> c_int {
+    if divisor == 0.0 {
+        let ctx = &mut *(env as *mut NativeCtx);
+        ctx.error
+            .get_or_insert_with(|| error(Status::EirInvalid, 18));
+        1
+    } else {
+        0
+    }
+}
+
 /// A loaded native library of EIR functions (`pwe_f_<id>`).
 pub struct NativeProgram {
     #[cfg(unix)]
     handle: *mut c_void,
-    /// Ids of the functions that were compiled.
-    compiled: Vec<u64>,
+    /// id -> (arity, reads-or-writes-world) for every compiled function.
+    #[cfg(unix)]
+    metas: Vec<FnMeta>,
+    /// The unique artifact directory (removed on drop).
+    dir: std::path::PathBuf,
+    /// Content identity of the emitted artifact (RFC-0035 style).
+    pub artifact_hash: Hash256,
+    /// The backend target (`NATIVE_TARGET`).
+    pub target: u16,
+}
+
+#[derive(Clone, Copy)]
+struct FnMeta {
+    id: u64,
+    arity: u32,
+    world: bool,
 }
 
 // The handle is only used for read-only symbol lookup; the compiled code is
@@ -192,7 +232,12 @@ impl Drop for NativeProgram {
                 dlclose(self.handle);
             }
         }
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+fn is_world(f: &Function) -> bool {
+    f.effect_mask & (EIR_EFFECT_READ_WORLD | EIR_EFFECT_WRITE_WORLD) != 0
 }
 
 fn eligible(f: &Function) -> bool {
@@ -253,10 +298,16 @@ fn eligible(f: &Function) -> bool {
 }
 
 impl NativeProgram {
-    /// COMPILE: emit C for every eligible function whose `Call` targets are
-    /// also eligible, compile it with `cc`, and load it. Ineligible functions
-    /// stay on the interpreter.
+    /// COMPILE: validate the module, emit C for every eligible function whose
+    /// `Call` targets are also eligible, compile it with `cc`, and load it.
+    ///
+    /// Ineligible functions stay on the interpreter. The artifact is keyed by
+    /// its content hash, so two different programs never share a loaded image.
     pub fn compile(module: &EirModule) -> Result<Self> {
+        // RFC-0027 Validate stage: never emit code for an unvalidated module.
+        module.validate(true)?;
+        module.verify_linear_dominance()?;
+
         // Start from the eligible set, then close under `Call` (a function that
         // calls an ineligible function cannot be emitted).
         let mut chosen: Vec<&Function> = module.functions.iter().filter(|f| eligible(f)).collect();
@@ -280,12 +331,19 @@ impl NativeProgram {
             return Err(error(Status::Invalid, 5));
         }
         let source = emit_module(&chosen);
-        // Unique per compile: tests run in parallel threads sharing a pid, so a
-        // pid-only path would let one compile clobber another's library.
+        // Artifact identity: SHA-256 of the emitted source (RFC-0035 style).
+        let artifact_hash = crate::sha256::digest(source.as_bytes());
+        let short = artifact_hash
+            .0
+            .iter()
+            .take(8)
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         static NATIVE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let seq = NATIVE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("pwe_native_{}_{seq}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|_| error(Status::Invalid, 5))?;
+        let dir =
+            std::env::temp_dir().join(format!("pwe_native_{}_{seq}_{short}", std::process::id()));
+        create_private_dir(&dir)?;
         let c_path = dir.join("pwe_native.c");
         let lib_path = dir.join(if cfg!(target_os = "macos") {
             "libpwe_native.dylib"
@@ -306,6 +364,7 @@ impl NativeProgram {
             .status()
             .map_err(|_| error(Status::Invalid, 5))?;
         if !status.success() {
+            let _ = std::fs::remove_dir_all(&dir);
             return Err(error(Status::Invalid, 5));
         }
         #[cfg(unix)]
@@ -314,22 +373,46 @@ impl NativeProgram {
                 .map_err(|_| error(Status::Invalid, 5))?;
             let handle = unsafe { dlopen(cpath.as_ptr(), RTLD_NOW) };
             if handle.is_null() {
+                let _ = std::fs::remove_dir_all(&dir);
                 return Err(error(Status::Invalid, 5));
             }
             Ok(Self {
                 handle,
-                compiled: chosen.iter().map(|f| f.id).collect(),
+                metas: chosen
+                    .iter()
+                    .map(|f| FnMeta {
+                        id: f.id,
+                        arity: f.argument_count,
+                        world: is_world(f),
+                    })
+                    .collect(),
+                dir,
+                artifact_hash,
+                target: NATIVE_TARGET,
             })
         }
         #[cfg(not(unix))]
         {
+            let _ = &dir;
             Err(error(Status::SchemaUnsupported, 5))
         }
     }
 
     /// Whether function `id` was lowered natively.
     pub fn has(&self, id: u64) -> bool {
-        self.compiled.contains(&id)
+        self.meta(id).is_some()
+    }
+
+    fn meta(&self, id: u64) -> Option<FnMeta> {
+        #[cfg(unix)]
+        {
+            self.metas.iter().copied().find(|m| m.id == id)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = id;
+            None
+        }
     }
 
     #[cfg(unix)]
@@ -346,13 +429,43 @@ impl NativeProgram {
         Ok(unsafe { std::mem::transmute::<*mut c_void, NativeFn>(ptr) })
     }
 
-    /// Calls a compiled pure function with `args` (its parameters, in order).
-    /// Passes a null context — only valid for functions with no world access.
+    /// Calls a compiled **pure** function with `args` (its parameters, in
+    /// order). Errors (never traps) if the function is unknown, takes world
+    /// access (use [`Self::execute_entries`]), or `args.len()` does not match
+    /// the arity — the latter would otherwise read out of bounds in the
+    /// generated code.
     pub fn call(&self, id: u64, args: &[f64]) -> Result<f64> {
+        let meta = self.meta(id).ok_or_else(|| error(Status::Invalid, 5))?;
+        if meta.world {
+            return Err(error(Status::Invalid, 5));
+        }
+        if args.len() != meta.arity as usize {
+            return Err(error(Status::Invalid, 5));
+        }
         #[cfg(unix)]
         {
-            let f = self.symbol(id)?;
-            Ok(unsafe { f(std::ptr::null_mut(), args.as_ptr()) })
+            let func = self.symbol(id)?;
+            // A no-op runtime: pure functions never touch the world, but the
+            // division guard still needs a live context to record traps.
+            let mut noop = crate::eir::NoopRuntime;
+            let mut writes: Vec<WorldWrite> = Vec::new();
+            let mut ctx = NativeCtx {
+                rt: &mut noop,
+                writes: &mut writes,
+                error: None,
+            };
+            let table = PweCtx {
+                read: pwe_read_view,
+                read_committed: pwe_read_committed,
+                write: pwe_write_view,
+                div_guard: pwe_div_guard,
+                env: &mut ctx as *mut NativeCtx as *mut c_void,
+            };
+            let out = unsafe { func(&table as *const PweCtx as *mut c_void, args.as_ptr()) };
+            match ctx.error.take() {
+                Some(e) => Err(e),
+                None => Ok(out),
+            }
         }
         #[cfg(not(unix))]
         {
@@ -392,6 +505,7 @@ impl NativeProgram {
                 read: pwe_read_view,
                 read_committed: pwe_read_committed,
                 write: pwe_write_view,
+                div_guard: pwe_div_guard,
                 env: &mut ctx as *mut NativeCtx as *mut c_void,
             };
             let empty: [f64; 0] = [];
@@ -406,19 +520,38 @@ impl NativeProgram {
     }
 }
 
+/// Creates `dir` with `0700` permissions (owner-only) on unix, rejecting a
+/// pre-existing path so a planted symlink can't redirect our writes.
+fn create_private_dir(dir: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(dir)
+            .map_err(|_| error(Status::Invalid, 5))
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir(dir).map_err(|_| error(Status::Invalid, 5))
+    }
+}
+
 #[cfg(unix)]
 type NativeFn = unsafe extern "C" fn(*mut c_void, *const f64) -> f64;
 
 /// Emits one C translation unit with a function per entry.
 fn emit_module(functions: &[&Function]) -> String {
     let mut s = String::from(
-        "#include <math.h>\n#include <stddef.h>\n\
+        "#include <math.h>\n#include <stddef.h>\n#include <string.h>\n\
          typedef struct {\n\
            double (*read)(void*, unsigned long long, unsigned long long, unsigned, unsigned, unsigned, unsigned, unsigned);\n\
            double (*read_committed)(void*, unsigned long long, unsigned long long, unsigned, unsigned, unsigned, unsigned, unsigned);\n\
            void (*write)(void*, unsigned long long, unsigned long long, unsigned, unsigned, unsigned, unsigned, unsigned, double);\n\
+           int (*div_guard)(void*, double);\n\
            void* env;\n\
-         } PweCtx;\n\n",
+         } PweCtx;\n\
+         static int pwe_truthy(double v){ unsigned long long b; memcpy(&b, &v, 8); return b != 0ULL; }\n\n",
     );
     for f in functions {
         s.push_str(&format!("double pwe_f_{}(void*, const double*);\n", f.id));
@@ -485,7 +618,7 @@ fn unary_fn(op: Opcode) -> Option<&'static str> {
         Opcode::Floor => "floor",
         Opcode::Ceil => "ceil",
         Opcode::Round => "round",
-        Opcode::Sign => return None, // emulated with copysign
+        Opcode::Sign => return None, // exact signum handled explicitly
         Opcode::Log10 => "log10",
         Opcode::Log2 => "log2",
         Opcode::Sinh => "sinh",
@@ -510,6 +643,14 @@ fn shim_call(field: &str, target: ComponentRef, value: Option<u32>) -> String {
         Some(v) => format!("  {head}, r[{v}]);\n"),
         None => format!("{head})"),
     }
+}
+
+/// Emits the divide/remainder guard (RFC-0021 trap on a zero divisor).
+fn div_guard(divisor: u32, dest: u32, expr: String) -> String {
+    format!(
+        "  if (((PweCtx*)ctx)->div_guard(((PweCtx*)ctx)->env, r[{divisor}])) return NAN;\n\
+         \x20 r[{dest}] = {expr};\n"
+    )
 }
 
 fn emit_function(f: &Function) -> String {
@@ -545,13 +686,15 @@ fn emit_function(f: &Function) -> String {
                 c_double(imm_double(ins.constant.unwrap_or(Immediate::F64(0.0))))
             ),
             Opcode::Fma => format!("  r[{res}] = r[{}] * r[{}] + r[{}];\n", o[0], o[1], o[2]),
-            Opcode::Rem => format!("  r[{res}] = fmod(r[{}], r[{}]);\n", o[0], o[1]),
+            Opcode::Rem => div_guard(o[1], res, format!("fmod(r[{}], r[{}])", o[0], o[1])),
             Opcode::Pow => format!("  r[{res}] = pow(r[{}], r[{}]);\n", o[0], o[1]),
             Opcode::Atan2 => format!("  r[{res}] = atan2(r[{}], r[{}]);\n", o[0], o[1]),
             Opcode::Hypot => format!("  r[{res}] = hypot(r[{}], r[{}]);\n", o[0], o[1]),
+            // Exact `f64::signum`: NaN -> NaN (same value), else ±1 by sign
+            // (so ±0.0 map to ±1.0).
             Opcode::Sign => format!(
-                "  r[{res}] = (r[{}] == 0.0) ? 0.0 : copysign(1.0, r[{}]);\n",
-                o[0], o[0]
+                "  r[{res}] = (r[{}] != r[{}]) ? r[{}] : copysign(1.0, r[{}]);\n",
+                o[0], o[0], o[0], o[0]
             ),
             Opcode::ReadView => format!(
                 "  r[{res}] = {};\n",
@@ -571,12 +714,12 @@ fn emit_function(f: &Function) -> String {
                 o.first().copied(),
             ),
             Opcode::Select => format!(
-                "  r[{res}] = (r[{}] != 0.0) ? r[{}] : r[{}];\n",
+                "  r[{res}] = pwe_truthy(r[{}]) ? r[{}] : r[{}];\n",
                 o[0], o[1], o[2]
             ),
             Opcode::Br => format!("  goto L{};\n", o[0]),
             Opcode::CondBr => format!(
-                "  if (r[{}] != 0.0) goto L{}; else goto L{};\n",
+                "  if (pwe_truthy(r[{}])) goto L{}; else goto L{};\n",
                 o[0], o[1], o[2]
             ),
             Opcode::Call => {
@@ -602,7 +745,9 @@ fn emit_function(f: &Function) -> String {
             }
             Opcode::Trap | Opcode::Unreachable => "  return NAN;\n".to_string(),
             other => {
-                if let Some(op) = bin_op(other) {
+                if other == Opcode::Div {
+                    div_guard(o[1], res, format!("r[{}] / r[{}]", o[0], o[1]))
+                } else if let Some(op) = bin_op(other) {
                     format!("  r[{res}] = r[{}] {op} r[{}];\n", o[0], o[1])
                 } else if let Some(op) = cmp_op(other) {
                     format!("  r[{res}] = (r[{}] {op} r[{}]) ? 1.0 : 0.0;\n", o[0], o[1])
@@ -650,88 +795,126 @@ mod tests {
         crate::lang::compile_program(parsed).unwrap().eir
     }
 
+    /// Runs a one-`funcs` program interpretively, returning the world output of
+    /// `f(a, b)` (a step failure surfaces as `Err`).
+    fn interp2(src: &str, a: f64, b: f64) -> Result<f64> {
+        let mut rt = crate::lang::LangRuntime::compile(src).unwrap();
+        {
+            let st = rt
+                .scene
+                .get_mut(pwe_api::EntityId(1))
+                .unwrap()
+                .state
+                .as_mut()
+                .unwrap();
+            st.values[0] = a;
+            st.values[1] = b;
+        }
+        rt.step_jit()?;
+        Ok(rt
+            .scene
+            .get(pwe_api::EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[2])
+    }
+
+    const F2: &str = "world { gravity=(0,0,0) entity e { state=(a=0.0, b=0.0, x=0.0) } } \
+                       funcs { f(a, b) { BODY } } \
+                       systems { update { on=e; dt=1.0  x = f(a, b) } }";
+
+    fn f2(body: &str) -> String {
+        F2.replace("BODY", body)
+    }
+
     #[test]
-    fn native_pure_function_matches_interpreter() {
+    fn native_pure_matches_interpreter_on_a_matrix() {
         if !cc_available() {
             eprintln!("skipping: no `cc` available");
             return;
         }
-        // A pure `funcs` program: f(a,b) = a*a + b*b + sin(a).
-        let src = r#"
-            world { gravity=(0,0,0) entity e { state=(a=0.0, b=0.0, x=0.0) } }
-            funcs { f(a, b) { a * a + b * b + sin(a) } }
-            systems { update { on=e; dt=1.0  x = f(a, b) } }
-        "#;
-        let module = eir_of(src);
-        let func_id = 0xF000_0000u64;
-        let native = NativeProgram::compile(&module).unwrap();
-        assert!(native.has(func_id), "pure `f` must be native-eligible");
-
-        let mut rt = crate::lang::LangRuntime::compile(src).unwrap();
-        for i in 0..64 {
-            let a = (i as f64) * 0.31 - 4.0;
-            let b = (i as f64) * -0.17 + 2.0;
-            rt.scene
-                .get_mut(pwe_api::EntityId(1))
-                .unwrap()
-                .state
-                .as_mut()
-                .unwrap()
-                .values[0] = a;
-            rt.scene
-                .get_mut(pwe_api::EntityId(1))
-                .unwrap()
-                .state
-                .as_mut()
-                .unwrap()
-                .values[1] = b;
-            rt.step_jit().unwrap();
-            let interp = rt
-                .scene
-                .get(pwe_api::EntityId(1))
-                .unwrap()
-                .state
-                .as_ref()
-                .unwrap()
-                .values[2];
-            let nat = native.call(func_id, &[a, b]).unwrap();
-            assert_eq!(
-                interp.to_bits(),
-                nat.to_bits(),
-                "native vs interpreter mismatch at a={a} b={b}: {interp} vs {nat}"
-            );
+        let inputs = [
+            0.0,
+            -0.0,
+            1.5,
+            -2.25,
+            f64::MIN_POSITIVE,
+            f64::from_bits(1), // subnormal
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        // Each body is (name, arity-2 body) exercised over the input matrix.
+        let bodies = [
+            "a * a + b * b + sin(a)",
+            "a / b + 1.0",
+            "sign(a) + sign(b)",
+            "if(a, b, 0.0 - b)",
+            "a % b",
+        ];
+        for body in bodies {
+            let src = f2(body);
+            let module = eir_of(&src);
+            let native = NativeProgram::compile(&module).unwrap();
+            let id = 0xF000_0000u64;
+            for &x in &inputs {
+                for &y in &inputs {
+                    let interp = interp2(&src, x, y);
+                    let nat = native.call(id, &[x, y]);
+                    match (interp, nat) {
+                        (Ok(i), Ok(n)) => assert!(
+                            i.to_bits() == n.to_bits() || (i.is_nan() && n.is_nan()),
+                            "body `{body}` at ({x},{y}): interp={i} native={n}"
+                        ),
+                        (Err(ei), Err(en)) => {
+                            assert_eq!(ei.detail, en.detail, "body `{body}` trap detail")
+                        }
+                        (i, n) => panic!("body `{body}` at ({x},{y}): interp={i:?} native={n:?}"),
+                    }
+                }
+            }
         }
     }
 
     #[test]
-    fn tmp_dump_c() {
-        let mut src = String::from("world { gravity=(0,0,0)\n");
-        for i in 0..4 {
-            let a = i as f64 * 0.37;
-            src += &format!(
-                "  entity b{i} {{ state = ({:.4}, {:.4}, 0, 0, 0, 0, 1.0) }}\n",
-                a.cos() * 5.0,
-                a.sin() * 5.0
-            );
+    fn native_arity_mismatch_is_an_error_not_a_crash() {
+        if !cc_available() {
+            eprintln!("skipping: no `cc` available");
+            return;
         }
-        src += "}\nsystems { nbody { G = 0.001; dt = 0.001 } }\n";
-        let module = eir_of(&src);
-        let chosen: Vec<&Function> = module.functions.iter().filter(|f| eligible(f)).collect();
-        let c = emit_module(&chosen);
-        std::fs::write("/tmp/pwe_open/nb.c", &c).unwrap();
-        std::process::Command::new("cc")
-            .args([
-                "-O2",
-                "-shared",
-                "-fPIC",
-                "-ffp-contract=off",
-                "-o",
-                "/tmp/pwe_open/nb.dylib",
-                "/tmp/pwe_open/nb.c",
-                "-lm",
-            ])
-            .status()
-            .unwrap();
+        // f takes exactly one argument.
+        let src = "world { gravity=(0,0,0) entity e { state=(a=0.0, x=0.0) } } \
+                   funcs { f(a) { a * 2.0 } } \
+                   systems { update { on=e; dt=1.0  x = f(a) } }";
+        let native = NativeProgram::compile(&eir_of(src)).unwrap();
+        let id = 0xF000_0000u64;
+        assert_eq!(native.call(id, &[3.0]).unwrap(), 6.0);
+        assert!(native.call(id, &[]).is_err(), "too few must be Err");
+        assert!(
+            native.call(id, &[1.0, 2.0]).is_err(),
+            "too many must be Err"
+        );
+        assert!(native.call(999, &[1.0]).is_err(), "unknown id must be Err");
+    }
+
+    #[test]
+    fn native_second_compile_is_independent() {
+        if !cc_available() {
+            eprintln!("skipping: no `cc` available");
+            return;
+        }
+        let n1 = NativeProgram::compile(&eir_of(&f2("a + 1.0"))).unwrap();
+        let n2 = NativeProgram::compile(&eir_of(&f2("a + 2.0"))).unwrap();
+        let id = 0xF000_0000u64;
+        assert_eq!(n1.call(id, &[10.0, 0.0]).unwrap(), 11.0);
+        assert_eq!(
+            n2.call(id, &[10.0, 0.0]).unwrap(),
+            12.0,
+            "must not reuse n1's code"
+        );
+        assert_ne!(n1.artifact_hash, n2.artifact_hash);
     }
 
     #[test]
@@ -740,8 +923,6 @@ mod tests {
             eprintln!("skipping: no `cc` available");
             return;
         }
-        // A world-access kernel: nbody reads state slots (ReadCommitted) and
-        // writes velocities (WriteView) — exercises the C-ABI shims.
         let mut src = String::from("world { gravity=(0,0,0)\n");
         for i in 0..4 {
             let a = i as f64 * 0.37;
