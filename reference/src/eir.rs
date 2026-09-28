@@ -2834,10 +2834,17 @@ fn h_unsupported(_: &mut ThMachine<'_>, _: &Instruction, _: &ThProg<'_>) -> Resu
 }
 
 fn th_get(m: &ThMachine<'_>, id: u32) -> Result<Immediate> {
+    th_get_d(m, id, 16)
+}
+
+/// Operand fetch with an explicit error detail, matching the jump-table
+/// interpreter's per-operand details (`16` for operand 0, `17` for operand 1,
+/// `18` for operand 2, `25` for `WriteView`'s value, ...).
+fn th_get_d(m: &ThMachine<'_>, id: u32, detail: u32) -> Result<Immediate> {
     m.stacks[m.frames.len() - 1]
         .get(&id)
         .copied()
-        .ok_or(error(Status::EirInvalid, 16, 0))
+        .ok_or(error(Status::EirInvalid, detail, 0))
 }
 
 fn th_set(m: &mut ThMachine<'_>, id: u32, v: Immediate) {
@@ -2860,8 +2867,8 @@ fn h_const(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<(
 }
 
 fn h_arith(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<()> {
-    let a = th_get(m, ins.operands[0])?;
-    let b = th_get(m, ins.operands[1])?;
+    let a = th_get_d(m, ins.operands[0], 16)?;
+    let b = th_get_d(m, ins.operands[1], 17)?;
     let out = match ins.opcode {
         Opcode::Add | Opcode::Sub | Opcode::Mul => arith(ins.opcode, a, b),
         Opcode::Div | Opcode::Rem => divrem(ins.opcode, a, b),
@@ -2876,9 +2883,9 @@ fn h_arith(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<(
 }
 
 fn h_fma(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<()> {
-    let a = as_f64(th_get(m, ins.operands[0])?);
-    let b = as_f64(th_get(m, ins.operands[1])?);
-    let c = as_f64(th_get(m, ins.operands[2])?);
+    let a = as_f64(th_get_d(m, ins.operands[0], 16)?);
+    let b = as_f64(th_get_d(m, ins.operands[1], 17)?);
+    let c = as_f64(th_get_d(m, ins.operands[2], 18)?);
     th_set(m, ins.result_id, Immediate::F64(a * b + c));
     let d = m.frames.len() - 1;
     m.pcs[d] += 1;
@@ -2886,8 +2893,8 @@ fn h_fma(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<()>
 }
 
 fn h_cmp(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<()> {
-    let a = th_get(m, ins.operands[0])?;
-    let b = th_get(m, ins.operands[1])?;
+    let a = th_get_d(m, ins.operands[0], 16)?;
+    let b = th_get_d(m, ins.operands[1], 17)?;
     let out = compare(ins.opcode, a, b).ok_or(error(Status::EirInvalid, 18, 0))?;
     th_set(m, ins.result_id, out);
     let d = m.frames.len() - 1;
@@ -2896,11 +2903,11 @@ fn h_cmp(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<()>
 }
 
 fn h_select(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<()> {
-    let cond = th_get(m, ins.operands[0])?;
+    let cond = th_get_d(m, ins.operands[0], 16)?;
     let out = if as_u64(cond) != 0 {
-        th_get(m, ins.operands[1])?
+        th_get_d(m, ins.operands[1], 17)?
     } else {
-        th_get(m, ins.operands[2])?
+        th_get_d(m, ins.operands[2], 17)?
     };
     th_set(m, ins.result_id, out);
     let d = m.frames.len() - 1;
@@ -2937,8 +2944,8 @@ fn h_unary(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<(
 }
 
 fn h_atan2_hypot(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<()> {
-    let a = as_f64(th_get(m, ins.operands[0])?);
-    let b = as_f64(th_get(m, ins.operands[1])?);
+    let a = as_f64(th_get_d(m, ins.operands[0], 16)?);
+    let b = as_f64(th_get_d(m, ins.operands[1], 17)?);
     let v = if ins.opcode == Opcode::Atan2 {
         a.atan2(b)
     } else {
@@ -2970,7 +2977,7 @@ fn h_read_committed(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) ->
 
 fn h_write_view(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<()> {
     let target = ins.target.ok_or(error(Status::EirInvalid, 24, 0))?;
-    let value = as_u64(th_get(m, ins.operands[0])?);
+    let value = as_u64(th_get_d(m, ins.operands[0], 25)?);
     m.rt.write_field(target, value);
     m.writes.push(WorldWrite {
         entity: target.entity,

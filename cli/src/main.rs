@@ -59,20 +59,23 @@ fn usage() {
            pwe compile <src.pwe> [-o <out.pweb>]\n  \
            pwe run     <out.pweb> [--steps N] [--param K=V]...\n  \
            pwe present <out.pweb> [--port P] [--param K=V]...\n  \
+           pwe playground [--port P]              # browser editor + live viewer\n  \
+           pwe repl                               # interactive compile/run/step\n  \
+           pwe fmt <src.pwe> [--check] [-w]       # format source (stdout by default)\n  \
            pwe migrate <src.pwe> [-o <out.pwe>]   # upgrade a pre-v0.3 source\n\
          \n\
          OPTIONS (run / present):\n  \
            --steps N          run N steps (default 60)\n  \
            --param K=V        override a declared model parameter\n  \
            --check            assert finite state each step (detail 88)\n  \
-           --native-jit       promote hot units to native code (default on; \n  \
+           --native-jit       promote hot units to native code (default on;\n  \
                               needs a system C compiler)\n  \
            --no-native-jit    disable the native JIT\n  \
            --gpu              Metal field-sweep offload (macOS; EXPERIMENTAL,\n  \
                               usually slower than the CPU - see roadmap)\n  \
            --threaded         opt-in threaded-dispatch interpreter (the jump\n  \
                               table is the faster default)\n  \
-           --port P           present only: HTTP port\n\
+           --port P           present/playground: HTTP port\n\
          \n\
          Compile source to a .pweb binary, then run the binary (javac/java style).\n\
          A .pweb artifact holds the verified canonical EIR module plus the\n\
@@ -587,8 +590,16 @@ fn cmd_fmt(args: &[String]) -> i32 {
         }
         return 0;
     }
-    print!("{formatted}");
-    0
+    // Write via `stdout()` and treat a closed pipe (e.g. `pwe fmt f | head`) as
+    // success rather than panicking.
+    match std::io::Write::write_all(&mut std::io::stdout(), formatted.as_bytes()) {
+        Ok(()) => 0,
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => 0,
+        Err(e) => {
+            eprintln!("pwe: cannot write to stdout: {e}");
+            1
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

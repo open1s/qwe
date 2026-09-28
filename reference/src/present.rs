@@ -1728,7 +1728,8 @@ mod tests {
 enum PgCmd {
     Load(String, std::sync::mpsc::Sender<String>),
     Reset,
-    Pause(bool),
+    /// `Some(true)` pause, `Some(false)` resume, `None` toggle.
+    Pause(Option<bool>),
 }
 
 /// Serves the PWE playground on `127.0.0.1:port` (editor at `/`, viewer at
@@ -1805,7 +1806,7 @@ fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<Liv
                     }
                 }
             }
-            Ok(PgCmd::Pause(p)) => paused = p,
+            Ok(PgCmd::Pause(p)) => paused = p.unwrap_or(!paused),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if !paused {
                     if let Some(r) = &mut rt {
@@ -1814,9 +1815,17 @@ fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<Liv
                                 step += 1;
                                 publish(&state, r, step, "");
                             }
-                            Err(_) => {
+                            Err(e) => {
                                 paused = true;
-                                let _ = crate::lang::take_diagnostics();
+                                let mut info = vec![format!("step {step} failed: {e}")];
+                                for d in crate::lang::take_diagnostics() {
+                                    info.push(format!("[{}] {}", d.detail, d.message));
+                                }
+                                let frame = r.present_frame(None);
+                                let mut g = state.write().unwrap_or_else(|e| e.into_inner());
+                                g.step = step;
+                                g.frame = frame;
+                                g.info = info;
                             }
                         }
                     }
@@ -1827,7 +1836,7 @@ fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<Liv
     }
 }
 
-fn read_http(stream: &mut TcpStream) -> std::io::Result<(String, String, Vec<u8>)> {
+fn read_http(stream: &mut TcpStream) -> std::io::Result<(String, String, Option<String>, Vec<u8>)> {
     let mut data: Vec<u8> = Vec::new();
     let mut buf = [0u8; 4096];
     loop {
@@ -1840,6 +1849,11 @@ fn read_http(stream: &mut TcpStream) -> std::io::Result<(String, String, Vec<u8>
             let head = String::from_utf8_lossy(&data[..pos]).to_string();
             let method = head.split_whitespace().next().unwrap_or("GET").to_string();
             let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
+            let origin = head.lines().find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                k.eq_ignore_ascii_case("origin")
+                    .then(|| v.trim().to_string())
+            });
             let content_length = head
                 .lines()
                 .find_map(|l| {
@@ -1859,15 +1873,24 @@ fn read_http(stream: &mut TcpStream) -> std::io::Result<(String, String, Vec<u8>
             }
             let end = (body_start + content_length).min(data.len());
             let body = data[body_start..end].to_vec();
-            return Ok((method, path, body));
+            return Ok((method, path, origin, body));
         }
     }
-    Ok(("GET".to_string(), "/".to_string(), Vec::new()))
+    Ok(("GET".to_string(), "/".to_string(), None, Vec::new()))
 }
 
 fn respond(stream: &mut TcpStream, ctype: &str, body: &[u8]) -> std::io::Result<()> {
+    respond_status(stream, "200 OK", ctype, body)
+}
+
+fn respond_status(
+    stream: &mut TcpStream,
+    code: &str,
+    ctype: &str,
+    body: &[u8],
+) -> std::io::Result<()> {
     let header = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+        "HTTP/1.1 {code}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(header.as_bytes())?;
@@ -1883,8 +1906,32 @@ fn handle_playground(
     viewer: &str,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_millis(2000)))?;
-    let (method, path, body) = read_http(stream)?;
-    let path = path.split('?').next().unwrap_or("/").to_string();
+    let (method, raw_path, origin, body) = read_http(stream)?;
+    let (path, query) = match raw_path.split_once('?') {
+        Some((p, q)) => (p.to_string(), q.to_string()),
+        None => (raw_path, String::new()),
+    };
+
+    // CSRF guard: the playground is same-origin (bound to 127.0.0.1). Reject
+    // state-changing requests carrying a non-local `Origin` (a page on another
+    // site issuing a cross-origin POST/GET). No Origin (curl) is allowed.
+    let state_changing = path.starts_with("/api/");
+    if state_changing {
+        if let Some(o) = &origin {
+            let local = o.starts_with("http://localhost")
+                || o.starts_with("http://127.0.0.1")
+                || o.starts_with("https://localhost")
+                || o.starts_with("https://127.0.0.1");
+            if !local {
+                return respond_status(
+                    stream,
+                    "403 Forbidden",
+                    "text/plain",
+                    b"cross-origin denied",
+                );
+            }
+        }
+    }
 
     if method == "POST" && path == "/api/source" {
         let src = String::from_utf8_lossy(&body).to_string();
@@ -1901,14 +1948,16 @@ fn handle_playground(
         let _ = tx.send(PgCmd::Reset);
         return respond(stream, "text/plain", b"ok");
     }
-    if path.starts_with("/api/pause") {
-        let on = path.contains("on=0");
-        let _ = tx.send(PgCmd::Pause(!on));
-        return respond(
-            stream,
-            "text/plain",
-            if on { b"running" } else { b"paused" },
-        );
+    if path == "/api/pause" {
+        let set = if query.contains("on=0") {
+            Some(false)
+        } else if query.contains("on=1") {
+            Some(true)
+        } else {
+            None
+        };
+        let _ = tx.send(PgCmd::Pause(set));
+        return respond(stream, "text/plain", b"ok");
     }
     if path == "/view" {
         return respond(stream, "text/html; charset=utf-8", viewer.as_bytes());

@@ -580,9 +580,13 @@ impl LangRuntime {
         let mut rt_a = SceneRuntime::with_gpu(&a, self.gpu.as_ref());
         #[cfg(not(all(feature = "gpu", target_os = "macos")))]
         let mut rt_a = SceneRuntime::new(&a);
-        let int_writes =
+        let int_writes = if self.threaded && self.optimized.threaded_supported() {
             self.optimized
-                .execute_with_index(&mut rt_a, &mut env_a, &self.call_index)?;
+                .execute_threaded_with_index(&mut rt_a, &mut env_a, &self.call_index)?
+        } else {
+            self.optimized
+                .execute_with_index(&mut rt_a, &mut env_a, &self.call_index)?
+        };
 
         let mut env_b = base.clone();
         #[cfg(all(feature = "gpu", target_os = "macos"))]
