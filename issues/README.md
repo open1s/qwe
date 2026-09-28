@@ -66,6 +66,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0037](https://github.com/open1s/qwe/issues/37) | Medium | WGSL `Select` condition: IEEE `!= 0.0f` vs interpreter bit-test (`-0.0` flips); CPU oracle shares the bug | reference/src/wgsl.rs:234 |
 | [0038](https://github.com/open1s/qwe/issues/38) | Medium | Emitted WGSL builtins diverge from the CPU oracle (sign/round/hypot/Rem); emitter never validated by `naga` despite the doc claim | reference/src/wgsl.rs:195 |
 | [0039](https://github.com/open1s/qwe/issues/39) | Low | WGSL device backend never traps (div/rem-by-zero, NaN compares) while interpreter + native both trap EirInvalid 18 — tiers disagree; decision needed before wiring | reference/src/wgsl.rs:17 |
+| [0040](https://github.com/open1s/qwe/issues/40) | Medium | Native JIT deopt re-executes a step on partially-committed native writes — trap swallowed, state double-applied (`enable_native_jit` + `step_jit`) | reference/src/native.rs:198 |
 
 ## Suggested order
 
@@ -234,5 +235,29 @@ filing of 0039):
    exist until now.
 4. Gates at `20ba90be`: fmt, clippy, 317 tests (wgsl/naga live),
    conformance 18/18.
+
+Review/test pass on `70ca8d7f` (phase-3 hotness→native JIT, pass 12):
+
+1. Gates on a pristine snapshot of the commit (the checkout carried
+   unrelated uncommitted WIP): fmt OK, clippy clean, 318 tests (incl.
+   `native_jit_promotes_and_matches_interpreter`), conformance 18/18.
+2. RFC-0027 addendum present and matches the code: promotion runs only
+   after `ready()` (Validate/CapabilityCheck/Publish), `-ffp-contract=off`
+   guards FMA contraction, compile failures cache as deopt.
+3. Library probes (`enable_native_jit(true)`, 1500 steps, ON vs OFF,
+   step-jit and step-cross axes): poly / nbody / reactor promote
+   (`native_executions>0`) and stay byte-identical; random/emit deopt
+   (`native_executions=0`) and stay identical; trap kernel exposed #40.
+4. CLI e2e on built fixtures: `pwe run` 1100 steps (past the ~1024-step
+   CLI promotion point), 300000 steps, walker (random), and a
+   PATH-stripped no-`cc` run — every `--native-jit` output
+   byte-identical to plain, rc=0; promotion observed live (native build
+   dir appeared mid-run). Production CLI is masked from #40 by
+   `step_cross`'s interpreter-first ordering on clones.
+5. 0040 filed (Medium): the deopt fallback re-executes the step after a
+   failed native run already committed partial writes through
+   `write_field` — trap disappears, statements double-apply
+   (step 101: `w 0→-2`, `x 7→-7`, no error) — silent corruption via the
+   public `step_jit` path.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
