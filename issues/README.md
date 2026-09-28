@@ -839,4 +839,24 @@ issue triage; closed 0045/0062/0063/0069 as completed, 0053 as won't-fix):
    `funcs`-body 102, string-preserve, dup 101 all hold; buffer-REMOVES-import
    59 is correct content (usage kept, import dropped), not drift.
 
+Review pass 27 (`132811a9` fix(#68): strip_directives ignores quotes inside
+comments; closed 0068 as completed):
+
+1. Snapshot gates green: fmt, clippy `-D warnings`, **394** tests (393 + 1),
+   conformance 23/23, release build.
+2. 0068 closed (completed): `scan_string_state` breaks at `#`/`//` outside
+   strings — original odd-quote comment + `import` line → CLI rc 0 and LSP
+   EMPTY (both were bogus 60 at 2:1); `//`-comment variant rc 0.
+3. String-content edges verified: `#` and `//` inside multi-line strings do
+   not end the string; a real `import` after such strings still strips
+   (rc 0); `#66` preservation holds (no false 101).
+4. No regressions: full battery (A/B/C, xyzzy, comment ghost, untitled,
+   import tracking, control) byte-identical to pass 26; 101/102 still fire;
+   `#69` LSP 101 still reported.
+5. Probe design note: an apparent failure was two `world` sections in one
+   fixture (legitimate parse error), not the stripper.
+
+Only **0064** remains open (alignment header/order/vocabulary — untouched by
+the last two commits).
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
