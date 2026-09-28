@@ -65,6 +65,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0036](https://github.com/open1s/qwe/issues/36) | Medium | f64 comparisons with NaN: interpreter traps EirInvalid 18, native returns IEEE result — tier divergence, semantics unspecified | reference/src/eir.rs:2776 |
 | [0037](https://github.com/open1s/qwe/issues/37) | Medium | WGSL `Select` condition: IEEE `!= 0.0f` vs interpreter bit-test (`-0.0` flips); CPU oracle shares the bug | reference/src/wgsl.rs:234 |
 | [0038](https://github.com/open1s/qwe/issues/38) | Medium | Emitted WGSL builtins diverge from the CPU oracle (sign/round/hypot/Rem); emitter never validated by `naga` despite the doc claim | reference/src/wgsl.rs:195 |
+| [0039](https://github.com/open1s/qwe/issues/39) | Low | WGSL device backend never traps (div/rem-by-zero, NaN compares) while interpreter + native both trap EirInvalid 18 — tiers disagree; decision needed before wiring | reference/src/wgsl.rs:17 |
 
 ## Suggested order
 
@@ -211,5 +212,27 @@ Fix-verification pass 4 (`e9387274`, pass 10 — verification/closure of 0036):
    process, filtered native tests, and a fresh full `cargo test
    --workspace` each leave the count unchanged); 7 dead-pid leftovers
    from pre-push dev runs were removed manually.
+
+Fix-verification pass 5 (`20ba90be`, pass 11 — closures of 0037/0038,
+filing of 0039):
+
+1. 0037 verified fixed, closed: `Select` emits
+   `bitcast<u32>(r[c]) != 0u` (no `!= 0.0f` left in the module) and the
+   oracle mirrors it with `to_bits() != 0`; probe grid {0, -0.0, 1,
+   -2.5, NaN} — interp == oracle == shader, `-0.0` now 11 (was 22).
+2. 0038 verified fixed, closed: `naga` 30 (`wgsl-in`) is a real
+   dev-dependency and every emitted shader in the matrix is parsed +
+   validated; `sign`/`round`/`hypot`/`Rem` now emit `pwe_sign`,
+   `pwe_round`, `pwe_hypot`, and float `%` — independent probes match
+   CPU f32 references (bits for sign/round, tolerance for hypot/rem)
+   and the interpreter on the original divergence cases (sign ±0,
+   round ties, hypot 1e20/3.4e38, Rem trunc-form samples).
+3. 0039 filed (Low): the remaining scope note — the device backend
+   never traps (`1 % 0` → NaN, NaN compare → IEEE) while interp and
+   native both `Err d18`; the module doc table documents it and the
+   test matrix skips those rows pointing at an umbrella that did not
+   exist until now.
+4. Gates at `20ba90be`: fmt, clippy, 317 tests (wgsl/naga live),
+   conformance 18/18.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
