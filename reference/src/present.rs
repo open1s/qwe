@@ -1739,8 +1739,20 @@ pub fn serve_playground(port: u16) -> std::io::Result<()> {
     let (tx, rx) = std::sync::mpsc::channel::<PgCmd>();
     let state = Arc::new(RwLock::new(LiveState::default()));
     let listener = TcpListener::bind(("127.0.0.1", port))?;
-    let page = playground_html();
-    let viewer = live_viewer_html();
+    // Per-process CSRF token: state-changing requests must present it. A
+    // cross-site page cannot read it (no CORS) or set the header without a
+    // preflight (rejected), so it cannot forge a request — and no-token requests
+    // (e.g. a bare `curl`) are refused too.
+    let token = format!(
+        "{:016x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+            ^ std::process::id() as u64
+    );
+    let page = playground_html(&token);
+    let viewer = viewer_with_token(&live_viewer_html(), &token);
     {
         let state = Arc::clone(&state);
         std::thread::spawn(move || playground_driver(rx, state));
@@ -1751,9 +1763,10 @@ pub fn serve_playground(port: u16) -> std::io::Result<()> {
             let state = Arc::clone(&state);
             let page = page.clone();
             let viewer = viewer.clone();
+            let token = token.clone();
             std::thread::spawn(move || {
                 let mut stream = stream;
-                let _ = handle_playground(&mut stream, &tx, &state, &page, &viewer);
+                let _ = handle_playground(&mut stream, &tx, &state, &page, &viewer, &token);
             });
         }
     });
@@ -1836,7 +1849,7 @@ fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<Liv
     }
 }
 
-fn read_http(stream: &mut TcpStream) -> std::io::Result<(String, String, Option<String>, Vec<u8>)> {
+fn read_http(stream: &mut TcpStream) -> std::io::Result<(String, String, String, Vec<u8>)> {
     let mut data: Vec<u8> = Vec::new();
     let mut buf = [0u8; 4096];
     loop {
@@ -1849,11 +1862,6 @@ fn read_http(stream: &mut TcpStream) -> std::io::Result<(String, String, Option<
             let head = String::from_utf8_lossy(&data[..pos]).to_string();
             let method = head.split_whitespace().next().unwrap_or("GET").to_string();
             let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
-            let origin = head.lines().find_map(|l| {
-                let (k, v) = l.split_once(':')?;
-                k.eq_ignore_ascii_case("origin")
-                    .then(|| v.trim().to_string())
-            });
             let content_length = head
                 .lines()
                 .find_map(|l| {
@@ -1873,10 +1881,35 @@ fn read_http(stream: &mut TcpStream) -> std::io::Result<(String, String, Option<
             }
             let end = (body_start + content_length).min(data.len());
             let body = data[body_start..end].to_vec();
-            return Ok((method, path, origin, body));
+            return Ok((method, path, head, body));
         }
     }
-    Ok(("GET".to_string(), "/".to_string(), None, Vec::new()))
+    Ok((
+        "GET".to_string(),
+        "/".to_string(),
+        String::new(),
+        Vec::new(),
+    ))
+}
+
+fn header(head: &str, name: &str) -> Option<String> {
+    head.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        k.eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+    })
+}
+
+/// Whether an `Origin` header names the local server (exact host match — a
+/// prefix match would accept `localhost.evil.com`).
+fn origin_is_local(origin: &str) -> bool {
+    let rest = origin.split("://").nth(1).unwrap_or(origin);
+    let authority = rest.split(['/', '?']).next().unwrap_or(rest);
+    let host = if let Some(stripped) = authority.strip_prefix('[') {
+        stripped.split(']').next().unwrap_or(stripped).to_string()
+    } else {
+        authority.split(':').next().unwrap_or(authority).to_string()
+    };
+    matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1")
 }
 
 fn respond(stream: &mut TcpStream, ctype: &str, body: &[u8]) -> std::io::Result<()> {
@@ -1904,25 +1937,30 @@ fn handle_playground(
     state: &Arc<RwLock<LiveState>>,
     page: &str,
     viewer: &str,
+    token: &str,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_millis(2000)))?;
-    let (method, raw_path, origin, body) = read_http(stream)?;
-    let (path, query) = match raw_path.split_once('?') {
+    let (method, raw_path, head, body) = read_http(stream)?;
+    let (mut path, query) = match raw_path.split_once('?') {
         Some((p, q)) => (p.to_string(), q.to_string()),
         None => (raw_path, String::new()),
     };
+    // Alias the viewer's control paths onto the guarded `api` handlers.
+    if path == "/reset" {
+        path = "/api/reset".to_string();
+    } else if path == "/pause" {
+        path = "/api/pause".to_string();
+    }
 
-    // CSRF guard: the playground is same-origin (bound to 127.0.0.1). Reject
-    // state-changing requests carrying a non-local `Origin` (a page on another
-    // site issuing a cross-origin POST/GET). No Origin (curl) is allowed.
+    // CSRF guard: state-changing requests must carry the per-process token and
+    // must not be cross-site. A cross-site page cannot read the token (no CORS)
+    // nor set the header without a preflight, and a non-local `Origin` (exact
+    // host) or `Sec-Fetch-Site: cross-site` is refused. No-token requests (e.g.
+    // a bare `curl`) are refused too.
     let state_changing = path.starts_with("/api/");
     if state_changing {
-        if let Some(o) = &origin {
-            let local = o.starts_with("http://localhost")
-                || o.starts_with("http://127.0.0.1")
-                || o.starts_with("https://localhost")
-                || o.starts_with("https://127.0.0.1");
-            if !local {
+        if let Some(o) = header(&head, "origin") {
+            if !origin_is_local(&o) {
                 return respond_status(
                     stream,
                     "403 Forbidden",
@@ -1930,6 +1968,17 @@ fn handle_playground(
                     b"cross-origin denied",
                 );
             }
+        }
+        if header(&head, "sec-fetch-site").as_deref() == Some("cross-site") {
+            return respond_status(stream, "403 Forbidden", "text/plain", b"cross-site denied");
+        }
+        if header(&head, "x-pwe-token").unwrap_or_default() != token {
+            return respond_status(
+                stream,
+                "403 Forbidden",
+                "text/plain",
+                b"missing/invalid token",
+            );
         }
     }
 
@@ -1979,9 +2028,22 @@ fn handle_playground(
     respond(stream, "text/plain", b"not found")
 }
 
+/// Injects the CSRF token into the `present` viewer page and rewrites its
+/// control endpoints (`/reset`, `/pause`) onto the guarded `/api/*` routes.
+fn viewer_with_token(viewer: &str, token: &str) -> String {
+    let patch = format!(
+        "<script>(function(){{const T={token:?};const f=window.fetch;window.fetch=function(u,o){{if(typeof u==='string'){{u=u.replace(/^\\/reset/,'/api/reset').replace(/^\\/pause/,'/api/pause');}}o=o||{{}};o.headers=Object.assign({{}},o.headers,{{'X-PWE-Token':T}});return f(u,o);}};}})();</script>"
+    );
+    match viewer.replacen("<head>", &format!("<head>{patch}"), 1) {
+        s if s.contains(&patch) => s,
+        _ => format!("{patch}{viewer}"),
+    }
+}
+
 /// The playground page: a plain-text editor, Run, error pane, and the viewer in
-/// an iframe (reloaded on a successful compile).
-fn playground_html() -> String {
+/// an iframe (reloaded on a successful compile). All fetches carry the CSRF
+/// token (`X-PWE-Token`).
+fn playground_html(token: &str) -> String {
     r#"<!doctype html><html><head><meta charset="utf-8">
 <title>PWE playground</title>
 <style>
@@ -2007,6 +2069,8 @@ fn playground_html() -> String {
   <iframe id="view" src="/view"></iframe>
 </div>
 <script>
+const TOKEN = "__PWE_TOKEN__";
+(function(){const f=window.fetch;window.fetch=function(u,o){o=o||{};o.headers=Object.assign({},o.headers,{"X-PWE-Token":TOKEN});return f(u,o);};})();
 const SAMPLE = `world {
   gravity = (0, -9.81, 0)
   entity ball  { position = (0, 6, 0); velocity = (1.2, 0, 0); shape = sphere; color = 0x89b4fa }
@@ -2034,16 +2098,42 @@ document.getElementById('run').onclick = run;
 document.getElementById('reset').onclick = () => fetch('/api/reset').then(()=>{ view.src='/view?t='+Date.now(); });
 src.addEventListener('keydown', e => { if((e.metaKey||e.ctrlKey) && e.key==='Enter'){ e.preventDefault(); run(); }});
 </script></body></html>"#
-        .to_string()
+        .replace("__PWE_TOKEN__", token)
 }
 
 #[cfg(test)]
 mod playground_tests {
     #[test]
-    fn playground_page_has_editor_and_viewer() {
-        let html = super::playground_html();
-        for needle in ["id=\"src\"", "id=\"run\"", "/api/source", "/view", "SAMPLE"] {
+    fn playground_page_has_editor_viewer_and_token() {
+        let html = super::playground_html("deadbeefcafef00d");
+        for needle in [
+            "id=\"src\"",
+            "id=\"run\"",
+            "/api/source",
+            "/view",
+            "SAMPLE",
+            "X-PWE-Token",
+            "deadbeefcafef00d",
+        ] {
             assert!(html.contains(needle), "playground page missing {needle}");
         }
+    }
+
+    #[test]
+    fn viewer_gets_token_and_rewritten_controls() {
+        let v = super::viewer_with_token("<head></head><body>viewer</body>", "tok123");
+        assert!(v.contains("X-PWE-Token"));
+        assert!(v.contains("tok123"));
+        assert!(v.contains("/api/reset") && v.contains("/api/pause"));
+    }
+
+    #[test]
+    fn origin_host_match_is_exact() {
+        assert!(super::origin_is_local("http://localhost:8080"));
+        assert!(super::origin_is_local("http://127.0.0.1"));
+        assert!(super::origin_is_local("https://localhost"));
+        assert!(!super::origin_is_local("http://localhost.evil.com"));
+        assert!(!super::origin_is_local("http://127.0.0.1.evil.com"));
+        assert!(!super::origin_is_local("https://evil.example"));
     }
 }

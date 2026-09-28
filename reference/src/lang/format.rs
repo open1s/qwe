@@ -34,21 +34,33 @@ pub fn format_source(src: &str) -> String {
             continue;
         }
 
-        // Mask string contents (replace them with spaces) so braces and `#`
-        // inside strings do not affect indentation or comment stripping.
+        // Build a "code" view of the line: strings are blanked (so braces and
+        // comment markers inside them do not count) and a comment (`#` or `//`)
+        // ends the line (so quotes/braces inside a comment do not count either).
+        let chars: Vec<char> = raw.chars().collect();
         let mut masked = String::with_capacity(raw.len());
-        for ch in raw.chars() {
+        let mut ci = 0;
+        while ci < chars.len() {
+            let ch = chars[ci];
             if in_string {
                 masked.push(' ');
                 if ch == '"' {
                     in_string = false;
                 }
-            } else if ch == '"' {
+                ci += 1;
+                continue;
+            }
+            if ch == '#' || (ch == '/' && chars.get(ci + 1) == Some(&'/')) {
+                break; // comment: ignore the rest of the line
+            }
+            if ch == '"' {
                 masked.push(' ');
                 in_string = true;
-            } else {
-                masked.push(ch);
+                ci += 1;
+                continue;
             }
+            masked.push(ch);
+            ci += 1;
         }
 
         // If the line opened a string that has not closed, its trailing
@@ -67,7 +79,6 @@ pub fn format_source(src: &str) -> String {
 
         let content = trimmed_end.trim_start();
         let code = masked.trim();
-        let code = code.split('#').next().unwrap_or("").trim_end();
         let lead_close = code.starts_with('}') || code.starts_with(')') || code.starts_with(']');
         let indent = if lead_close {
             depth.saturating_sub(1)
@@ -114,6 +125,22 @@ mod tests {
         );
         // `entity e` is one block level in (inside `world {`), not corrupted.
         assert!(out.contains("\n    entity e {"), "depth corrupted:\n{out}");
+    }
+
+    #[test]
+    fn format_is_comment_aware() {
+        // A quote inside a `#` comment must not open a fake multi-line string,
+        // and braces inside a `//` comment must not change block depth.
+        let src = "world {\n  # a \" quote in a comment\n  // { { { comment\n entity e {\n  state=(x=0.0)\n }\n}\n";
+        let out = format_source(src);
+        assert!(out.contains("\n    entity e {"), "depth corrupted:\n{out}");
+        assert!(
+            out.contains("\n        state=(x=0.0)"),
+            "depth corrupted:\n{out}"
+        );
+        // The comment lines are preserved (indented, content intact).
+        assert!(out.contains("# a \" quote in a comment"));
+        assert!(out.contains("// { { { comment"));
     }
 
     #[test]
