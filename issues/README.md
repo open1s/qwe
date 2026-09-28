@@ -374,5 +374,10 @@ Fix-verification pass 8 (`03170cc5`, pass 18 — closure of 0041, nit filed as 0
    in the 0042 close comment, still unfixed in this commit.
 3. Gates: fmt, clippy `--all-features`, 359 tests, 346 tests
    `--features gpu`, conformance 18/18. Open issues after this pass: 0043.
+4. Follow-up docs commit `e428e2dd` (run-flag help + stale roadmap note)
+   verified: every documented flag exists in `cmd_run`, defaults match
+   (60 steps, native JIT on, `--check` = detail 88 non-finite state), the
+   roadmap #35 "not wired into `pwe run`" note now matches pass-15 reality;
+   gates re-run green on `e3e21472`.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
