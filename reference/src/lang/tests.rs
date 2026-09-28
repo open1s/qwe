@@ -3330,3 +3330,33 @@ fn module_declaration_and_collision() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn module_export_privacy() {
+    let dir = std::env::temp_dir().join(format!("pwe_exp_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let w = |name: &str, body: &str| std::fs::write(dir.join(name), body).unwrap();
+    // `util` exports only `f`.
+    w(
+        "u.pwe",
+        "module util\nworld { }\nfuncs { f(x) { x + 1.0 }  g(x) { x - 1.0 } }\nexport f\n",
+    );
+    // Referencing the exported `f` is allowed...
+    w(
+        "root.pwe",
+        "import \"u\"\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = util.f(x) } }\n",
+    );
+    assert!(crate::lang::compile_file(&dir.join("root.pwe")).is_ok());
+    // ...but the unexported `g` is rejected (detail 102).
+    w(
+        "root.pwe",
+        "import \"u\"\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = util.g(x) } }\n",
+    );
+    assert_eq!(
+        crate::lang::compile_file(&dir.join("root.pwe"))
+            .err()
+            .map(|e| e.detail),
+        Some(102)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

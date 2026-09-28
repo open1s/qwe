@@ -1,6 +1,9 @@
 # RFC-0045: Semantic module system
-**Status:** Proposed. This RFC specifies a first-class **module system** with an
-explicit surface, replacing today's path-derived namespaces and flat merge.
+**Status:** Accepted (implemented, RFC-0045 slice 1-2). A first-class module
+system with an explicit surface. Implemented: `module <dotted.name>` (stable
+identity + alias), `export a, b` surface with privacy enforcement (detail 102),
+duplicate-module detection (101), and deterministic (layout-independent) merge
+order. Remaining: `from … import …` privacy, module versions.
 
 ## Motivation
 

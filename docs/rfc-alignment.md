@@ -44,6 +44,7 @@ Post-v0.2 extensions implemented by the reference slice. Each is covered by a
 | 0041 | self-contained offline viewer (vendored three.js) | Done | `present::tests` (viewer serves only `/vendor/three/…`); RFC-0041 |
 | 0042 | `struct` record types over flat slots | Done | `pwe-conformance` "RFC-0042 struct record types (flatten + cross-backend)"; `lang::tests::struct_record_types_*` |
 | 0043 | value types lowered to EIR (`int`/`bool`) | Proposed | RFC-0043 (not implemented) |
+| 0045 | semantic module system (stable names, export/privacy, deterministic merge) | Done | `lang::tests::module_declaration_and_collision`, `lang::tests::module_export_privacy`; `module`/`export` directives, detail 101/102 |
 | 0044 | typed arrays / SoA user types | Proposed | RFC-0044 (not implemented) |
 
 ## Language front end

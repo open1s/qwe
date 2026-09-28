@@ -767,6 +767,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 96 | 规则写入槽 7/8/9 但未设 `orient = true` —— 警告。 |
 | 100 | 赋值给未知状态槽（被忽略）—— 警告。 |
 | 101 | 模块名重复（两个模块声明了相同的 `module`）。 |
+| 102 | 引用了模块未导出的成员。 |
 
 **调试流程**：缩减到一个实体 + 一个系统；核对模型（§0.6）；核对积分/赋值陷阱；加
 `invariant`；`run … --steps N` 读打印状态。

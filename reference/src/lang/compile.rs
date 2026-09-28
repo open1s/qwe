@@ -1079,6 +1079,8 @@ pub(crate) struct ModuleInfo {
     imports: Vec<(ImportDirective, std::path::PathBuf)>,
     /// A declared `module <name>` (RFC-0045), if any — the module's stable id.
     declared_name: Option<String>,
+    /// A declared `export …` surface (RFC-0045); `None` = everything public.
+    exports: Option<Vec<String>>,
 }
 
 pub(crate) fn ident_tokens(text: &str) -> Option<Vec<String>> {
@@ -1110,6 +1112,27 @@ pub(crate) fn parse_module_line(line: &str) -> Option<String> {
         return None;
     }
     Some(name.to_string())
+}
+
+/// Parses an `export a, b` (or `export { a, b }`) line directive (RFC-0045):
+/// the module's public surface. Returns the exported names.
+pub(crate) fn parse_export_line(line: &str) -> Option<Vec<String>> {
+    let t = line.trim();
+    let rest = t.strip_prefix("export")?;
+    if !(rest.starts_with(|c: char| c.is_whitespace()) || rest.starts_with('{')) {
+        return None;
+    }
+    let list = rest.trim().trim_start_matches('{').trim_end_matches('}');
+    let names: Vec<String> = list
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    if names.is_empty() {
+        None
+    } else {
+        Some(names)
+    }
 }
 
 /// Parses a Python-style import directive at the start of a line, returning it
@@ -1229,11 +1252,19 @@ pub(crate) fn collect_module(
     })?;
     let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
     let declared_name = raw.lines().find_map(parse_module_line);
+    let mut exported: Vec<String> = Vec::new();
+    let mut exports_declared = false;
     let mut stripped = String::new();
     let mut imports = Vec::new();
     for line in raw.lines() {
         if parse_module_line(line).is_some() {
             // A `module <name>` directive is metadata, not source.
+            stripped.push('\n');
+            continue;
+        }
+        if let Some(names) = parse_export_line(line) {
+            exports_declared = true;
+            exported.extend(names);
             stripped.push('\n');
             continue;
         }
@@ -1266,6 +1297,7 @@ pub(crate) fn collect_module(
         parsed,
         imports,
         declared_name,
+        exports: exports_declared.then_some(exported),
     });
     for (d, child) in children {
         let default_ns = d.alias.clone().unwrap_or_else(|| module_stem(&d.path));
@@ -1295,6 +1327,7 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
         aliases: vec![String::new()],
         path: std::path::PathBuf::from("<root>"),
         declared_name: src.root.lines().find_map(parse_module_line),
+        exports: None,
         source: src.root.clone(),
         parsed: root_parsed,
         imports: Vec::new(),
@@ -1306,6 +1339,7 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
             aliases: aliases.clone(),
             path: std::path::PathBuf::from(path),
             declared_name: source.lines().find_map(parse_module_line),
+            exports: None,
             source: source.clone(),
             parsed,
             imports: Vec::new(),
@@ -1427,7 +1461,21 @@ fn load_program_sources_inner(
         modules: exported,
         aliases: aliases.clone(),
     };
+    // RFC-0045: enforce the `export` surface on cross-module references.
+    let mut export_map: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        Default::default();
+    for m in &modules {
+        if let Some(ex) = &m.exports {
+            let set: std::collections::BTreeSet<String> = ex.iter().cloned().collect();
+            for a in &m.aliases {
+                if !a.is_empty() {
+                    export_map.insert(a.clone(), set.clone());
+                }
+            }
+        }
+    }
     let parsed = merge_modules(modules, aliases)?;
+    check_module_privacy(&parsed, &export_map)?;
     Ok((parsed, sources))
 }
 
@@ -1446,6 +1494,76 @@ pub fn compile_file(path: &std::path::Path) -> Result<CompiledProgram> {
 /// systems are world content and merge flatly (duplicate names are an error);
 /// functions and parameters are namespaced (`module::name`), with `from`
 /// imports additionally bound bare.
+/// RFC-0045: rejects a cross-module reference to a name a module did not
+/// `export` (detail 102). Modules without an `export` declaration are fully
+/// public (backward compatible).
+fn check_module_privacy(
+    parsed: &ParsedProgram,
+    exports: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> Result<()> {
+    if exports.is_empty() {
+        return Ok(());
+    }
+    fn calls(e: &Expr, out: &mut Vec<String>) {
+        match e {
+            Expr::Call(n, args) => {
+                out.push(n.to_string());
+                for a in args {
+                    calls(a, out);
+                }
+            }
+            Expr::Add(a, b)
+            | Expr::Sub(a, b)
+            | Expr::Mul(a, b)
+            | Expr::Div(a, b)
+            | Expr::Rem(a, b)
+            | Expr::Cmp(_, a, b)
+            | Expr::And(a, b)
+            | Expr::Or(a, b) => {
+                calls(a, out);
+                calls(b, out);
+            }
+            Expr::Neg(a) | Expr::Not(a) | Expr::SlotDyn(a) => calls(a, out),
+            _ => {}
+        }
+    }
+    for sys in &parsed.systems {
+        let mut names = Vec::new();
+        for text in sys.update.values().chain(sys.assigns.values()) {
+            if let Ok(e) = parse_expr_str(text) {
+                calls(&e, &mut names);
+            }
+        }
+        for st in &sys.update_stmts {
+            if let crate::lang::UpdateStmt::Let(_, t, _) = st {
+                if let Ok(e) = parse_expr_str(t) {
+                    calls(&e, &mut names);
+                }
+            }
+        }
+        if let Some(w) = sys.string_params.get("when") {
+            if let Ok(e) = parse_expr_str(w) {
+                calls(&e, &mut names);
+            }
+        }
+        for n in names {
+            if let Some((ns, item)) = n.rsplit_once('.') {
+                if let Some(ex) = exports.get(ns) {
+                    if !ex.contains(item) && ns != sys.namespace {
+                        return Err(error_at(
+                            Status::Invalid,
+                            102,
+                            0,
+                            format!("`{item}` is not exported by module `{ns}`"),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn merge_modules(
     modules: Vec<ModuleInfo>,
     aliases: Vec<(String, String)>,
