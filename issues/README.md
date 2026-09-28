@@ -380,4 +380,11 @@ Fix-verification pass 8 (`03170cc5`, pass 18 — closure of 0041, nit filed as 0
    roadmap #35 "not wired into `pwe run`" note now matches pass-15 reality;
    gates re-run green on `e3e21472`.
 
+Fix-verification pass 9 (`381e3553`, pass 19 — closure of 0043):
+
+1. 0043 verified fixed, closed: `Gpu::new` doc now cites detail 98 (no
+   Metal device) / 99 (kernel compile), matching the code.
+2. Gates: fmt, clippy `--all-features`, 359 tests, 346 tests
+   `--features gpu`, conformance 18/18. Open issues: none.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
