@@ -58,8 +58,18 @@ fn usage() {
            pwe present <out.pweb> [--port P] [--param K=V]...\n  \
            pwe migrate <src.pwe> [-o <out.pwe>]   # upgrade a pre-v0.3 source\n\
          \n\
+         OPTIONS (run / present):\n  \
+           --steps N          run N steps (default 60)\n  \
+           --param K=V        override a declared model parameter\n  \
+           --check            assert finite state each step (detail 88)\n  \
+           --native-jit       promote hot units to native code (default on; \n  \
+                              needs a system C compiler)\n  \
+           --no-native-jit    disable the native JIT\n  \
+           --gpu              Metal field-sweep offload (macOS; EXPERIMENTAL,\n  \
+                              usually slower than the CPU - see roadmap)\n  \
+           --port P           present only: HTTP port\n\
+         \n\
          Compile source to a .pweb binary, then run the binary (javac/java style).\n\
-         --param overrides a declared model parameter at run time.\n\
          A .pweb artifact holds the verified canonical EIR module plus the\n\
          world-model source it derives the initial scene from."
     );
