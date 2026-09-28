@@ -67,6 +67,12 @@
 * [RFC-0038: Pooled Dynamic Entities](rfc/RFC-0038-pooled-dynamic-entities.md)
 * [RFC-0039: Constraint Joints](rfc/RFC-0039-constraint-joints.md)
 * [RFC-0040: Soft Bodies](rfc/RFC-0040-soft-bodies.md)
+* [RFC-0041: Self-contained Viewer](rfc/RFC-0041-self-contained-viewer.md)
+* [RFC-0042: Struct Record Types](rfc/RFC-0042-struct-record-types.md)
+* [RFC-0043: Value Types](rfc/RFC-0043-value-types.md)
+* [RFC-0044: Typed Arrays / SoA](rfc/RFC-0044-typed-arrays.md)
+* [RFC-0045: Semantic Module System](rfc/RFC-0045-semantic-module-system.md)
+* [RFC-0046: EIR as an Explicit SSA CFG](rfc/RFC-0046-eir-ssa-cfg.md)
 * [RFC alignment](docs/rfc-alignment.md)
 * [RFC supersession](docs/rfc-supersession.md)
 
