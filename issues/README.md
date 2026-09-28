@@ -81,6 +81,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0052](https://github.com/open1s/qwe/issues/52) | Low | usage()/--help omits `playground` and `fmt`; both commit messages claim "usage updated" | cli/src/main.rs:53 |
 | [0053](https://github.com/open1s/qwe/issues/53) | Low | repl: runtime step errors rendered via the compile-diagnose API as "error 18: unspecified compile error" (no step number/location); failed `:run` discards program + partial state; always exits 0; malformed `:run/:step N` silently default to 60/1 | cli/src/main.rs (run_repl / repl_steps) |
 | [0054](https://github.com/open1s/qwe/issues/54) | Medium | assignment to an undeclared slot silently dropped during lowering (unknown-LHS skip with no diagnostic) while reads of unknown identifiers warn 85 - typo writes vanish with zero feedback | reference/src/lang/systems.rs:104-143 |
+| [0055](https://github.com/open1s/qwe/issues/55) | Medium | playground CSRF guard bypass: `starts_with` Origin matching accepts `localhost.evil.com`/`127.0.0.1.evil.com`; Origin-less GET mutations (`/api/reset`, `/api/pause`) still execute | reference/src/present.rs (handle_playground) |
+| [0056](https://github.com/open1s/qwe/issues/56) | Low | pwe fmt not comment-aware: a `"` inside a `#` comment opens a fake multi-line string (rest of file emitted verbatim, indentation stops); `//`-comment braces corrupt depth tracking | reference/src/lang/format.rs |
 
 ## Suggested order
 
@@ -503,5 +505,33 @@ Review pass 13 (`42d7da70` `pwe repl`, filed 0053-0054):
    comment says "a typo must not silently do nothing". Comment added to 0050
    (roadmap repeats the disproved fmt guarantee; repl typed input has the same
    trim/blank-drop string defect - `:load` is exact).
+
+Review pass 14 (`d03bb9ae` fix batch #44-#52, filed 0055-0056):
+
+1. Snapshot gates green: fmt, clippy `-D warnings`, 367 tests, conformance
+   18/18. Commit adds exactly one test (fmt string-awareness); #44/#45/#47/#48/#49
+   ship without regression tests.
+2. Verified & closed: 44 (step_cross gate now identical to step_interpreter at
+   runtime.rs:517/585; 500-step na_water default/threaded x jit/nojit all
+   byte-identical, trap program identical rc 1; thd probe 9/9), 46 (README
+   badge/table 367 & 18/18 match actual), 47 (live: ACAO gone, evil Origin 403;
+   residuals -> 0055), 48 (query parsed pre-strip, on=0 resumes, live ok),
+   49 (live: trap -> `info: ['step 2 failed: PWE EirInvalid (18) at 0']`,
+   good program resumes), 50 (multi-line title preserved verbatim
+   `'A   \n\n\n      B'`, `}`-string depth correct), 51 (`fmt | head` rc 0,
+   no panic), 52 (usage lists playground/repl/fmt).
+3. 45 kept open (comment): operand details fixed & match jump table (incl.
+   Select false-branch 17, WriteView 25), but call errors 32/33/34 still
+   byte_offset `pc` (eir.rs:1278-1291) vs `0` (:3016-3028).
+4. 0055 filed (Medium): CSRF guard uses `starts_with` - live bypass
+   `Origin: http://localhost.evil.com` -> 200 (as does 127.0.0.1.evil.com);
+   and Origin-less GET `/api/reset` -> 200 (browsers omit Origin on no-cors
+   GETs; both mutation endpoints are GET). Fix: exact host parse + POST-only
+   mutations / Sec-Fetch-Site.
+5. 0056 filed (Low): fmt still not comment-aware - quote inside `#` comment
+   opens fake string (rest of file verbatim, indent stops), `//`-comment
+   braces decrement depth (cascading mis-indent). Both verified semantics-safe
+   (run output identical, idempotent) - formatting correctness only.
+6. Still open, untouched as claimed: 53 (repl), 54 (silent unknown-LHS).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
