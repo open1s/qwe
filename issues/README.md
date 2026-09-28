@@ -62,6 +62,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0033](https://github.com/open1s/qwe/issues/33) | Medium | Native `Sign` diverges from interpreter `signum` at 0.0, −0.0, NaN | reference/src/native.rs:317 |
 | [0034](https://github.com/open1s/qwe/issues/34) | Medium | Native CondBr/Select conditions: IEEE `!= 0.0` vs interpreter bit-test (`-0.0` diverges); differential-test coverage gap | reference/src/native.rs:326 |
 | [0035](https://github.com/open1s/qwe/issues/35) | Medium | Native backend bypasses RFC-0027 normative lifecycle (no Validate/CapabilityCheck/manifest/artifact identity) | reference/src/native.rs:122 |
+| [0036](https://github.com/open1s/qwe/issues/36) | Medium | f64 comparisons with NaN: interpreter traps EirInvalid 18, native returns IEEE result — tier divergence, semantics unspecified | reference/src/eir.rs:2776 |
 
 ## Suggested order
 
@@ -142,5 +143,34 @@ Native-backend review batch (0030–0035, commit `7cc2d5a5`):
 3. 0035 — settle RFC-0027 conformance (implement the lifecycle or
    amend the RFC deliberately) before wiring the backend into any
    production entry point.
+
+Fix-verification pass 3 (`bb7cf78a`, pass 9 — closures of 0030–0035 +
+re-verification of the pass-7 reopens):
+
+1. Verified fixed, left closed: 0030 (arity guard — `call(&[])`,
+   too-many and unknown-id now `Err(Invalid,5)`, exit 0, no SIGSEGV;
+   correct arity returns the right value), 0031 (artifact dir keyed by
+   content-hash + per-process seq: `n1.call(10)=11`, `n2.call(10)=12`,
+   hashes differ, dirs removed on Drop — zero leftovers after exit),
+   0032 (div/rem by ±0.0 → native `Err EirInvalid 18` == interpreter,
+   via the new `div_guard` C-ABI shim), 0033 (`sign(0.0)=1`,
+   `sign(-0.0)=-1`, `sign(NaN)=NaN`, bit-identical to `signum`), 0034
+   (`Select`/`CondBr` now use the bit-test `pwe_truthy` — probes for
+   0.0/−0.0/1.0/−2.5/NaN all MATCH on both constructs), 0035 (validate +
+   dominance check before emit, hash-keyed identity, RFC-0027 addendum
+   recording the in-process-kernel exemption deliberately, backend still
+   not wired into any production entry point, roadmap updated). Gates
+   green: fmt, clippy, 314 tests, conformance 18/18.
+2. Re-verified pass-7 reopens against `09cc6cd8`, staying closed: 0006
+   (warning 96 both ways — rule writes slot 7 without `orient = true`;
+   `orient = true` with only 8 slots; correct 9-slot `orient = true`
+   case stays silent), 0028 (`let i: i64 = 1.5` → `error 89: … the
+   expression is not an integer constant`, rc=1).
+3. Filed 0036 from the verification probes: f64 comparisons with NaN —
+   interpreter traps `EirInvalid 18` (`compare()` → `partial_cmp`,
+   eir.rs:2776) while native returns the IEEE result; every
+   `if <cond>` is reachable through `truthy()`'s `Ne(reg, 0.0)`
+   (lower.rs:947); no RFC defines the semantics; the differential
+   matrix has NaN inputs but no comparison bodies.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
