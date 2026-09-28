@@ -94,6 +94,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0065](https://github.com/open1s/qwe/issues/65) | Medium | `module` directive stripped only by `collect_module`: in-memory paths (`lang::compile`, LSP `with_root` buffer override) report bogus error 60 on valid module files; doctest skips module blocks; `merge_sources` skips the 101 dup check | reference/src/lang/compile.rs (collect_module vs lang::compile/load_program_sources_with_root) |
 | [0066](https://github.com/open1s/qwe/issues/66) | Low | module-line stripping is string-blind: a multi-line string containing a `module x` line silently loses it (compile succeeds, title/content corrupted) | reference/src/lang/compile.rs (collect_module strip loop) |
 | [0067](https://github.com/open1s/qwe/issues/67) | Medium | detail 102 privacy check walks only `parsed.systems`: `util.g` (unexported) compiles from a `funcs` body; non-`when` system params not walked either | reference/src/lang/compile.rs (check_module_privacy) |
+| [0068](https://github.com/open1s/qwe/issues/68) | Low | `strip_directives` in-string tracker (naive odd-quote count) is poisoned by an unbalanced `"` in a comment: later directive lines not stripped → bogus error 60 (CLI regression vs always-strip) | reference/src/lang/compile.rs (strip_directives) |
+| [0069](https://github.com/open1s/qwe/issues/69) | Low | LSP buffer override runs after the 101 duplicate-module check and never re-checks: buffer-declared `module` collision passes LSP (EMPTY diagnostics) while CLI rejects with 101 | reference/src/lang/compile.rs (load_program_sources_inner order) |
 
 ## Suggested order
 
@@ -771,5 +773,40 @@ Review pass 24 (`582bed3a` RFC-0045 slice 2: `export` surface + privacy detail
    (0037-0044), 0046 row still missing, row says Done while the RFC says
    Accepted + Remaining items, and "Accepted" is off-convention (0037-0042
    implemented extensions all use `Status: Normative`).
+
+Review pass 25 (`7aadc284` fix(#64-#67): shared string-aware directive
+stripping; module privacy in funcs; closed 0065-0067, filed 0068-0069):
+
+1. Snapshot gates green: fmt, clippy `-D warnings`, **392** tests (389 + 3 new
+   module tests), conformance 23/23, release build.
+2. 0065 closed: one string-aware `strip_directives` now serves
+   `collect_module`, the `with_root` override, and `lang::compile` — LSP probes
+   (module+export, module+import+export) → EMPTY diagnostics (both were bogus
+   60 @1:1); CLI 101 fixtures intact; `merge_sources` runs the shared 101
+   check; `is_runnable` accepts directive-first doctest blocks. Residuals
+   recorded on the close comment (buffer import drift → 0062, 101-after-
+   override ordering → 0069, `merge_sources` 102 gap, doctest import trap).
+3. 0066 closed: behavioral probe — a `module util` line inside a multi-line
+   `title` is not collected as a declaration (no false 101 against a real
+   child `module util`) and compiles rc 0; unit test asserts preservation.
+4. 0067 closed: funcs-body `util.g` now → error 102 rc 1 (was rc 0); LSP
+   import-doc path reports 102; `send { value = util.g(x) }` → 102; state and
+   world-params expressions holding calls are rejected by the grammar (no
+   bypass host left).
+5. 0068 filed (Low): `strip_directives` toggles string state via
+   `matches('"').count() % 2` — a comment with an unbalanced quote poisons it,
+   later `import` line not stripped → error 60 @2:1 (CLI regression: the old
+   collector always stripped).
+6. 0069 filed (Low): 101 check runs before the buffer override; buffer adding
+   a colliding `module util` → LSP EMPTY while CLI rejects with 101.
+7. 0062 updated (kept open): original case 3 still reproduces (disk `BROKEN {`
+   → phantom 60); new evidence — buffer adds/removes an `import` line → false
+   59 vs CLI rc 0; directive-parse half of the original report now fixed.
+8. 0064 updated (kept open): 0046 row added, but header still says
+   (0037-0044), rows read 0043/0045/0046/0044, status vocabulary still mixed
+   (`Done`/`Accepted` vs repo-standard `Normative`).
+9. Regression battery (`lsp_probe62` suite): A EMPTY, B surfaces buffer error,
+   C/#63 residuals unchanged, untitled+import EMPTY, non-import control fine —
+   no behavioral drift beyond the fixes.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
