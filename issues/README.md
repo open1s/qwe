@@ -73,6 +73,9 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0044](https://github.com/open1s/qwe/issues/44) | Medium | `step_cross` bypasses the threaded strategy (interpreter side calls `execute_with_index` directly); commit/test/roadmap/ADR-0003 all claim it exercises threaded-vs-JIT, so `--threaded` state is never runtime cross-checked | reference/src/lang/runtime.rs:584 |
 | [0045](https://github.com/open1s/qwe/issues/45) | Low | Threaded vs jump-table dispatchers report different diagnostics for the same failure: detail 16 vs 17 for missing operands; call errors 32/33/34 carry byte_offset 0 vs pc | reference/src/eir.rs (th_get / h_call) |
 | [0046](https://github.com/open1s/qwe/issues/46) | Low | README test counts inconsistent after badge refresh: badge 320 / suite-table total 304 / actual workspace 360; table prose says conformance 17/17 vs badge 18/18 | README.md:9, README.md:237 |
+| [0047](https://github.com/open1s/qwe/issues/47) | Medium | Playground control endpoints accept cross-origin requests (no Origin/Host check + `ACAO:*`): any website can compile/run source, reset and pause; frames readable via `/state` | reference/src/present.rs (handle_playground) |
+| [0048](https://github.com/open1s/qwe/issues/48) | Low | `/api/pause?on=0` can never resume - query string stripped before parsing, so `contains("on=0")` is dead code and the endpoint only ever pauses | reference/src/present.rs (handle_playground) |
+| [0049](https://github.com/open1s/qwe/issues/49) | Low | Playground silently freezes on runtime step errors - driver pauses and discards the diagnostic, error pane stays empty | reference/src/present.rs (playground_driver) |
 
 ## Suggested order
 
@@ -420,5 +423,33 @@ filed 0044-0046):
 5. 0046 filed (Low): README counts internally inconsistent - badge tests-320
    vs suite-table total 304 vs workspace 360 measured at `0f0cd094`;
    table prose still says conformance 17/17 vs badge 18/18.
+
+Review pass 11 (`8c3ed183` playground, filed 0047-0049):
+
+1. Gates on a clean snapshot of `8c3ed183`: fmt, clippy `-D warnings`,
+   361 tests (incl. `playground_page_has_editor_and_viewer`), conformance
+   18/18. (An fmt failure first seen in the live checkout was dev's
+   uncommitted WIP `format.rs` - Phase-4 `pwe fmt` - not a commit defect.)
+2. Functional e2e live: editor `/` + `/view` + `/state` 200, sample compiles
+   ("ok"), bad source renders a diagnostic (error 60), frames animate after
+   Load, `/api/reset` ok, 127.0.0.1-only bind, `vendor_file` is an embedded
+   whitelist (no traversal), error pane uses `textContent` (no XSS), driver
+   publishes frames under the write lock, no unwrap/panic on runtime paths.
+3. 0047 filed (Medium, security): no Origin/Host validation + `ACAO:*` on
+   mutating endpoints - proven live with `Origin: https://evil.example`:
+   POST /api/source answered 200 + ACAO:* (cross-origin compile+execute at
+   ~62 steps/s), GET /api/reset 200. Impact = CSRF into the PWE sandbox
+   (CPU DoS, state hijack, frame exfiltration); no OS-level access.
+4. 0048 filed (Low): `/api/pause?on=0` - query stripped before parsing, so
+   resume is dead code (live: returns "paused"); shipped UI never calls it,
+   which is why manual e2e missed it.
+5. 0049 filed (Low): runtime step errors pause the driver and drop the
+   diagnostic (`take_diagnostics()` discarded) - viewer freezes with an empty
+   error pane while compile errors do render.
+6. Notes (not filed): `pwe --help`/usage() omits the new `playground`
+   subcommand although the commit message says "usage updated" (same class as
+   the earlier usage gap, fixed in `e428e2dd` for run flags); a `Load` whose
+   compile exceeds the handler's 10 s `recv_timeout` still lands later from
+   the driver queue after the client saw "compile timed out".
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
