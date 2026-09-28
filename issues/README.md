@@ -70,6 +70,9 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0041](https://github.com/open1s/qwe/issues/41) | Medium | GPU field-sweep backend is net-slower than the CPU at every tested size (per-step buffer alloc + full f64↔f32 conversion + sync readback; 2.55×/2.0×/1.34× slower at 0.26M/2.1M/16.8M cells on M2 Max) | reference/src/gpu.rs:91 |
 | [0042](https://github.com/open1s/qwe/issues/42) | Low | `pwe run --gpu` without the backend reports "error 5: unspecified compile error" — feature/device/platform failures collapse into one misleading diagnostic | cli/src/main.rs:480 |
 | [0043](https://github.com/open1s/qwe/issues/43) | Low | `Gpu::new` doc comment still cites "detail 5" after the 98/99 diagnostics split — public API doc contradicts the actual error contract | reference/src/gpu.rs:63 |
+| [0044](https://github.com/open1s/qwe/issues/44) | Medium | `step_cross` bypasses the threaded strategy (interpreter side calls `execute_with_index` directly); commit/test/roadmap/ADR-0003 all claim it exercises threaded-vs-JIT, so `--threaded` state is never runtime cross-checked | reference/src/lang/runtime.rs:584 |
+| [0045](https://github.com/open1s/qwe/issues/45) | Low | Threaded vs jump-table dispatchers report different diagnostics for the same failure: detail 16 vs 17 for missing operands; call errors 32/33/34 carry byte_offset 0 vs pc | reference/src/eir.rs (th_get / h_call) |
+| [0046](https://github.com/open1s/qwe/issues/46) | Low | README test counts inconsistent after badge refresh: badge 320 / suite-table total 304 / actual workspace 360; table prose says conformance 17/17 vs badge 18/18 | README.md:9, README.md:237 |
 
 ## Suggested order
 
@@ -386,5 +389,36 @@ Fix-verification pass 9 (`381e3553`, pass 19 — closure of 0043):
    Metal device) / 99 (kernel compile), matching the code.
 2. Gates: fmt, clippy `--all-features`, 359 tests, 346 tests
    `--features gpu`, conformance 18/18. Open issues: none.
+
+Review pass 10 (`ecda9480` threaded dispatch + `0f0cd094` phase-4 docs,
+filed 0044-0046):
+
+1. `ecda9480` opt-in threaded-dispatch interpreter reviewed in depth: handler
+   table mirrors `run_call_tree` (shared arith/divrem/compare helpers,
+   identical Pow/Fma/unary/Select/branch/call/return/trap semantics), env
+   untouched by any opcode in the supported subset, whole-module gating with
+   fallback, table sized exactly to Unreachable=0x8004 (no OOB). My own
+   bit-exact differential: 9 models x 300 steps (states + write-lists + trap
+   errors) all identical, fallback verified with a random() model; CLI e2e
+   byte-identical across default/--threaded x jit/no-jit (k.pweb,
+   field3d.pweb). Bench claim verified: 2279.7us vs 3075.4us (~36% slower,
+   stays opt-in). Gates: fmt, clippy -D warnings, 360 tests, conformance 18/18.
+2. 0044 filed (Medium): `step_cross` never consults `self.threaded`
+   (runtime.rs:584) yet commit message, test comment, roadmap and ADR-0003
+   claim threaded-vs-JIT cross-verification; `pwe run --threaded` state is
+   therefore never runtime cross-checked (comment added to the issue listing
+   all four claim sites).
+3. 0045 filed (Low): strategy divergence on error paths - th_get always
+   detail 16 where the jump table uses 17 for operand 1; h_call reports
+   byte_offset 0 where the jump table reports pc (detail 33 depth-cap is
+   reachable on valid modules).
+4. `0f0cd094` reviewed: architecture.md, CONTRIBUTING.md and ADR-0001/0002/0004/0005
+   check out against measured facts (gates match CI incl. cargo-deny job,
+   clippy.toml enforces the unwrap rule, ADR-0005 numbers match my #41
+   measurements); ADR-0003 repeats the 0044 claim (see comment) and an
+   unsubstantiated "micro ~8%" figure.
+5. 0046 filed (Low): README counts internally inconsistent - badge tests-320
+   vs suite-table total 304 vs workspace 360 measured at `0f0cd094`;
+   table prose still says conformance 17/17 vs badge 18/18.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
