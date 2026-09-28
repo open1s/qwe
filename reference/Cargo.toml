@@ -16,3 +16,6 @@ pest_derive = ">=2.9.1"
 [[bench]]
 name = "throughput"
 harness = false
+
+[dev-dependencies]
+naga = { version = "30", features = ["wgsl-in"] }
