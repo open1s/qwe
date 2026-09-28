@@ -195,22 +195,59 @@ fn pos_at(text: &str, offset: usize) -> (usize, usize) {
     (line, col)
 }
 
-/// The first whole-token occurrence of `name` in `text` (an identifier boundary
-/// before and after — so a short name is not matched inside a longer word).
+/// The first whole-token occurrence of `name` in **code** (an identifier
+/// boundary before and after, and not inside a comment or string literal), so a
+/// short name is not matched inside a longer word, a comment, or prose.
 fn find_ident(text: &str, name: &str) -> Option<usize> {
     if name.is_empty() {
         return None;
     }
-    let bytes = text.as_bytes();
+    let masked = mask_comments_and_strings(text);
+    let nb = name.as_bytes();
     let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'.';
-    for (i, _) in text.match_indices(name) {
-        let before = i == 0 || !is_ident(bytes[i - 1]);
-        let after = i + name.len() >= bytes.len() || !is_ident(bytes[i + name.len()]);
-        if before && after {
-            return Some(i);
+    let mut i = 0;
+    while i + nb.len() <= masked.len() {
+        if &masked[i..i + nb.len()] == nb {
+            let before = i == 0 || !is_ident(masked[i - 1]);
+            let after = i + nb.len() >= masked.len() || !is_ident(masked[i + nb.len()]);
+            if before && after {
+                return Some(i);
+            }
         }
+        i += 1;
     }
     None
+}
+
+/// Replaces comment/string bytes with spaces (same byte length, so offsets are
+/// preserved) so identifier search ignores comments and literals.
+fn mask_comments_and_strings(text: &str) -> Vec<u8> {
+    let bytes = text.as_bytes();
+    let mut out = bytes.to_vec();
+    let (mut i, mut in_string, mut in_comment) = (0usize, false, false);
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_comment {
+            if c == b'\n' {
+                in_comment = false;
+            } else {
+                out[i] = b' ';
+            }
+        } else if in_string {
+            out[i] = b' ';
+            if c == b'"' {
+                in_string = false;
+            }
+        } else if c == b'"' {
+            out[i] = b' ';
+            in_string = true;
+        } else if c == b'#' || (c == b'/' && bytes.get(i + 1) == Some(&b'/')) {
+            out[i] = b' ';
+            in_comment = true;
+        }
+        i += 1;
+    }
+    out
 }
 
 /// The first `` `name` `` in a diagnostic message, if any.

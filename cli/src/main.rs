@@ -463,6 +463,7 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
     let mut buffer = String::new();
     let mut runtime: Option<(LangRuntime, pwe_reference::scene::Scene, String)> = None;
     let mut had_error = false;
+    let mut step_no: u64 = 0;
     let mut line = String::new();
     loop {
         let _ = write!(out, "pwe> ");
@@ -475,9 +476,16 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
         }
         let text = line.trim_end();
         if let Some(cmd) = text.strip_prefix(':') {
-            let mut parts = cmd.split_whitespace();
-            let name = parts.next().unwrap_or("");
-            let arg = parts.next();
+            let toks: Vec<&str> = cmd.split_whitespace().collect();
+            let name = toks.first().copied().unwrap_or("");
+            let args = &toks[1..];
+            // A command takes at most one argument; extra tokens are rejected.
+            if args.len() > 1 {
+                let _ = writeln!(out, ":{name} takes at most one argument; got {:?}", args);
+                had_error = true;
+                continue;
+            }
+            let arg = args.first().copied();
             match name {
                 "q" | "quit" | "exit" => break,
                 "help" => {
@@ -496,16 +504,18 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
                 "clear" => buffer.clear(),
                 "load" => match arg {
                     Some(path) => match std::fs::read_to_string(path) {
-                        Ok(s) => {
-                            buffer = s;
+                        Ok(src) => {
+                            buffer = src;
                             let _ = writeln!(out, "loaded {path} ({} bytes)", buffer.len());
                         }
                         Err(e) => {
                             let _ = writeln!(out, "cannot read {path}: {e}");
+                            had_error = true;
                         }
                     },
                     None => {
                         let _ = writeln!(out, ":load needs a path");
+                        had_error = true;
                     }
                 },
                 "run" => {
@@ -519,6 +529,7 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
                     let steps: u64 = arg.and_then(|a| a.parse().ok()).unwrap_or(60);
                     if buffer.trim().is_empty() {
                         let _ = writeln!(out, "(buffer is empty: type source first)");
+                        had_error = true;
                         continue;
                     }
                     match LangRuntime::compile(&buffer) {
@@ -527,7 +538,8 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
                             // traps, so :step/:reset still work on it.
                             let initial = rt.scene.clone();
                             let src = buffer.clone();
-                            if repl_steps(&mut rt, steps, out) {
+                            step_no = 0;
+                            if repl_steps(&mut rt, steps, &mut step_no, out) {
                                 repl_report(&rt, steps, out);
                             } else {
                                 had_error = true;
@@ -551,7 +563,7 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
                     let n: u64 = arg.and_then(|a| a.parse().ok()).unwrap_or(1);
                     match runtime.as_mut() {
                         Some((rt, _initial, _src)) => {
-                            if repl_steps(rt, n, out) {
+                            if repl_steps(rt, n, &mut step_no, out) {
                                 repl_report(rt, n, out);
                             } else {
                                 had_error = true;
@@ -559,21 +571,25 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
                         }
                         None => {
                             let _ = writeln!(out, "(no program yet: use :run first)");
+                            had_error = true;
                         }
                     }
                 }
                 "reset" => match runtime.as_mut() {
                     Some((rt, initial, _)) => {
                         rt.reset_to(initial.clone());
+                        step_no = 0;
                         let _ = writeln!(out, "reset to step 0");
                     }
                     None => {
                         let _ = writeln!(out, "(no program yet: use :run first)");
+                        had_error = true;
                     }
                 },
                 "" => {}
                 other => {
                     let _ = writeln!(out, "unknown command ':{other}' — try :help");
+                    had_error = true;
                 }
             }
         } else if !text.is_empty() {
@@ -588,15 +604,22 @@ fn run_repl<R: std::io::BufRead, W: std::io::Write>(mut input: R, out: &mut W) -
     }
 }
 
-fn repl_steps(rt: &mut LangRuntime, n: u64, out: &mut dyn std::io::Write) -> bool {
+fn repl_steps(
+    rt: &mut LangRuntime,
+    n: u64,
+    step_no: &mut u64,
+    out: &mut dyn std::io::Write,
+) -> bool {
     for _ in 0..n {
         if let Err(e) = rt.step_interpreter() {
-            let _ = writeln!(out, "step failed: {e}");
+            // Report the failing step index (0-based), matching `pwe run`.
+            let _ = writeln!(out, "step {} failed: {e}", *step_no);
             for d in lang::take_diagnostics() {
                 let _ = writeln!(out, "  [{}] {}", d.detail, d.message);
             }
             return false;
         }
+        *step_no += 1;
     }
     true
 }
@@ -1132,10 +1155,25 @@ mod repl_tests {
         let mut out = Vec::new();
         let code = run_repl(std::io::Cursor::new(script), &mut out);
         let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("step failed:"), "output:\n{s}");
+        assert!(s.contains("step 1 failed:"), "output:\n{s}");
         // `:step` after the failed `:run` must still have a program.
         assert!(!s.contains("(no program yet"), "output:\n{s}");
         assert_eq!(code, 1, "errors must make the repl exit non-zero");
+    }
+
+    #[test]
+    fn repl_load_failure_and_trailing_tokens_error() {
+        let mut out = Vec::new();
+        let code = run_repl(
+            std::io::Cursor::new(":load /no/such/file.pwe\n:quit\n"),
+            &mut out,
+        );
+        assert_eq!(code, 1, "a failed :load must make the repl exit non-zero");
+        let mut out = Vec::new();
+        let code = run_repl(std::io::Cursor::new(":run 5 extra\n:quit\n"), &mut out);
+        assert_eq!(code, 1, "trailing tokens must be rejected");
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("at most one argument"), "output:\n{s}");
     }
 
     #[test]

@@ -2818,6 +2818,9 @@ struct ThMachine<'a> {
     pcs: Vec<usize>,
     stacks: Vec<Regs>,
     halt: bool,
+    /// Index of the instruction currently executing (for error offsets, so
+    /// threaded diagnostics match the jump table, which reports `pc`).
+    pc: usize,
 }
 
 /// Immutable program data (kept separate so instruction borrows don't conflict
@@ -3013,9 +3016,9 @@ fn h_call(m: &mut ThMachine<'_>, ins: &Instruction, p: &ThProg<'_>) -> Result<()
     let target = *p
         .index_of
         .get(&target_id)
-        .ok_or(error(Status::EirInvalid, 32, 0))?;
+        .ok_or(error(Status::EirInvalid, 32, m.pc))?;
     if d + 1 > MAX_CALL_DEPTH {
-        return Err(error(Status::EirInvalid, 33, 0));
+        return Err(error(Status::EirInvalid, 33, m.pc));
     }
     let callee_cap =
         p.functions[target].instructions.len() + p.functions[target].argument_count as usize + 1;
@@ -3025,7 +3028,7 @@ fn h_call(m: &mut ThMachine<'_>, ins: &Instruction, p: &ThProg<'_>) -> Result<()
         for (slot, arg_id) in ins.operands.iter().skip(1).enumerate() {
             callee.insert(
                 (slot as u32) + 1,
-                *cur.get(arg_id).ok_or(error(Status::EirInvalid, 34, 0))?,
+                *cur.get(arg_id).ok_or(error(Status::EirInvalid, 34, m.pc))?,
             );
         }
     }
@@ -3228,6 +3231,7 @@ impl EirModule {
             pcs: Vec::new(),
             stacks: Vec::new(),
             halt: false,
+            pc: 0,
         };
         for &entry in &index.order {
             let f = &self.functions[entry];
@@ -3254,6 +3258,7 @@ impl EirModule {
                     continue;
                 }
                 let ins = &prog.functions[fi].instructions[pc];
+                m.pc = pc;
                 (table[ins.opcode as usize])(&mut m, ins, &prog)?;
             }
         }

@@ -1282,6 +1282,7 @@ pub(crate) fn collect_module(
     ns: &str,
     seen: &mut std::collections::BTreeMap<std::path::PathBuf, usize>,
     out: &mut Vec<ModuleInfo>,
+    root_override: Option<&str>,
 ) -> Result<()> {
     let canon = path.canonicalize().map_err(|e| {
         error_at(
@@ -1300,14 +1301,20 @@ pub(crate) fn collect_module(
         return Ok(());
     }
     seen.insert(canon, out.len());
-    let raw = std::fs::read_to_string(path).map_err(|e| {
-        error_at(
-            Status::Invalid,
-            76,
-            0,
-            format!("cannot read {}: {e}", path.display()),
-        )
-    })?;
+    // The root may be supplied in memory (an editor buffer): parse it as the
+    // root and resolve its imports from disk, ignoring the disk root entirely so
+    // a broken on-disk file cannot mask a valid buffer (RFC-0045 / #62).
+    let raw = match root_override {
+        Some(src) => src.to_string(),
+        None => std::fs::read_to_string(path).map_err(|e| {
+            error_at(
+                Status::Invalid,
+                76,
+                0,
+                format!("cannot read {}: {e}", path.display()),
+            )
+        })?,
+    };
     let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
     let strip = strip_directives(&raw);
     let declared_name = strip.declared_name;
@@ -1337,7 +1344,7 @@ pub(crate) fn collect_module(
     });
     for (d, child) in children {
         let default_ns = d.alias.clone().unwrap_or_else(|| module_stem(&d.path));
-        collect_module(&child, &default_ns, seen, out)?;
+        collect_module(&child, &default_ns, seen, out, None)?;
     }
     Ok(())
 }
@@ -1413,7 +1420,7 @@ fn load_program_sources_inner(
 ) -> Result<(ParsedProgram, ProgramSources)> {
     let mut modules = Vec::new();
     let mut seen: std::collections::BTreeMap<std::path::PathBuf, usize> = Default::default();
-    collect_module(path, "", &mut seen, &mut modules)?;
+    collect_module(path, "", &mut seen, &mut modules, root_override)?;
     check_duplicate_module_names(&modules)?;
     // RFC-0045: deterministic merge order (root first; the rest by namespace
     // then path), independent of filesystem discovery order.
@@ -1421,15 +1428,6 @@ fn load_program_sources_inner(
         let root = modules.remove(0);
         modules.sort_by(|a, b| a.ns.cmp(&b.ns).then_with(|| a.path.cmp(&b.path)));
         modules.insert(0, root);
-    }
-    if let Some(root) = root_override {
-        let strip = strip_directives(root);
-        if let Some(m0) = modules.first_mut() {
-            m0.declared_name = strip.declared_name;
-            m0.exports = strip.exports;
-            m0.source = strip.source.clone();
-            m0.parsed = parse(&strip.source)?;
-        }
     }
     // Resolve `from … import …` alias requests against the child's namespace.
     let mut aliases: Vec<(String, String)> = Vec::new();
