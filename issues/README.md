@@ -667,4 +667,24 @@ Review pass 19 (three commits at once — `26ebc5ee` serde_json refactor,
 8. Issues closed this pass: 0057, 0058 (residuals noted), 0059 (residual
    filed), 0060, 0061. Open: 0045, 0053, 0062, 0063.
 
+Review pass 20 (`dce1cbaa` RFC<->conformance for extension RFCs 0037-0042; no new issues):
+
+1. Snapshot gates green: fmt, clippy `-D warnings`, 387 tests, release build.
+2. `cargo run -p pwe-conformance` live: **total=23 failed=0** (18 prior + 5 new
+   cases: 0037 field sweep, 0038 pool, 0039 joints, 0040 soft bodies, 0042
+   struct records) — all interpreter==JIT cross-backend; report matches the
+   README/ZH badges and prose (23/23).
+3. Sensitivity check (mutation probe, out-of-tree): the RFC-0039 invariant
+   discriminates — same chain with joint systems removed ends at
+   d(anchor,b1)=19.232 (>3.0 -> would FAIL) vs 2.589 bounded with joints.
+   Pool/soft count invariants are inherently discriminating; probe also
+   confirmed 1-based EntityIds as the cases assume (`finite(&rt,5)` = bob).
+4. Docs consistency: rfc-alignment 0029 row updated to total=23; new
+   Extension RFCs (0037-0044) table present, 0043/0044 marked Proposed;
+   0041 evidence exists (`present::tests`, vendored `/vendor/three/...`);
+   roadmap P4.3 updated.
+5. Nit (not an issue): commit message says "six" cases — the commit adds
+   five (18+5=23); the sixth extension RFC (0041) is covered by
+   `present::tests`, not this binary.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
