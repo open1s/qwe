@@ -24,15 +24,20 @@
 //!
 //! ## Divergences from the f64 interpreter (input classes)
 //!
+//! WGSL has no exceptions, so RFC-0021 traps (divide/remainder by `±0.0`, a NaN
+//! comparison) are surfaced by setting an `atomic<u32>` **trap flag** and
+//! early-returning; the host reads the flag after dispatch and fails the step
+//! with the same `EirInvalid 18` detail. The CPU oracle mirrors this.
+//!
 //! | input class | interpreter (f64) | device backend (f32) |
 //! | --- | --- | --- |
-//! | divide/remainder by `±0.0` | traps `EirInvalid 18` | IEEE `inf`/`NaN` (no trap) |
+//! | divide/remainder by `±0.0`, NaN comparison | traps `EirInvalid 18` | sets the trap flag (detail 18) |
 //! | values below f32 normal range | retained | underflow to `0.0` |
 //! | transcendentals (`sin`, `exp`, …) | correctly rounded f64 | f32 precision |
-//! | `sign`/`round`/`hypot`/`Rem` | — | emitted as explicit helpers reproducing CPU semantics exactly |
+//! | `sign`/`round`/`hypot`/`Rem` | — | explicit helpers reproducing CPU semantics exactly |
 //!
-//! Only the first two (and transcendental precision) are irreducible; callers
-//! must not substitute this backend where exact f64 semantics are required.
+//! Only the last two (underflow and transcendental precision) are irreducible;
+//! callers must not substitute this backend where exact f64 semantics matter.
 
 use crate::eir::{EirModule, Function, Immediate, Opcode};
 use pwe_api::{Error, Result, Status};
@@ -142,6 +147,7 @@ pub fn emit_compute_shader(module: &EirModule, func_id: u64) -> Result<String> {
          // f32 approximation of a 64-bit-float EIR kernel - not bit-exact.\n\
          @group(0) @binding(0) var<storage, read> input: array<f32>;\n\
          @group(0) @binding(1) var<storage, read_write> output: array<f32>;\n\
+         @group(0) @binding(2) var<storage, read_write> trap: atomic<u32>;\n\
          // Helpers reproduce CPU semantics WGSL builtins lack / define differently.\n\
          fn pwe_signbit(x: f32) -> f32 {{ return select(1.0, -1.0, (bitcast<u32>(x) >> 31u) == 1u); }}\n\
          fn pwe_sign(x: f32) -> f32 {{ if (x != x) {{ return x; }} return pwe_signbit(x); }}\n\
@@ -229,8 +235,24 @@ fn emit_instruction(ins: &crate::eir::Instruction) -> Result<String> {
     let o = &ins.operands;
     let res = ins.result_id;
     let line = match ins.opcode {
-        // EIR `Rem` is C `fmod` (sign of the dividend); WGSL float `%` matches.
-        Opcode::Rem => format!("  r[{res}] = r[{}] % r[{}];\n", o[0], o[1]),
+        // EIR `Rem`/`Div` by ±0.0 trap (RFC-0021 detail 18); set the trap flag
+        // and early-return, the device equivalent of the interpreter trap.
+        Opcode::Rem => format!(
+            "  if (r[{}] == 0.0) {{ atomicStore(&trap, 1u); return; }}\n  r[{res}] = r[{}] % r[{}];\n",
+            o[1], o[0], o[1]
+        ),
+        Opcode::Div => format!(
+            "  if (r[{}] == 0.0) {{ atomicStore(&trap, 1u); return; }}\n  r[{res}] = r[{}] / r[{}];\n",
+            o[1], o[0], o[1]
+        ),
+        Opcode::Eq | Opcode::Ne | Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => {
+            // NaN comparison traps like the interpreter's `partial_cmp` -> None.
+            let op = cmp_op(ins.opcode).unwrap_or("==");
+            format!(
+                "  if (r[{}] != r[{}] || r[{}] != r[{}]) {{ atomicStore(&trap, 1u); return; }}\n  r[{res}] = select(0.0, 1.0, r[{}] {op} r[{}]);\n",
+                o[0], o[0], o[1], o[1], o[0], o[1]
+            )
+        }
         // WGSL has no `hypot`; use the overflow-safe scaled form.
         Opcode::Hypot => format!("  r[{res}] = pwe_hypot(r[{}], r[{}]);\n", o[0], o[1]),
         Opcode::Nop => String::new(),
@@ -298,6 +320,7 @@ pub fn validate_shader(source: &str) -> Result<()> {
         "fn main(",
         "var<storage, read> input",
         "arrayLength(&output)",
+        "var<storage, read_write> trap",
     ] {
         if !source.contains(needle) {
             return Err(error(Status::Invalid, 6));
@@ -352,14 +375,32 @@ pub fn eval_f32(module: &EirModule, func_id: u64, input: f32) -> Result<f32> {
             Opcode::Add => get(0) + get(1),
             Opcode::Sub => get(0) - get(1),
             Opcode::Mul => get(0) * get(1),
-            Opcode::Div => get(0) / get(1),
-            Opcode::Rem => get(0) % get(1),
-            Opcode::Eq => f32::from(get(0) == get(1)),
-            Opcode::Ne => f32::from(get(0) != get(1)),
-            Opcode::Lt => f32::from(get(0) < get(1)),
-            Opcode::Le => f32::from(get(0) <= get(1)),
-            Opcode::Gt => f32::from(get(0) > get(1)),
-            Opcode::Ge => f32::from(get(0) >= get(1)),
+            Opcode::Div => {
+                if get(1) == 0.0 {
+                    return Err(error(Status::EirInvalid, 18));
+                }
+                get(0) / get(1)
+            }
+            Opcode::Rem => {
+                if get(1) == 0.0 {
+                    return Err(error(Status::EirInvalid, 18));
+                }
+                get(0) % get(1)
+            }
+            Opcode::Eq | Opcode::Ne | Opcode::Lt | Opcode::Le | Opcode::Gt | Opcode::Ge => {
+                let (a, b) = (get(0), get(1));
+                if a.is_nan() || b.is_nan() {
+                    return Err(error(Status::EirInvalid, 18));
+                }
+                match ins.opcode {
+                    Opcode::Eq => f32::from(a == b),
+                    Opcode::Ne => f32::from(a != b),
+                    Opcode::Lt => f32::from(a < b),
+                    Opcode::Le => f32::from(a <= b),
+                    Opcode::Gt => f32::from(a > b),
+                    _ => f32::from(a >= b),
+                }
+            }
             Opcode::Sin => get(0).sin(),
             Opcode::Cos => get(0).cos(),
             Opcode::Exp => get(0).exp(),
@@ -497,6 +538,9 @@ mod tests {
             "hypot(a, a)",
             "(a + 1.0) % (a + 0.5)",
             "if(a, 11.0, 22.0)",
+            "1.0 / a",
+            "a < 1.0",
+            "(a + 1.0) % a",
         ];
         let edges = [
             0.0f64,
@@ -536,25 +580,33 @@ mod tests {
                     .as_mut()
                     .unwrap()
                     .values[0] = af;
-                // The device backend does not trap; a divide/rem-by-zero input
-                // makes the interpreter fail (EirInvalid 18) — out of scope
-                // here (see the div/rem trap umbrella), so skip it.
-                if rt.step_jit().is_err() {
-                    continue;
+                let interp_r = rt.step_jit();
+                let oracle_r = eval_f32(&module, id, a as f32);
+                match (interp_r, oracle_r) {
+                    (Ok(_), Ok(oracle)) => {
+                        let interp = rt
+                            .scene
+                            .get(pwe_api::EntityId(1))
+                            .unwrap()
+                            .state
+                            .as_ref()
+                            .unwrap()
+                            .values[1] as f32;
+                        assert!(
+                            close(oracle, interp),
+                            "body `{body}` at a={a}: interpreter f32={interp} oracle={oracle}"
+                        );
+                    }
+                    (Err(ei), Err(eo)) => {
+                        assert_eq!(
+                            ei.detail, eo.detail,
+                            "body `{body}` at a={a}: trap detail differs"
+                        );
+                    }
+                    (i, o) => panic!(
+                        "body `{body}` at a={a}: tier disagreement interp={i:?} oracle={o:?}"
+                    ),
                 }
-                let interp = rt
-                    .scene
-                    .get(pwe_api::EntityId(1))
-                    .unwrap()
-                    .state
-                    .as_ref()
-                    .unwrap()
-                    .values[1] as f32;
-                let oracle = eval_f32(&module, id, a as f32).unwrap();
-                assert!(
-                    close(oracle, interp),
-                    "body `{body}` at a={a}: interpreter f32={interp} oracle={oracle}"
-                );
             }
         }
     }
