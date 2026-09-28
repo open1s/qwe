@@ -89,7 +89,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - [x] 解释器读路径优化：缓存规范组件 id（免 OnceLock 原子）、`pending`/`committed` 空覆盖快路径、覆盖表 BTreeMap→HashMap；缓存调用索引（`CallIndex`，免每步排序+哈希）。既有形态本已是"预译码"（扁平 `Vec<Instruction>` + 稠密寄存器 + 跳表分派）。
 - [x] 优化执行层（AOT/JIT 共用）：`EirModule::optimize` 做**常量折叠 + `Mul/Add→Fma` 超指令融合**（新增 opcode `Fma=235`，语义 = `(a*b)+c` 两次舍入，**位等价**）。`AotProgram::compile` 于编译期优化；`LangRuntime` 用优化模块执行、`jit` 保持通用 → `step_cross` 差分验证优化器。nbody-64 步进 ~7%；`Fma` 融合使算术指令 2048→784。
 - [x] 真原生 AOT/JIT（纯 `funcs`，`native.rs` + `NATIVE_TARGET`）：把无世界访问、无副作用的 EIR 函数生成 C、用系统 `cc -O2 -ffp-contract=off` 编译成 `.dylib`/`.so`、`dlopen` 加载后直接调用。**逐位一致**差分测试通过（`native_pure_function_matches_interpreter`，64 组随机输入）。依赖：仅系统 C 编译器（缺失时返回错误，不作硬依赖）。
-- [ ] 世界访问型原生内核（`ReadView`/`WriteView` 经 C-ABI vtable 回调进 `SceneRuntime`）——原生支持的下一步
+- [x] 世界访问型原生内核：`ReadView`/`ReadCommitted`/`WriteView` 经 `#[repr(C)]` 函数指针表（`PweCtx`）回调进 `NativeCtx{rt,writes}`；`execute_entries` 复刻解释器的系统屏障/顺序语义。差分测试 `native_world_kernel_matches_interpreter_writes` 通过（nbody 写入逐位一致）。基准：nbody-64 步进 1323µs vs 解释器 2355µs（~1.8×）。
 - [ ] GPU/NPU 计算后端（WGSL）：本机浏览器无 WebGPU 宿主（`navigator.gpu` 缺失），无法在本环境执行验证；需要有 WebGPU 的宿主或离线校验器（naga/tint）后才能实施并验证
 
 ### Phase 4 — 普适性与生态

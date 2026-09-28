@@ -2,6 +2,8 @@
 //! `cargo bench -p pwe-reference`. Each line is a stable, comparable number so
 //! performance regressions are visible in CI.
 use pwe_reference::lang::LangRuntime;
+use pwe_reference::native::NativeProgram;
+use pwe_reference::physics_eir::SceneRuntime;
 use std::time::Instant;
 
 fn nbody_src(n: usize) -> String {
@@ -62,6 +64,20 @@ fn main() {
     timed("present_frame(nbody 64)", 2_000, || {
         let _ = rt.present_frame(None);
     });
+
+    // Phase-3 native backend: pure world kernel compiled to machine code with
+    // `cc -O2` (or skipped when no C compiler is available).
+    if let Ok(native) = NativeProgram::compile(&rt.module) {
+        timed("step_native(nbody 64)", 20_000, || {
+            let mut r = SceneRuntime::new(&rt.scene);
+            let _ = native.execute_entries(&rt.module, &mut r).unwrap();
+        });
+    } else {
+        println!(
+            "{:<28} (no `cc`; native backend skipped)",
+            "step_native(nbody 64)"
+        );
+    }
 
     let mut rtf = LangRuntime::compile(FIELD_SRC).unwrap();
     timed("step_interpreter(wave 32x32)", 20_000, || {
