@@ -397,6 +397,7 @@ fn cmd_lsp() -> i32 {
 /// Compiles the runnable ```` ```pwe ```` blocks in the given Markdown files
 /// (default `docs/lang-usage.md`). Exits non-zero on any failure.
 fn cmd_doctest(args: &[String]) -> i32 {
+    let strict = args.iter().any(|a| a == "--strict");
     let files: Vec<String> = if args.is_empty() {
         vec!["docs/lang-usage.md".to_string()]
     } else {
@@ -406,6 +407,7 @@ fn cmd_doctest(args: &[String]) -> i32 {
             .collect()
     };
     let mut failed = false;
+    let mut warned = false;
     let mut checked = 0usize;
     for path in &files {
         let md = match std::fs::read_to_string(path) {
@@ -416,20 +418,22 @@ fn cmd_doctest(args: &[String]) -> i32 {
                 continue;
             }
         };
-        let blocks: Vec<_> = pwe_reference::doctest::fenced_blocks(&md)
-            .into_iter()
-            .filter(pwe_reference::doctest::is_runnable)
-            .collect();
-        checked += blocks.len();
-        for f in pwe_reference::doctest::check_document(&md) {
+        checked += pwe_reference::doctest::extract(&md)
+            .blocks
+            .iter()
+            .filter(|b| pwe_reference::doctest::is_runnable(b))
+            .count();
+        let (failures, warnings) = pwe_reference::doctest::check_document_full(&md);
+        for f in &failures {
             failed = true;
-            eprintln!(
-                "{path}:{}: code block does not compile:\n{}",
-                f.line, f.error
-            );
+            eprintln!("{path}:{}: {}", f.line, f.error);
+        }
+        for w in &warnings {
+            warned = true;
+            eprintln!("{path}:{}: warning: {}", w.line, w.message);
         }
     }
-    if failed {
+    if failed || (strict && warned) {
         1
     } else {
         println!("pwe doctest: {checked} runnable block(s) compile.");
