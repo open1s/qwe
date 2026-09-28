@@ -67,6 +67,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0038](https://github.com/open1s/qwe/issues/38) | Medium | Emitted WGSL builtins diverge from the CPU oracle (sign/round/hypot/Rem); emitter never validated by `naga` despite the doc claim | reference/src/wgsl.rs:195 |
 | [0039](https://github.com/open1s/qwe/issues/39) | Low | WGSL device backend never traps (div/rem-by-zero, NaN compares) while interpreter + native both trap EirInvalid 18 — tiers disagree; decision needed before wiring | reference/src/wgsl.rs:17 |
 | [0040](https://github.com/open1s/qwe/issues/40) | Medium | Native JIT deopt re-executes a step on partially-committed native writes — trap swallowed, state double-applied (`enable_native_jit` + `step_jit`) | reference/src/native.rs:198 |
+| [0041](https://github.com/open1s/qwe/issues/41) | Medium | GPU field-sweep backend is net-slower than the CPU at every tested size (per-step buffer alloc + full f64↔f32 conversion + sync readback; 2.55×/2.0×/1.34× slower at 0.26M/2.1M/16.8M cells on M2 Max) | reference/src/gpu.rs:91 |
+| [0042](https://github.com/open1s/qwe/issues/42) | Low | `pwe run --gpu` without the backend reports "error 5: unspecified compile error" — feature/device/platform failures collapse into one misleading diagnostic | cli/src/main.rs:480 |
 
 ## Suggested order
 
@@ -309,5 +311,36 @@ Review/test pass 15 (`48492885` — native JIT on by default for `pwe run`):
    left as a note rather than an issue.
 5. Uncommitted WIP observed, untouched: `reference/Cargo.toml` gains an
    opt-in `gpu` feature (target-gated `metal` 0.33, `pwe run --gpu`).
+
+Review/test pass 16 (`55457ff1` — Metal GPU backend for field sweeps):
+
+1. Architecture verdict: elegant. Layering is textbook — `gpu` feature
+   forwards cli → reference, `metal` is optional + `cfg(target_os)`
+   gated (non-macOS/CI never builds it), `#[cfg(all(feature, macos))]`
+   module and stub `enable_gpu` keep one CLI call site; the dispatch
+   seam is the single `field_diffuse` domain op (no EIR bypass — the op
+   still flows through the same IR path, only its implementation
+   swaps), mirroring the `enable_native_jit` attach pattern; **both**
+   `step_cross` runtimes attach the context, so the tier guard compares
+   GPU-vs-GPU and cannot false-mismatch; `unsafe` post-wait readback is
+   documented and isolated; roadmap/docs state the f32-approximate,
+   CPU-is-oracle contract honestly.
+2. Gates: fmt, clippy `--all-features`, 359 default tests,
+   `--features gpu` reference suite 346 tests incl. 4 gpu tests on the
+   Apple M2 Max, cli tests, conformance 18/18.
+3. Behavior: release build without the feature → `--gpu` rc=1 (message
+   quality filed as 0042); with the feature → banner + rc=0 for
+   1/500/5000-step runs, no cross-guard failures. Field totals CPU vs
+   GPU: rel Δ 9e-7 (500 steps), 1e-5 (5000), 4e-8 (16.8M cells/50) —
+   bounded f32 drift, no blow-up.
+4. Performance: the backend is net-slower everywhere tested (2.55× /
+   2.0× / 1.34× at 0.26M / 2.1M / 16.8M cells) because `Gpu::diffuse`
+   allocates, converts the whole field f64↔f32 and readbacks
+   synchronously per step — filed as 0041 (Medium) with fix directions
+   (device-resident field state first).
+5. Style notes (not issues): the `cfg(all(feature, macos))` guard is
+   repeated ~10× with 4 duplicated constructor lines in runtime.rs — a
+   single `scene_rt` helper would collapse them; the commit message
+   repeats the already-landed native-JIT-default line.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
