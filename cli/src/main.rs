@@ -67,6 +67,8 @@ fn usage() {
            --no-native-jit    disable the native JIT\n  \
            --gpu              Metal field-sweep offload (macOS; EXPERIMENTAL,\n  \
                               usually slower than the CPU - see roadmap)\n  \
+           --threaded         opt-in threaded-dispatch interpreter (the jump\n  \
+                              table is the faster default)\n  \
            --port P           present only: HTTP port\n\
          \n\
          Compile source to a .pweb binary, then run the binary (javac/java style).\n\
@@ -377,6 +379,7 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     // Native JIT is on by default on `run`; `--no-native-jit` opts out.
     let mut native_jit = true;
     let mut gpu = false;
+    let mut threaded = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -413,6 +416,9 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
             }
             "--gpu" => {
                 gpu = true;
+            }
+            "--threaded" => {
+                threaded = true;
             }
             "--port" | "-p" => {
                 let Some(v) = it.next().and_then(|s| s.parse::<u16>().ok()) else {
@@ -478,6 +484,10 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     }
     if check {
         rt.set_finite_check(true);
+    }
+    if threaded {
+        // Opt-in threaded-dispatch interpreter (default is the faster jump table).
+        rt.enable_threaded_dispatch(true);
     }
     if native_jit {
         // Phase-3 hotness JIT: promote hot units to native code (goes through

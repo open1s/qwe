@@ -60,6 +60,8 @@ pub struct LangRuntime {
     /// Optional Metal GPU context (`pwe run --gpu`); field sweeps run on the GPU.
     #[cfg(all(feature = "gpu", target_os = "macos"))]
     gpu: Option<crate::gpu::Gpu>,
+    /// Use the opt-in threaded-dispatch interpreter (else the jump table).
+    threaded: bool,
 }
 
 impl LangRuntime {
@@ -72,6 +74,14 @@ impl LangRuntime {
     /// Number of steps the native JIT backend executed.
     pub fn native_executions(&self) -> u64 {
         self.jit.native_executions()
+    }
+
+    /// Enables the opt-in **threaded-dispatch** interpreter (default: off). The
+    /// jump-table interpreter stays the faster default; this is selectable and
+    /// differentially verified. Supported only for modules whose opcodes are all
+    /// in the threaded subset; other modules fall back to the jump table.
+    pub fn enable_threaded_dispatch(&mut self, on: bool) {
+        self.threaded = on;
     }
 
     /// Enables/disables the Metal GPU backend for field sweeps. Available only
@@ -231,6 +241,7 @@ impl LangRuntime {
             finite_check: false,
             #[cfg(all(feature = "gpu", target_os = "macos"))]
             gpu: None,
+            threaded: false,
             conserved: compiled
                 .parsed
                 .systems
@@ -501,9 +512,13 @@ impl LangRuntime {
         crate::eir::drain_due_events(&mut self.env);
         // The module was validated once at compile; executing skips the
         // dominance re-check every step (vital for unrolled field solvers).
-        let writes = self
-            .optimized
-            .execute_with_index(&mut rt, &mut self.env, &self.call_index)?;
+        let writes = if self.threaded && self.optimized.threaded_supported() {
+            self.optimized
+                .execute_threaded_with_index(&mut rt, &mut self.env, &self.call_index)?
+        } else {
+            self.optimized
+                .execute_with_index(&mut rt, &mut self.env, &self.call_index)?
+        };
         self.check_invariants(&writes)?;
         let overlays = rt.take_overlays();
         apply_writes(&mut self.scene, &writes)?;

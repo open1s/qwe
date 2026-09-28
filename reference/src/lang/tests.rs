@@ -3190,3 +3190,61 @@ fn native_jit_trap_propagates_without_re_execution() {
     );
     let _ = nat;
 }
+
+#[test]
+fn threaded_dispatch_matches_jump_table() {
+    // The opt-in threaded interpreter must be byte-identical to the jump-table
+    // interpreter. `step_cross` runs the (threaded) interpreter against the
+    // generic JIT; also compare two runtimes directly.
+    let mut src = String::from("world { gravity=(0,0,0)\n");
+    for i in 0..6 {
+        let a = i as f64 * 0.37;
+        src += &format!(
+            "  entity b{i} {{ state = ({:.4}, {:.4}, 0, 0, 0, 0, 1.0) }}\n",
+            a.cos() * 5.0,
+            a.sin() * 5.0
+        );
+    }
+    src += "}\nsystems { nbody { G = 0.001; dt = 0.001 } }\n";
+
+    let mut threaded = LangRuntime::compile(&src).unwrap();
+    assert!(
+        threaded.optimized.threaded_supported(),
+        "nbody is threaded-eligible"
+    );
+    threaded.enable_threaded_dispatch(true);
+    threaded.enable_native_jit(false); // keep the JIT generic for the differential
+    for _ in 0..64 {
+        threaded.step_cross().unwrap();
+    }
+
+    // Direct comparison: threaded vs jump table on the same scene.
+    let mut base = LangRuntime::compile(&src).unwrap();
+    let mut opt = LangRuntime::compile(&src).unwrap();
+    opt.enable_threaded_dispatch(true);
+    base.enable_native_jit(false);
+    opt.enable_native_jit(false);
+    for _ in 0..32 {
+        base.step_interpreter().unwrap();
+        opt.step_interpreter().unwrap();
+    }
+    let states = |rt: &LangRuntime| -> Vec<u64> {
+        let mut v = Vec::new();
+        for id in 1..=6u128 {
+            let st = rt
+                .scene
+                .get(pwe_api::EntityId(id))
+                .unwrap()
+                .state
+                .as_ref()
+                .unwrap();
+            v.extend(st.values.iter().map(|x| x.to_bits()));
+        }
+        v
+    };
+    assert_eq!(
+        states(&base),
+        states(&opt),
+        "threaded must match the jump table"
+    );
+}

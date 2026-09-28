@@ -58,6 +58,14 @@ fn main() {
     timed("step_interpreter(nbody 64)", 20_000, || {
         rt.step_interpreter().unwrap();
     });
+
+    // Opt-in threaded-dispatch interpreter vs the default jump table.
+    let mut rt_t = LangRuntime::compile(&nbody).unwrap();
+    rt_t.enable_native_jit(false);
+    rt_t.enable_threaded_dispatch(true);
+    timed("step_threaded(nbody 64)", 20_000, || {
+        rt_t.step_interpreter().unwrap();
+    });
     timed("step_cross(nbody 64)", 5_000, || {
         rt.step_cross().unwrap();
     });
