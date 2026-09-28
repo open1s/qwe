@@ -83,6 +83,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0054](https://github.com/open1s/qwe/issues/54) | Medium | assignment to an undeclared slot silently dropped during lowering (unknown-LHS skip with no diagnostic) while reads of unknown identifiers warn 85 - typo writes vanish with zero feedback | reference/src/lang/systems.rs:104-143 |
 | [0055](https://github.com/open1s/qwe/issues/55) | Medium | playground CSRF guard bypass: `starts_with` Origin matching accepts `localhost.evil.com`/`127.0.0.1.evil.com`; Origin-less GET mutations (`/api/reset`, `/api/pause`) still execute | reference/src/present.rs (handle_playground) |
 | [0056](https://github.com/open1s/qwe/issues/56) | Low | pwe fmt not comment-aware: a `"` inside a `#` comment opens a fake multi-line string (rest of file emitted verbatim, indentation stops); `//`-comment braces corrupt depth tracking | reference/src/lang/format.rs |
+| [0057](https://github.com/open1s/qwe/issues/57) | Low | pwe doctest false-pass: warning-only blocks report success (check_document only records Err, never surfaces push_diag warnings); unclosed fence at EOF and outer 4-backtick fences silently check 0 blocks yet exit 0 | reference/src/doctest.rs (check_document / fenced_blocks) |
 
 ## Suggested order
 
@@ -561,5 +562,26 @@ Review pass 15 (`83ce2e63` fix #53/#54, `3690528c` fix #55/#56):
    counts rejected, failed `:run` keeps program, real runtime error detail,
    2 tests. Remaining - no step number in `step failed:` (53a), `:load`
    failure and empty `:run` still exit 0, `:run 5 extra` ignores extras.
+
+Review pass 16 (`9c1167d6` `pwe doctest`, filed 0057):
+
+1. Snapshot gates green: fmt, clippy `-D warnings`, 377 tests (373 + 4
+   doctest), conformance 18/18, release build ok.
+2. Feature verified live: default run checks `docs/lang-usage.md` (13 runnable
+   blocks, rc 0); all 4 shipped docs 28 blocks rc 0; bad block -> `{path}:{line}:
+   code block does not compile` + full diagnostic, rc 1; `pwe text`/fragment/
+   `pwe ignore` blocks correctly skipped; missing file -> message + rc 1;
+   usage lists `pwe doctest [FILES...]`.
+3. Skip heuristic audited: the 5 non-runnable `pwe` fences in lang-usage are
+   genuine fragments (entity/funcs/params-only) or file-illustration snippets
+   that do not compile standalone (verified by extracting them) - the
+   `starts_with("world")` rule under-checks nothing that compiles today.
+4. 0057 filed (Low): two false-pass classes - (a) warning-only blocks report
+   success: `x = x + ghost + 1.0` block passes doctest rc 0 while compile warns
+   85 (check_document only reads Err; shipped_docs_compile inherits the gap);
+   (b) unclosed fence at EOF drops the last block -> "0 runnable block(s)",
+   rc 0; outer 4-backtick fences likewise silently check nothing.
+5. Diagnostic hygiene checked: a warn-block followed by a fail-block reports
+   only the failure's own error (no stale cross-block diagnostics).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
