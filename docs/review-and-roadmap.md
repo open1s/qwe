@@ -108,7 +108,9 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
   - [x] **LSP**：`pwe lsp`（stdio，无依赖）——全文档同步、`publishDiagnostics`（开/改/关，`lang::compile`+`diagnose`）、`textDocument/formatting`（`format_source`）；自带 JSON 解析/序列化（`json.rs`）与单测。
   - [ ] 语义化模块系统
   - [ ] 语义化模块系统
-- [ ] 分布式/插件沙箱、fuzz/Miri
+- [~] 分布式/插件沙箱、fuzz/Miri
+  - [x] **fuzz（依赖无关、CI 可跑）**：`reference/tests/fuzz.rs` 用确定性 PRNG 向所有公开解码边界（EIR/extension/channel）与 parser/compiler/formatter 灌入随机字节/源码，断言**不 panic**、解析返回 `Result`、`format_source` **幂等**。Miri 用法记于 CONTRIBUTING（`cargo +nightly miri test --test fuzz`；`cfg!(miri)` 下自动减迭代）。
+  - [ ] 分布式/插件沙箱（更大）
 - [ ] EIR 升级为显式 SSA CFG；RFC↔conformance ≥80%
 - [x] ADR/贡献指南/架构文档：`docs/architecture.md`（流水线/边界/执行层）、`CONTRIBUTING.md`（工具链/门禁/特性/流程）、`docs/adr/`（0001–0005：原生 cc 后端、进程内豁免、opt-in 线程化、SIMD 不采用、GPU 实验性）。
 

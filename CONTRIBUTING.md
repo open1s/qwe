@@ -30,6 +30,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 cargo run -q -p pwe-conformance          # RFC conformance gate
 cargo run -q -p pwe-cli -- doctest       # compile runnable code blocks in docs
+# Fuzzing (in-tree, deterministic): cargo test -p pwe-reference --test fuzz
+# Deeper UB checks (needs nightly + miri): cargo +nightly miri test -p pwe-reference --test fuzz
 # Editor integration: `pwe lsp` (stdio LSP: diagnostics + formatting)
 cargo build --examples -p pwe-reference
 cargo bench -p pwe-reference             # throughput record
