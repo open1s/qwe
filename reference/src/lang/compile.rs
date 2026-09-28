@@ -1143,6 +1143,27 @@ pub(crate) struct StripResult {
     pub imports: Vec<(ImportDirective, String)>,
 }
 
+/// Updates the string-literal state across one line, **ignoring quotes inside a
+/// comment** (`#` / `//`): a `"` in a comment must not open a string (#68).
+fn scan_string_state(line: &str, mut in_string: bool) -> bool {
+    let b = line.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if in_string {
+            if c == b'"' {
+                in_string = false;
+            }
+        } else if c == b'#' || (c == b'/' && b.get(i + 1) == Some(&b'/')) {
+            break; // comment: the rest of the line cannot open/close a string
+        } else if c == b'"' {
+            in_string = true;
+        }
+        i += 1;
+    }
+    in_string
+}
+
 /// Removes `module` / `export` / `import` directive lines from `src` and
 /// collects them. **String-aware**: a directive-looking line inside a
 /// multi-line string literal is preserved verbatim (RFC-0045 / #66).
@@ -1157,9 +1178,7 @@ pub(crate) fn strip_directives(src: &str) -> StripResult {
         if in_string {
             source.push_str(line);
             source.push('\n');
-            if line.matches('"').count() % 2 == 1 {
-                in_string = false;
-            }
+            in_string = scan_string_state(line, in_string);
             continue;
         }
         if let Some(n) = parse_module_line(line) {
@@ -1181,9 +1200,7 @@ pub(crate) fn strip_directives(src: &str) -> StripResult {
         }
         source.push_str(line);
         source.push('\n');
-        if line.matches('"').count() % 2 == 1 {
-            in_string = true;
-        }
+        in_string = scan_string_state(line, in_string);
     }
     StripResult {
         source,

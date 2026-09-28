@@ -3407,3 +3407,16 @@ fn module_export_privacy_applies_to_funcs() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn module_directive_after_quoted_comment_is_stripped() {
+    // #68: a `"` inside a comment must not poison the string tracker.
+    let src = "# it's a \"quoted\" comment line\nmodule util\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = x + 1.0 } }\n";
+    let strip = crate::lang::compile::strip_directives(src);
+    assert_eq!(strip.declared_name.as_deref(), Some("util"));
+    assert!(
+        !strip.source.contains("module util"),
+        "module line must be stripped"
+    );
+    LangRuntime::compile(src).unwrap();
+}
