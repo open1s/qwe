@@ -84,6 +84,9 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0055](https://github.com/open1s/qwe/issues/55) | Medium | playground CSRF guard bypass: `starts_with` Origin matching accepts `localhost.evil.com`/`127.0.0.1.evil.com`; Origin-less GET mutations (`/api/reset`, `/api/pause`) still execute | reference/src/present.rs (handle_playground) |
 | [0056](https://github.com/open1s/qwe/issues/56) | Low | pwe fmt not comment-aware: a `"` inside a `#` comment opens a fake multi-line string (rest of file emitted verbatim, indentation stops); `//`-comment braces corrupt depth tracking | reference/src/lang/format.rs |
 | [0057](https://github.com/open1s/qwe/issues/57) | Low | pwe doctest false-pass: warning-only blocks report success (check_document only records Err, never surfaces push_diag warnings); unclosed fence at EOF and outer 4-backtick fences silently check 0 blocks yet exit 0 | reference/src/doctest.rs (check_document / fenced_blocks) |
+| [0058](https://github.com/open1s/qwe/issues/58) | Medium | pwe lsp publishes a bogus parse failure (code 60, range 0:0) for any document with `import` - in-memory `lang::compile` = `parse+compile_program` has no module loader while CLI `compile_file` uses `load_program_sources`; same root cause makes doctest unable to check import doc blocks | cli/src/lsp.rs (diagnostics), reference/src/lang/compile.rs:1908 |
+| [0059](https://github.com/open1s/qwe/issues/59) | Low | pwe lsp diagnostic ranges are 0:0 for warnings (85/100/94) and parse errors: Ok-path hardcodes `diag_json(..., 0, ...)` ignoring `d.byte_offset`, and upstream push_diag sites record 0 (error_at errors like 52 map correctly - positive control) | cli/src/lsp.rs (diagnostics), reference/src/lang/diagnostics.rs |
+| [0060](https://github.com/open1s/qwe/issues/60) | Low | pwe lsp/json non-BMP handling: `\uD800-\uDFFF` surrogate escapes decode independently to U+FFFD (document text corrupted for escaping clients); `pos_at` counts code points, not UTF-16 units (astral columns off; BMP/CJK unaffected) | cli/src/json.rs (string), cli/src/lsp.rs (pos_at) |
 
 ## Suggested order
 
@@ -583,5 +586,31 @@ Review pass 16 (`9c1167d6` `pwe doctest`, filed 0057):
    rc 0; outer 4-backtick fences likewise silently check nothing.
 5. Diagnostic hygiene checked: a warn-block followed by a fail-block reports
    only the failure's own error (no stale cross-block diagnostics).
+
+Review pass 17 (`c5509c60` `pwe lsp`, filed 0058-0060):
+
+1. Snapshot gates green: fmt, clippy `-D warnings`, 382 tests (377 + 5 json/lsp),
+   conformance 18/18, release build ok; usage lists `pwe lsp`.
+2. Live LSP session probed end-to-end: initialize (Full sync +
+   documentFormattingProvider), didOpen error diag (code/message/severity ok),
+   warning diag severity 2, didChange republish, didClose clears to [],
+   formatting applies real indentation edits and is idempotent at the LSP level,
+   single-line balanced block no longer inflates depth (format.rs signed-net
+   fix; unit `single_line_block_keeps_depth`), malformed JSON body tolerated
+   (server survives), unknown request with id -> null (never hangs),
+   shutdown -> null, exit -> rc 0, EOF -> rc 0.
+3. fmt regression re-run on this commit (format.rs changed): 32/32 repo .pwe
+   idempotent, compile diagnostics + 10-step runtime byte-identical, both
+   comment counterexamples (#56) still fixed.
+4. 0058 filed (Medium): any document with `import` gets bogus error 60 at 1:1 -
+   `lang::compile` (compile.rs:1908) parses without the module loader while the
+   CLI's `compile_file` uses `load_program_sources`; every std-importing example
+   would show a phantom parse error in the editor; also explains why doctest
+   can never check import blocks.
+5. 0059 filed (Low): diagnostic ranges 0:0 for warnings and parse errors -
+   Ok-path passes literal 0 instead of `d.byte_offset`; upstream 85/100/94
+   push_diag sites also record 0; `error_at` errors (52) map correctly (control).
+6. 0060 filed (Low): non-BMP - surrogate-pair escapes decode to U+FFFD and
+   `pos_at` counts code points instead of UTF-16 (astral-only; CJK fine).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
