@@ -85,4 +85,60 @@ fn main() {
     });
 
     println!("(field = 32x32 = {} cells/step)", 32 * 32);
+
+    #[cfg(all(feature = "gpu", target_os = "macos"))]
+    bench_gpu();
+}
+
+// Phase-3 GPU (Metal) record: GPU field-sweep offload vs the CPU stencil. The
+// backend is an *experimental* correctness-verified f32 offload; this measures
+// its crossover. Built only with `--features gpu` on macOS.
+#[cfg(all(feature = "gpu", target_os = "macos"))]
+fn bench_gpu() {
+    fn cpu_diffuse(
+        cur: &[f64],
+        out: &mut [f64],
+        w: usize,
+        h: usize,
+        d: usize,
+        rate: f64,
+        dx2: f64,
+    ) {
+        for k in 0..d {
+            for j in 0..h {
+                for i in 0..w {
+                    let idx = (k * h + j) * w + i;
+                    let c = cur[idx];
+                    let at = |ci: usize, cj: usize, ck: usize| cur[(ck * h + cj) * w + ci];
+                    let l = if i > 0 { at(i - 1, j, k) } else { c };
+                    let r = if i + 1 < w { at(i + 1, j, k) } else { c };
+                    let u = if j > 0 { at(i, j - 1, k) } else { c };
+                    let dn = if j + 1 < h { at(i, j + 1, k) } else { c };
+                    let b = if k > 0 { at(i, j, k - 1) } else { c };
+                    let f = if k + 1 < d { at(i, j, k + 1) } else { c };
+                    out[idx] = c + rate * ((l + r + u + dn + b + f - 6.0 * c) / dx2);
+                }
+            }
+        }
+    }
+    let gpu = match pwe_reference::gpu::Gpu::new() {
+        Ok(g) => g,
+        Err(_) => {
+            println!("{:<28} (no Metal device)", "gpu_diffuse");
+            return;
+        }
+    };
+    println!("GPU device: {}", gpu.name());
+    let (w, h, d) = (256usize, 256usize, 1usize);
+    let n = w * h * d;
+    let cur: Vec<f64> = (0..n).map(|i| ((i as f64) * 0.001).sin()).collect();
+    let mut out = vec![0.0f64; n];
+    let dx2 = 1.0 / 64.0;
+    timed("cpu_diffuse(256x256)", 200, || {
+        cpu_diffuse(&cur, &mut out, w, h, d, 0.2, dx2);
+    });
+    timed("gpu_diffuse(256x256)", 200, || {
+        out = gpu.diffuse(&cur, w, h, d, 0.2, dx2).unwrap();
+    });
+    std::hint::black_box(&out);
 }

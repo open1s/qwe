@@ -57,6 +57,9 @@ pub struct Gpu {
     device: metal::Device,
     queue: metal::CommandQueue,
     pipeline: metal::ComputePipelineState,
+    /// Pooled input/output buffers sized to the last field (avoids per-step
+    /// allocation), reused across steps.
+    pool: std::cell::RefCell<Option<(usize, metal::Buffer, metal::Buffer)>>,
 }
 
 impl Gpu {
@@ -67,17 +70,18 @@ impl Gpu {
         let queue = device.new_command_queue();
         let library = device
             .new_library_with_source(MSL, &metal::CompileOptions::new())
-            .map_err(|_| error(Status::Invalid, 98))?;
+            .map_err(|_| error(Status::Invalid, 99))?;
         let function = library
             .get_function("pwe_diffuse", None)
-            .map_err(|_| error(Status::Invalid, 98))?;
+            .map_err(|_| error(Status::Invalid, 99))?;
         let pipeline = device
             .new_compute_pipeline_state_with_function(&function)
-            .map_err(|_| error(Status::Invalid, 98))?;
+            .map_err(|_| error(Status::Invalid, 99))?;
         Ok(Self {
             device,
             queue,
             pipeline,
+            pool: std::cell::RefCell::new(None),
         })
     }
 
@@ -101,13 +105,29 @@ impl Gpu {
         if n != w * h * d {
             return Err(error(Status::Invalid, 7));
         }
-        let f32_in: Vec<f32> = cur.iter().map(|&v| v as f32).collect();
         let bytes = (n * std::mem::size_of::<f32>()) as u64;
         let opts = metal::MTLResourceOptions::StorageModeShared;
-        let buf_in =
-            self.device
-                .new_buffer_with_data(f32_in.as_ptr() as *const c_void, bytes, opts);
-        let buf_out = self.device.new_buffer(bytes, opts);
+        // Reuse the pooled buffers for this field size (no per-step allocation).
+        let (buf_in, buf_out) = {
+            let mut pool = self.pool.borrow_mut();
+            match pool.as_ref() {
+                Some((sz, bi, bo)) if *sz == n => (bi.clone(), bo.clone()),
+                _ => {
+                    let bi = self.device.new_buffer(bytes, opts);
+                    let bo = self.device.new_buffer(bytes, opts);
+                    *pool = Some((n, bi.clone(), bo.clone()));
+                    (bi, bo)
+                }
+            }
+        };
+        // SAFETY: `buf_in` is `n` f32 of shared/unified memory and not in use by
+        // the GPU (no in-flight commands); write the host field into it.
+        unsafe {
+            let dst = buf_in.contents() as *mut f32;
+            for (i, &v) in cur.iter().enumerate() {
+                *dst.add(i) = v as f32;
+            }
+        }
         let set = |enc: &metal::ComputeCommandEncoderRef, idx: u64, val: &u32| {
             enc.set_bytes(idx, 4, val as *const u32 as *const c_void);
         };

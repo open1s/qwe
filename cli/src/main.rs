@@ -481,7 +481,10 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
             eprintln!("pwe: --gpu unavailable: {}", lang::diagnose("", &e));
             return 1;
         }
-        eprintln!("pwe: GPU backend enabled (Metal field sweeps, f32 approximate)");
+        eprintln!(
+            "pwe: GPU backend enabled (Metal field sweeps, f32 approximate; EXPERIMENTAL \
+             offload - usually slower than the CPU; see docs/review-and-roadmap.md)"
+        );
     }
     match port {
         None => {

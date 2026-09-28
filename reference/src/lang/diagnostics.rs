@@ -112,6 +112,7 @@ pub fn detail_name(detail: u32) -> &'static str {
         96 => "state slots 7/8/9 written without `orient = true` (read as a Z-spin)",
         97 => "GPU backend not built (rebuild with `--features gpu` on macOS)",
         98 => "no Metal GPU device available",
+        99 => "Metal kernel failed to compile",
         4 => "EIR operand/type validation failed (compiler bug)",
         6 => "EIR result type unspecified (compiler bug)",
         _ => "unspecified compile error",

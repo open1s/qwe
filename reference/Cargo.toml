@@ -7,8 +7,11 @@ publish = false
 license = "Apache-2.0"
 
 [features]
-# macOS-only Metal GPU acceleration for field sweeps (opt-in; `pwe run --gpu`).
-# The `metal` dependency is target-gated so non-macOS CI never builds it.
+# macOS-only Metal f32 offload for field sweeps (opt-in; `pwe run --gpu`).
+# EXPERIMENTAL: correctness-verified but currently SLOWER than the CPU for
+# typical sizes (per-step f64<->f32 conversion + upload/readback dominate) — it
+# is an offload, not an accelerator. See docs/review-and-roadmap.md. The `metal`
+# dependency is target-gated so non-macOS CI never builds it.
 gpu = ["dep:metal"]
 
 [dependencies]
