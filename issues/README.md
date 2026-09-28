@@ -859,4 +859,15 @@ comments; closed 0068 as completed):
 Only **0064** remains open (alignment header/order/vocabulary — untouched by
 the last two commits).
 
+Review pass 28 (triage: closed 0064 as completed):
+
+1. Verified on current main (no new dev commits): both previously missing
+   rows exist — 0045 (`Done`, test evidence) and 0046 (`Proposed`, accurate
+   note) — so the issue's title gap is resolved.
+2. Cosmetic residuals remain and were documented in the close comment as
+   non-blocking routine docs polish: header still `(0037-0044)`, row order
+   0043/0045/0046/0044, mixed status vocabulary (`Done`/`Accepted` vs
+   sibling `Normative`).
+3. **Zero open issues** as of this pass.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
