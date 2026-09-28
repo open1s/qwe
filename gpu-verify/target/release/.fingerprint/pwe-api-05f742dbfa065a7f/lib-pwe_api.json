@@ -1,0 +1,1 @@
+{"rustc":17329007180185699724,"features":"[\"default\"]","declared_features":"[\"default\", \"std\"]","target":7819200766001378179,"profile":2040997289075261528,"path":6358311984759429935,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"release/.fingerprint/pwe-api-05f742dbfa065a7f/dep-lib-pwe_api","checksum":false}}],"rustflags":[],"config":9396254390672932401,"compile_kind":0}

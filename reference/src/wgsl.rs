@@ -19,8 +19,10 @@
 //! `sign`/`round` edge cases) are emitted as explicit helper functions that
 //! reproduce the CPU semantics, so the shader and the oracle share one lowering.
 //!
-//! This module emits shader source; it does not create a GPU device. Wiring it
-//! to a WebGPU host (and the RFC-0027 lifecycle) is a separate integration.
+//! This module emits shader source; it does not create a GPU device. Execution
+//! on real hardware is verified by the standalone `gpu-verify` crate, which runs
+//! these shaders on the macOS **Metal** backend (via `wgpu`) and compares the
+//! results with the CPU oracle (including the trap flag).
 //!
 //! ## Divergences from the f64 interpreter (input classes)
 //!
@@ -125,6 +127,10 @@ pub fn emit_compute_shader(module: &EirModule, func_id: u64) -> Result<String> {
     let mut body = String::new();
     body.push_str("  let i = gid.x;\n");
     body.push_str("  if (i >= arrayLength(&output)) { return; }\n");
+    // Sticky trap read: a prior trap fails the whole dispatch, and this keeps
+    // the `trap` binding live even for kernels with no trapping operation (so
+    // the bind-group layout is stable).
+    body.push_str("  if (atomicLoad(&trap) != 0u) { return; }\n");
     body.push_str(&format!("  var r: array<f32, {cap}>;\n"));
     // Parameters arrive in registers 1.. (EIR CALL convention); a map kernel has
     // exactly one input.

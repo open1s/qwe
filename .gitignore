@@ -9,3 +9,4 @@
 **/*.pweb
 **/node_modules/**
 /interaction_viewer.html
+/gpu-verify/target/
