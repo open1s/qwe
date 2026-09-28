@@ -687,4 +687,25 @@ Review pass 20 (`dce1cbaa` RFC<->conformance for extension RFCs 0037-0042; no ne
    five (18+5=23); the sixth extension RFC (0041) is covered by
    `present::tests`, not this binary.
 
+Review pass 21 (`e394054e` fix(#62,#63); both kept open, partial):
+
+1. Snapshot gates green: fmt, clippy `-D warnings`, 387 tests, conformance
+   23/23, release build.
+2. 0062 partial: buffer tracking works — didChange injecting `nope_lerp` into
+   an import doc publishes warning 85 at the buffer's line; valid buffer ->
+   `[]` (`load_program_sources_with_root` parses buffer, imports from disk).
+   BUT filed evidence case 3 still reproduces verbatim: disk = `BROKEN {`,
+   clean buffer -> `error 60 @1:1` from disk (collect_module parses the disk
+   root before the override runs), and a buffer that *adds* an import gets a
+   false `math.lerp` error 59 (namespace still disk-derived). Commented on
+   0062 with probes; issue stays open.
+3. 0063 partial: the filed `xyzzy` case fixed — unknown slot `x` now ranges
+   to line 1 char 32 (was line 0 inside `xyzzy`). Residual: first whole-token
+   anywhere still matches comments (`# ghost` line 0 wins over code line 1),
+   and the commit message claims `find_ident` tests that do not exist (zero
+   `#[test]` in the diff). Commented on 0063; issue stays open.
+4. Probe battery on the build: import A/B controls, untitled fallback (still
+   parse 60, accepted per 0058 close), non-import buffer control — all as
+   expected.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
