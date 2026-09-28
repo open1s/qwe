@@ -24,7 +24,6 @@ use pwe_reference::present::{self, CameraVisual, LiveState};
 use pwe_reference::sha256::digest;
 use std::sync::{Arc, RwLock};
 
-mod json;
 mod lsp;
 
 /// Artifact container magic and format version.
