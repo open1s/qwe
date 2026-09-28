@@ -260,4 +260,15 @@ Review/test pass on `70ca8d7f` (phase-3 hotness→native JIT, pass 12):
    (step 101: `w 0→-2`, `x 7→-7`, no error) — silent corruption via the
    public `step_jit` path.
 
+Fix-verification pass 6 (`c7e7e3bd`, pass 13 — closure of 0039):
+
+1. 0039 verified fixed, closed: emitted shaders declare an
+   `atomic<u32>` trap binding (also required by `validate_shader`);
+   `Div`/`Rem` guard `== 0.0` (±0) with flag-set + early return;
+   compares use the naga-safe NaN idiom and trap the same way; the CPU
+   oracle returns `EirInvalid 18` for those inputs. Probe parity:
+   div0/rem0/NaN-compare all `Err d18` on both tiers, non-trap edges
+   byte-equal, `Select`/`sign` do not over-trap (no regressions).
+   Gates: fmt, clippy, 318 tests (naga live), conformance 18/18.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
