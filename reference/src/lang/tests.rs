@@ -3472,3 +3472,37 @@ fn module_declaration_may_carry_a_version() {
     assert_eq!(strip.declared_version.as_deref(), Some("1.2"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn from_import_privacy_survives_module_reorder() {
+    // #70: after the deterministic reorder, the from-import child namespace must
+    // still resolve to the right module (a stale `seen` index could bind an
+    // unexported name to another module's function).
+    let dir = std::env::temp_dir().join(format!("pwe_ord_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    // `aaa` (module aaa) exports `hidden`; `zzz` (module zzz) does not.
+    std::fs::write(
+        dir.join("amod.pwe"),
+        "module aaa\nworld { }\nfuncs { hidden(x) { x } }\nexport hidden\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("zmod.pwe"),
+        "module zzz\nworld { }\nfuncs { hidden(x) { x }  visible(x) { x } }\nexport visible\n",
+    )
+    .unwrap();
+    // Import zzz first, so discovery order differs from sorted (aaa < zzz) order.
+    std::fs::write(
+        dir.join("root.pwe"),
+        "import \"zmod\"\nimport \"amod\"\nfrom \"zmod\" import hidden\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = hidden(x) } }\n",
+    )
+    .unwrap();
+    assert_eq!(
+        crate::lang::compile_file(&dir.join("root.pwe"))
+            .err()
+            .map(|e| e.detail),
+        Some(102),
+        "unexported `hidden` from zzz must be rejected"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

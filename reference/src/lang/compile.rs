@@ -1491,11 +1491,14 @@ fn load_program_sources_inner(
     for m in &modules {
         for (d, child) in &m.imports {
             if let Some(names) = &d.names {
-                let child_ns = child
-                    .canonicalize()
-                    .ok()
-                    .and_then(|c| seen.get(&c).copied())
-                    .map(|i| modules[i].ns.clone())
+                // Resolve the child's namespace by canonical path against the
+                // CURRENT `modules` order (the `seen` index was built before the
+                // deterministic reorder and is stale — #70).
+                let canon = child.canonicalize().unwrap_or_else(|_| child.clone());
+                let child_ns = modules
+                    .iter()
+                    .find(|m| m.path.canonicalize().unwrap_or_else(|_| m.path.clone()) == canon)
+                    .map(|m| m.ns.clone())
                     .unwrap_or_else(|| module_stem(&d.path));
                 for n in names {
                     if let Some(ex) = exports_by_ns.get(&child_ns) {
