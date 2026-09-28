@@ -11,6 +11,10 @@ description = "The PWE command-line toolchain: compile, run, and present"
 name = "pwe"
 path = "src/main.rs"
 
+[features]
+# Forward the reference crate's macOS Metal GPU backend (`pwe run --gpu`).
+gpu = ["pwe-reference/gpu"]
+
 [dependencies]
 pwe-api = { path = ".." }
 pwe-reference = { path = "../reference" }

@@ -172,6 +172,9 @@ pub struct SceneRuntime<'a> {
     param_ids: std::collections::BTreeMap<ComponentTypeId, f64>,
     /// Canonical component ids, resolved once (hot-path fast access).
     ids: CanonicalIds,
+    /// Optional Metal GPU context for field sweeps (`pwe run --gpu`).
+    #[cfg(all(feature = "gpu", target_os = "macos"))]
+    gpu: Option<&'a crate::gpu::Gpu>,
 }
 
 impl<'a> SceneRuntime<'a> {
@@ -192,7 +195,18 @@ impl<'a> SceneRuntime<'a> {
             field_ids,
             param_ids,
             ids: CanonicalIds::resolve(),
+            #[cfg(all(feature = "gpu", target_os = "macos"))]
+            gpu: None,
         }
+    }
+
+    /// Attaches an optional Metal GPU context (field sweeps run on the GPU when
+    /// present). Only built with `--features gpu` on macOS.
+    #[cfg(all(feature = "gpu", target_os = "macos"))]
+    pub fn with_gpu(scene: &'a Scene, gpu: Option<&'a crate::gpu::Gpu>) -> Self {
+        let mut rt = Self::new(scene);
+        rt.gpu = gpu;
+        rt
     }
 }
 
@@ -468,8 +482,15 @@ impl EirRuntime for SceneRuntime<'_> {
     fn field_diffuse(&mut self, component: ComponentTypeId, rate: f64) -> Result<()> {
         let (w, h, d, dx) = self.field_shape(component)?;
         let cur = self.effective_cells(component)?;
-        let mut out = vec![0.0f64; cur.len()];
         let dx2 = dx * dx;
+        // Optional Metal GPU path (approximate f32); falls back to the CPU loop.
+        #[cfg(all(feature = "gpu", target_os = "macos"))]
+        if let Some(gpu) = self.gpu {
+            let out = gpu.diffuse(&cur, w, h, d, rate, dx2)?;
+            self.field_overlay.insert(component, out);
+            return Ok(());
+        }
+        let mut out = vec![0.0f64; cur.len()];
         for k in 0..d {
             for j in 0..h {
                 let row = (k * h + j) * w;

@@ -366,6 +366,7 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     let mut check = false;
     // Native JIT is on by default on `run`; `--no-native-jit` opts out.
     let mut native_jit = true;
+    let mut gpu = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -399,6 +400,9 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
             }
             "--no-native-jit" => {
                 native_jit = false;
+            }
+            "--gpu" => {
+                gpu = true;
             }
             "--port" | "-p" => {
                 let Some(v) = it.next().and_then(|s| s.parse::<u16>().ok()) else {
@@ -469,6 +473,15 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
         // Phase-3 hotness JIT: promote hot units to native code (goes through
         // the JIT lifecycle Validate/CapabilityCheck/Publish gate).
         rt.enable_native_jit(true);
+    }
+    if gpu {
+        // Metal GPU acceleration for field sweeps (approximate f32). Requires a
+        // `--features gpu` build; otherwise this reports it is unavailable.
+        if let Err(e) = rt.enable_gpu(true) {
+            eprintln!("pwe: --gpu unavailable: {}", lang::diagnose("", &e));
+            return 1;
+        }
+        eprintln!("pwe: GPU backend enabled (Metal field sweeps, f32 approximate)");
     }
     match port {
         None => {

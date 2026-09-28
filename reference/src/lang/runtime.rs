@@ -57,6 +57,9 @@ pub struct LangRuntime {
     finite_check: bool,
     /// Declared conserved quantities (drift tracked over the run; detail 87).
     conserved: Vec<ConservedSpec>,
+    /// Optional Metal GPU context (`pwe run --gpu`); field sweeps run on the GPU.
+    #[cfg(all(feature = "gpu", target_os = "macos"))]
+    gpu: Option<crate::gpu::Gpu>,
 }
 
 impl LangRuntime {
@@ -69,6 +72,34 @@ impl LangRuntime {
     /// Number of steps the native JIT backend executed.
     pub fn native_executions(&self) -> u64 {
         self.jit.native_executions()
+    }
+
+    /// Enables/disables the Metal GPU backend for field sweeps. Available only
+    /// in a `--features gpu` build on macOS; other builds return an error when
+    /// asked to enable it. The GPU computes in f32, so this is an **approximate**
+    /// accelerator (the CPU path stays deterministic).
+    #[cfg(all(feature = "gpu", target_os = "macos"))]
+    pub fn enable_gpu(&mut self, on: bool) -> Result<()> {
+        if on {
+            let gpu = crate::gpu::Gpu::new()?;
+            self.gpu = Some(gpu);
+        } else {
+            self.gpu = None;
+        }
+        Ok(())
+    }
+
+    /// See the `gpu` build; this build has no GPU backend.
+    #[cfg(not(all(feature = "gpu", target_os = "macos")))]
+    pub fn enable_gpu(&mut self, on: bool) -> Result<()> {
+        if on {
+            return Err(pwe_api::Error {
+                status: pwe_api::Status::Invalid,
+                detail: 5,
+                byte_offset: 0,
+            });
+        }
+        Ok(())
     }
 
     /// Compiles source and boots a runtime with an executable scene.
@@ -198,6 +229,8 @@ impl LangRuntime {
             peer_region: None,
             env: crate::eir::ExecEnv::default(),
             finite_check: false,
+            #[cfg(all(feature = "gpu", target_os = "macos"))]
+            gpu: None,
             conserved: compiled
                 .parsed
                 .systems
@@ -457,6 +490,9 @@ impl LangRuntime {
 
     /// Interpreter backend step: run the EIR, apply the ordered writes.
     pub fn step_interpreter(&mut self) -> Result<Vec<WorldWrite>> {
+        #[cfg(all(feature = "gpu", target_os = "macos"))]
+        let mut rt = SceneRuntime::with_gpu(&self.scene, self.gpu.as_ref());
+        #[cfg(not(all(feature = "gpu", target_os = "macos")))]
         let mut rt = SceneRuntime::new(&self.scene);
         self.env.time = self.scene.sim_time;
         self.env.step = self.clock;
@@ -482,6 +518,9 @@ impl LangRuntime {
 
     /// CPU JIT backend step over the same low-level IR.
     pub fn step_jit(&mut self) -> Result<Vec<WorldWrite>> {
+        #[cfg(all(feature = "gpu", target_os = "macos"))]
+        let mut rt = SceneRuntime::with_gpu(&self.scene, self.gpu.as_ref());
+        #[cfg(not(all(feature = "gpu", target_os = "macos")))]
         let mut rt = SceneRuntime::new(&self.scene);
         self.env.time = self.scene.sim_time;
         self.env.step = self.clock;
@@ -522,12 +561,18 @@ impl LangRuntime {
         };
 
         let mut env_a = base.clone();
+        #[cfg(all(feature = "gpu", target_os = "macos"))]
+        let mut rt_a = SceneRuntime::with_gpu(&a, self.gpu.as_ref());
+        #[cfg(not(all(feature = "gpu", target_os = "macos")))]
         let mut rt_a = SceneRuntime::new(&a);
         let int_writes =
             self.optimized
                 .execute_with_index(&mut rt_a, &mut env_a, &self.call_index)?;
 
         let mut env_b = base.clone();
+        #[cfg(all(feature = "gpu", target_os = "macos"))]
+        let mut rt_b = SceneRuntime::with_gpu(&b, self.gpu.as_ref());
+        #[cfg(not(all(feature = "gpu", target_os = "macos")))]
         let mut rt_b = SceneRuntime::new(&b);
         let jit_writes = self.jit.execute_with_env_validated(
             &self.jit_key,

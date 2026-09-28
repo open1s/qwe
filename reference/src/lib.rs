@@ -18,6 +18,8 @@ pub mod eir;
 pub mod extension;
 pub mod fence;
 pub mod field;
+#[cfg(all(feature = "gpu", target_os = "macos"))]
+pub mod gpu;
 pub mod jit;
 pub mod lang;
 pub mod math;
