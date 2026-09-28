@@ -110,6 +110,8 @@ pub fn detail_name(detail: u32) -> &'static str {
         94 => "state slot name collides with a system parameter name",
         95 => "state slots 7/8/9 used but `orient != true` (read as a Z-spin)",
         96 => "state slots 7/8/9 written without `orient = true` (read as a Z-spin)",
+        97 => "GPU backend not built (rebuild with `--features gpu` on macOS)",
+        98 => "no Metal GPU device available",
         4 => "EIR operand/type validation failed (compiler bug)",
         6 => "EIR result type unspecified (compiler bug)",
         _ => "unspecified compile error",

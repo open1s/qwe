@@ -95,7 +95,7 @@ impl LangRuntime {
         if on {
             return Err(pwe_api::Error {
                 status: pwe_api::Status::Invalid,
-                detail: 5,
+                detail: 97,
                 byte_offset: 0,
             });
         }

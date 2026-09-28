@@ -63,17 +63,17 @@ impl Gpu {
     /// Creates the Metal device and compiles the stencil kernel. Errors (detail
     /// 5) if there is no Metal device or the kernel fails to compile.
     pub fn new() -> Result<Self> {
-        let device = metal::Device::system_default().ok_or_else(|| error(Status::Invalid, 5))?;
+        let device = metal::Device::system_default().ok_or_else(|| error(Status::Invalid, 98))?;
         let queue = device.new_command_queue();
         let library = device
             .new_library_with_source(MSL, &metal::CompileOptions::new())
-            .map_err(|_| error(Status::Invalid, 5))?;
+            .map_err(|_| error(Status::Invalid, 98))?;
         let function = library
             .get_function("pwe_diffuse", None)
-            .map_err(|_| error(Status::Invalid, 5))?;
+            .map_err(|_| error(Status::Invalid, 98))?;
         let pipeline = device
             .new_compute_pipeline_state_with_function(&function)
-            .map_err(|_| error(Status::Invalid, 5))?;
+            .map_err(|_| error(Status::Invalid, 98))?;
         Ok(Self {
             device,
             queue,
