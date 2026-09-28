@@ -364,7 +364,8 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     let mut port = present_default;
     let mut params: Vec<(String, f64)> = Vec::new();
     let mut check = false;
-    let mut native_jit = false;
+    // Native JIT is on by default on `run`; `--no-native-jit` opts out.
+    let mut native_jit = true;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -395,6 +396,9 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
             }
             "--native-jit" => {
                 native_jit = true;
+            }
+            "--no-native-jit" => {
+                native_jit = false;
             }
             "--port" | "-p" => {
                 let Some(v) = it.next().and_then(|s| s.parse::<u16>().ok()) else {
