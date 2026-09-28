@@ -114,6 +114,7 @@ pub fn detail_name(detail: u32) -> &'static str {
         98 => "no Metal GPU device available",
         99 => "Metal kernel failed to compile",
         100 => "assignment to an unknown state slot (ignored)",
+        101 => "duplicate module name (two modules declare the same `module`)",
         4 => "EIR operand/type validation failed (compiler bug)",
         6 => "EIR result type unspecified (compiler bug)",
         _ => "unspecified compile error",

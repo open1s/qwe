@@ -839,6 +839,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 95 | `nbody` body exposes slots 7/8/9 without `orient = true` — a warning. |
 | 96 | A rule writes slots 7/8/9 without `orient = true` — a warning. |
 | 100 | Assignment to an unknown state slot (ignored) — a warning. |
+| 101 | Duplicate module name (two modules declare the same `module`). |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the

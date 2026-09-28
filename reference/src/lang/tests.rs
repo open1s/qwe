@@ -3287,3 +3287,46 @@ fn assignment_to_unknown_slot_warns() {
     );
     clear_diagnostics();
 }
+
+#[test]
+fn module_declaration_and_collision() {
+    let dir = std::env::temp_dir().join(format!("pwe_mod_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let w = |name: &str, body: &str| std::fs::write(dir.join(name), body).unwrap();
+
+    // RFC-0045: a `module <name>` line is metadata (not source)...
+    w(
+        "a.pwe",
+        "module util\nworld { }\nfuncs { f(x) { x + 1.0 } }\n",
+    );
+    // ...and two modules may not declare the same name (detail 101).
+    w(
+        "b.pwe",
+        "module util\nworld { }\nfuncs { g(x) { x - 1.0 } }\n",
+    );
+    w(
+        "root.pwe",
+        "import \"a\"\nimport \"b\"\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = x + 1.0 } }\n",
+    );
+    let dup = crate::lang::compile_file(&dir.join("root.pwe"));
+    assert_eq!(
+        dup.err().map(|e| e.detail),
+        Some(101),
+        "duplicate module name must error"
+    );
+
+    // Distinct names compile, and the declared name resolves as an alias.
+    w(
+        "b.pwe",
+        "module other\nworld { }\nfuncs { g(x) { x - 1.0 } }\n",
+    );
+    w(
+        "root.pwe",
+        "import \"a\"\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = util.f(x) } }\n",
+    );
+    assert!(
+        crate::lang::compile_file(&dir.join("root.pwe")).is_ok(),
+        "declared module name must resolve as a qualified alias"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

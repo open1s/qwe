@@ -1077,6 +1077,8 @@ pub(crate) struct ModuleInfo {
     source: String,
     parsed: ParsedProgram,
     imports: Vec<(ImportDirective, std::path::PathBuf)>,
+    /// A declared `module <name>` (RFC-0045), if any — the module's stable id.
+    declared_name: Option<String>,
 }
 
 pub(crate) fn ident_tokens(text: &str) -> Option<Vec<String>> {
@@ -1089,6 +1091,25 @@ pub(crate) fn ident_tokens(text: &str) -> Option<Vec<String>> {
         out.push(t.to_string());
     }
     Some(out)
+}
+
+/// Parses a `module <dotted.name>` line directive (RFC-0045): a module's stable
+/// identity, independent of its file path. Returns the declared name.
+pub(crate) fn parse_module_line(line: &str) -> Option<String> {
+    let t = line.trim();
+    let rest = t.strip_prefix("module")?;
+    if !rest.starts_with(|c: char| c.is_whitespace()) {
+        return None;
+    }
+    let name = rest.trim();
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 /// Parses a Python-style import directive at the start of a line, returning it
@@ -1207,9 +1228,15 @@ pub(crate) fn collect_module(
         )
     })?;
     let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+    let declared_name = raw.lines().find_map(parse_module_line);
     let mut stripped = String::new();
     let mut imports = Vec::new();
     for line in raw.lines() {
+        if parse_module_line(line).is_some() {
+            // A `module <name>` directive is metadata, not source.
+            stripped.push('\n');
+            continue;
+        }
         match parse_import_line(line) {
             Some((d, tail)) => {
                 let child = resolve_module_path(&dir, &d.path);
@@ -1225,13 +1252,20 @@ pub(crate) fn collect_module(
     }
     let parsed = parse(&stripped)?;
     let children: Vec<(ImportDirective, std::path::PathBuf)> = imports.clone();
+    let mut aliases = vec![ns.to_string()];
+    if let Some(dn) = &declared_name {
+        if !aliases.contains(dn) {
+            aliases.push(dn.clone());
+        }
+    }
     out.push(ModuleInfo {
         ns: ns.to_string(),
-        aliases: vec![ns.to_string()],
+        aliases,
         path: path.to_path_buf(),
         source: stripped,
         parsed,
         imports,
+        declared_name,
     });
     for (d, child) in children {
         let default_ns = d.alias.clone().unwrap_or_else(|| module_stem(&d.path));
@@ -1260,6 +1294,7 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
         ns: String::new(),
         aliases: vec![String::new()],
         path: std::path::PathBuf::from("<root>"),
+        declared_name: src.root.lines().find_map(parse_module_line),
         source: src.root.clone(),
         parsed: root_parsed,
         imports: Vec::new(),
@@ -1270,6 +1305,7 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
             ns: ns.clone(),
             aliases: aliases.clone(),
             path: std::path::PathBuf::from(path),
+            declared_name: source.lines().find_map(parse_module_line),
             source: source.clone(),
             parsed,
             imports: Vec::new(),
@@ -1305,6 +1341,33 @@ fn load_program_sources_inner(
     let mut modules = Vec::new();
     let mut seen: std::collections::BTreeMap<std::path::PathBuf, usize> = Default::default();
     collect_module(path, "", &mut seen, &mut modules)?;
+    // RFC-0045: a duplicate declared module name is a hard error.
+    {
+        let mut names: std::collections::BTreeMap<String, String> = Default::default();
+        for m in &modules {
+            if let Some(n) = &m.declared_name {
+                if let Some(prev) = names.get(n) {
+                    return Err(error_at(
+                        Status::Invalid,
+                        101,
+                        0,
+                        format!(
+                            "duplicate module name `{n}` (in {prev} and {})",
+                            m.path.display()
+                        ),
+                    ));
+                }
+                names.insert(n.clone(), m.path.display().to_string());
+            }
+        }
+    }
+    // RFC-0045: deterministic merge order (root first; the rest by namespace
+    // then path), independent of filesystem discovery order.
+    if modules.len() > 1 {
+        let root = modules.remove(0);
+        modules.sort_by(|a, b| a.ns.cmp(&b.ns).then_with(|| a.path.cmp(&b.path)));
+        modules.insert(0, root);
+    }
     if let Some(root) = root_override {
         // Mirror `collect_module`'s handling: strip `import` lines before
         // parsing (they are directives, not part of the `world` grammar).
