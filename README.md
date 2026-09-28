@@ -71,7 +71,7 @@ component is data, system is behavior. All authoritative mutation goes through a
 
 PWE's language is the same for every discipline — only the equations change.
 
-```pwe
+```pwe ignore
 world {
   gravity = (0, 0, 0)
   field heat { width = 32; height = 32; depth = 32; dx = 1.0 }   # a 3D grid field

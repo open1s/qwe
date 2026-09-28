@@ -66,7 +66,7 @@ cargo build --release -p pwe-cli
 
 PWE 的语言在所有学科里都是同一套——只有方程在变。
 
-```pwe
+```pwe ignore
 world {
   gravity = (0, 0, 0)
   field heat { width = 32; height = 32; depth = 32; dx = 1.0 }   # 一个 3D 网格场

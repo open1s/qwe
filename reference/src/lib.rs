@@ -11,6 +11,7 @@ pub mod cluster;
 pub mod components;
 pub mod continuum;
 pub mod distributed;
+pub mod doctest;
 pub mod domain_ir;
 pub mod dominance;
 pub mod dsl;

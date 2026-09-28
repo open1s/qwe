@@ -38,6 +38,7 @@ fn main() {
         Some("playground") => cmd_playground(&args[1..]),
         Some("fmt") => cmd_fmt(&args[1..]),
         Some("repl") => cmd_repl(),
+        Some("doctest") => cmd_doctest(&args[1..]),
         Some("-h") | Some("--help") | None => {
             usage();
             0
@@ -61,6 +62,7 @@ fn usage() {
            pwe present <out.pweb> [--port P] [--param K=V]...\n  \
            pwe playground [--port P]              # browser editor + live viewer\n  \
            pwe repl                               # interactive compile/run/step\n  \
+           pwe doctest [FILES...]                 # compile runnable code blocks in docs\n  \
            pwe fmt <src.pwe> [--check] [-w]       # format source (stdout by default)\n  \
            pwe migrate <src.pwe> [-o <out.pwe>]   # upgrade a pre-v0.3 source\n\
          \n\
@@ -369,6 +371,53 @@ fn cmd_compile(args: &[String]) -> i32 {
             eprintln!("{}", lang::diagnose(&sources.root, &e));
             1
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// doctest
+// ---------------------------------------------------------------------------
+
+/// Compiles the runnable ```` ```pwe ```` blocks in the given Markdown files
+/// (default `docs/lang-usage.md`). Exits non-zero on any failure.
+fn cmd_doctest(args: &[String]) -> i32 {
+    let files: Vec<String> = if args.is_empty() {
+        vec!["docs/lang-usage.md".to_string()]
+    } else {
+        args.iter()
+            .filter(|a| !a.starts_with('-'))
+            .cloned()
+            .collect()
+    };
+    let mut failed = false;
+    let mut checked = 0usize;
+    for path in &files {
+        let md = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("pwe doctest: cannot read {path}: {e}");
+                failed = true;
+                continue;
+            }
+        };
+        let blocks: Vec<_> = pwe_reference::doctest::fenced_blocks(&md)
+            .into_iter()
+            .filter(pwe_reference::doctest::is_runnable)
+            .collect();
+        checked += blocks.len();
+        for f in pwe_reference::doctest::check_document(&md) {
+            failed = true;
+            eprintln!(
+                "{path}:{}: code block does not compile:\n{}",
+                f.line, f.error
+            );
+        }
+    }
+    if failed {
+        1
+    } else {
+        println!("pwe doctest: {checked} runnable block(s) compile.");
+        0
     }
 }
 

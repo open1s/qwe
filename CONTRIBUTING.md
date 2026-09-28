@@ -29,6 +29,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 cargo run -q -p pwe-conformance          # RFC conformance gate
+cargo run -q -p pwe-cli -- doctest       # compile runnable code blocks in docs
 cargo build --examples -p pwe-reference
 cargo bench -p pwe-reference             # throughput record
 cargo deny check                         # supply chain (licenses/advisories)
