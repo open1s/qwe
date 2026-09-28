@@ -79,6 +79,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0050](https://github.com/open1s/qwe/issues/50) | Medium | `pwe fmt` is not string-aware: mutates multi-line string tokens (trim/collapse inside quotes) and counts braces/`#` inside strings for depth, so `format_preserves_tokens` is false for legal sources | reference/src/lang/format.rs |
 | [0051](https://github.com/open1s/qwe/issues/51) | Low | `pwe fmt src \| head` panics on Broken pipe (rc 101) via bare `print!`, violating no-panic-in-runtime-paths | cli/src/main.rs (cmd_fmt) |
 | [0052](https://github.com/open1s/qwe/issues/52) | Low | usage()/--help omits `playground` and `fmt`; both commit messages claim "usage updated" | cli/src/main.rs:53 |
+| [0053](https://github.com/open1s/qwe/issues/53) | Low | repl: runtime step errors rendered via the compile-diagnose API as "error 18: unspecified compile error" (no step number/location); failed `:run` discards program + partial state; always exits 0; malformed `:run/:step N` silently default to 60/1 | cli/src/main.rs (run_repl / repl_steps) |
+| [0054](https://github.com/open1s/qwe/issues/54) | Medium | assignment to an undeclared slot silently dropped during lowering (unknown-LHS skip with no diagnostic) while reads of unknown identifiers warn 85 - typo writes vanish with zero feedback | reference/src/lang/systems.rs:104-143 |
 
 ## Suggested order
 
@@ -474,5 +476,32 @@ Review pass 12 (`a10b32f2` `pwe fmt`, filed 0050-0052):
    "failed printing to stdout: Broken pipe" (stdio.rs) - AGENTS §13.
 5. 0052 filed (Low): usage() lists only compile/run/present/migrate; the
    `fmt` and `playground` commits both claim "usage updated" (false twice).
+
+Review pass 13 (`42d7da70` `pwe repl`, filed 0053-0054):
+
+1. Snapshot gates green: `cargo fmt --check`, clippy `-D warnings`, 366 tests
+   (+2 repl), conformance 18/18.
+2. Core semantics verified by differential against `pwe run` on the
+   `na_water_demo` source (extracted from `reference/examples`): `:run 60`
+   matches `pwe run --steps 60` (sim time, all positions); `:run 40` + `:step 20`
+   equals `:run 60`; `:reset` + `:run 60` reproduces the fresh run exactly
+   (`reset_to` restores scene/clock/env correctly).
+3. 0053 filed (Low): three scriptable-core defects - (a) runtime step errors go
+   through `lang::diagnose` (the compile API): output `error 18: unspecified
+   compile error` with no step number/location vs `pwe run`'s `step 2 failed:
+   PWE EirInvalid (18)` + diag lines; `take_diagnostics` is empty because
+   runtime errors use `error()` not `error_at()`; (b) failed `:run` never stores
+   the runtime, so `:step` afterwards claims `(no program yet...)` and partial
+   state is lost; (c) exit code always 0 (tests hardcode it) and `:run abc` /
+   `:run -5` silently run 60 steps (`cmd_run --steps abc` correctly exits 2).
+   Comment added to 0052 (third false "usage updated" - `usage()` still has no
+   `repl` line; `cmd_repl` ignores argv).
+4. 0054 filed (Medium): `systems.rs` rule/assign lowering skips unresolved LHS
+   names with no diagnostic - `y = 5.0` on an entity whose state has only `x`
+   compiles clean and the write vanishes (`state=[3.0000]` after `x=x+1` runs
+   3 steps), while reads of the same unknown name emit warning 85 whose own
+   comment says "a typo must not silently do nothing". Comment added to 0050
+   (roadmap repeats the disproved fmt guarantee; repl typed input has the same
+   trim/blank-drop string defect - `:load` is exact).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
