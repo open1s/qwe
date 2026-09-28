@@ -534,4 +534,32 @@ Review pass 14 (`d03bb9ae` fix batch #44-#52, filed 0055-0056):
    (run output identical, idempotent) - formatting correctness only.
 6. Still open, untouched as claimed: 53 (repl), 54 (silent unknown-LHS).
 
+Review pass 15 (`83ce2e63` fix #53/#54, `3690528c` fix #55/#56):
+
+1. Snapshot gates green for both fix commits: fmt, clippy `-D warnings`,
+   conformance 18/18; tests 370 (after `83ce2e63`) -> 373 (after `3690528c`
+   + docs `33b8d1ef`), matching the README badge/table refresh.
+2. 54 verified & closed (`83ce2e63`): warning detail 100 on unknown named LHS
+   in UpdateSystem rules/assigns + Rk4System rules; negative control fires,
+   3 duplicate bad writes dedupe to 1; false-positive sweep clean - all 32
+   repo `.pwe` files compile with zero 100/85, incl. `structs.pwe` and the
+   exact doc struct dotted-LHS example (dotted `state_names` resolve);
+   `s[expr]` assigns partition to dyn_assigns first; read-85 regression intact;
+   `law.pwe` failure pre-existing (identical error 62 on base `a0dfeedd`).
+3. 55 verified & closed (`3690528c`): live - no token 403, token 200, both
+   evil Origins 403 (was 200), local Origin 200, Sec-Fetch-Site cross-site 403,
+   wrong token 403, `/reset`+`/pause` aliases 403 unguarded (previously open),
+   POST `/api/source`+token 200, OPTIONS preflight 403 with no
+   `Access-Control-*`. Mandatory token also covers Origin-less/SFS-less legacy
+   requests (cross-site pages cannot read or set the header).
+4. 56 verified & closed (`3690528c`): quote-in-`#`-comment and braces-in-`//`
+   counterexamples fixed; `#`/`//` inside real multi-line strings and
+   `"http://"` in strings intact; idempotent 32/32; original vs formatted
+   compile diagnostics identical and 10-step run output byte-identical
+   (31/32 run-compared, `law.pwe` error 62 on both sides).
+5. 53 kept open (comment): fixed - exit codes (error rc 1, sticky), malformed
+   counts rejected, failed `:run` keeps program, real runtime error detail,
+   2 tests. Remaining - no step number in `step failed:` (53a), `:load`
+   failure and empty `:run` still exit 0, `:run 5 extra` ignores extras.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
