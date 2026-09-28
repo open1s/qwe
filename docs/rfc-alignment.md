@@ -21,7 +21,7 @@ only when its required behavior is implemented and covered by a named test.
 | 0026 | C ABI table, generated header, handle checks | Done | `include/pwe_abi.h`; `ffi::tests::runtime_api_layout_matches_c_header`, `ffi::tests::error_layout_matches_c_header` |
 | 0027 | validated artifact lifecycle/invalidation/deopt | Done | `jit::tests::jit_compile_validate_publish_execute_lifecycle`, `jit::tests::jit_deoptimizes_to_interpreter_on_assumption_violation`, `jit::tests::jit_is_differential_with_interpreter` |
 | 0028 | immutable render frame | Done | `render::tests`; `pwe-conformance` "render frame reads one consistent version"; `render::tests::interpolation_names_both_source_ticks_and_lerps`, `render::tests::present_is_external_io_that_does_not_mutate_world` |
-| 0029 | fixtures and conformance report | Done | `pwe-conformance` binary (total=17 failed=0, no skips); deterministic property tests `reference/tests/prop.rs` (300 WIR + 300 EIR round-trips + 200 transaction sequences, seeded xorshift, no deps). **AOT and CPU/GPU fence coverage added**: `interpreter-AOT differential semantics`, `AOT artifact binary round-trip preserves writes`, `CPU->GPU releasing fence + ownership passes`, `CPU->GPU with weak (relaxed) fence rejected`, `handoff without ownership transfer rejected`. |
+| 0029 | fixtures and conformance report | Done | `pwe-conformance` binary (total=23 failed=0, no skips); deterministic property tests `reference/tests/prop.rs` (300 WIR + 300 EIR round-trips + 200 transaction sequences, seeded xorshift, no deps). **AOT and CPU/GPU fence coverage added**: `interpreter-AOT differential semantics`, `AOT artifact binary round-trip preserves writes`, `CPU->GPU releasing fence + ownership passes`, `CPU->GPU with weak (relaxed) fence rejected`, `handoff without ownership transfer rejected`. |
 | 0030 | ground/vehicle/camera profile | Done | `pwe-conformance` "RFC-0030 ground+vehicle+camera (Input->Physics->Commit->RenderPrepare)" and "RFC-0030 WIR->EIR->binary round-trip"; `simulation::tests::physics_view_is_read_only_and_sees_dynamic_bodies` (`PhysicsView`). CPU JIT is a validated interpreter-backed cache (documented in CHANGELOG), not native codegen. |
 | 0031 | exact component descriptor, canonical values | Done | `include/pwe_abi.h` `PweComponentDescriptor`; descriptor validation in `pwe_api::ComponentDescriptor::validate` (abi major, align, unknown required flag bits `0x0f`). **`value_size == schema_size` and schema-hash verification now enforced**: `ComponentDescriptor::validate_against(schema_size, schema_hash)` (stable ABI), `Schema::fixed_size()`, `SchemaRegistry::validate_descriptor`, wired into `ReferenceWorld::put_component` via an optional schema registry (`ReferenceWorld::register_schemas`). Evidence: `schema::tests::fixed_size_sum_of_fields_and_variable_size_is_none`, `schema::tests::validate_descriptor_enforces_size_and_schema_hash`, `schema::tests::variable_size_schema_descriptor_skips_size_check_but_checks_hash`. |
 | 0032 | typed deterministic Domain IR lowering | Done | `domain_ir::tests::lower_preserves_order_effects_and_determinism`, `domain_ir::tests::lowered_domain_module_is_valid_and_executable` (lowered functions are valid typed EIR that validate, round-trip through the binary codec, and interpret; physics lowering is `physics_eir`) |
@@ -29,6 +29,22 @@ only when its required behavior is implemented and covered by a named test.
 | 0034 | stable error/result detail codes and advertised limits | Done | `limits::tests::default_limits_match_rfc_numbers`, `detail::tests::detail_codes_are_distinct_within_status`; `ADVERTISED_LIMITS` |
 | 0035 | canonical artifact identity/compatibility | Done | `artifact::tests::artifact_identity_hash_is_stable_and_order_insensitive_for_features`, `artifact::tests::artifact_requires_fails_closed_on_abi_mismatch`, `artifact::tests::artifact_requires_rejects_format_minor_and_feature_mismatch` |
 | 0036 | extension envelope and bounded compression metadata | Done | `extension::tests::extension_envelope_round_trips_sorted`, `extension::tests::extension_required_unknown_fails_optional_skipped`, `extension::tests::compression_metadata_round_trips_and_is_bounded` |
+
+## Extension RFCs (0037-0044)
+
+Post-v0.2 extensions implemented by the reference slice. Each is covered by a
+`pwe-conformance` case (cross-backend) and/or a named test.
+
+| RFC | Required reference slice | Status | Evidence |
+| --- | --- | --- | --- |
+| 0037 | bulk field sweeps (`diffuse`/`wave`/`poisson`) | Done | `pwe-conformance` "RFC-0037 bulk field sweep (wave leapfrog, cross-backend)"; `lang::tests::field_solver_systems*` |
+| 0038 | pooled dynamic entities (`pool`, `spawn`, `despawn`) | Done | `pwe-conformance` "RFC-0038 pooled entities (spawn/despawn, cross-backend)"; `lang::tests::pool_*` |
+| 0039 | constraint joints | Done | `pwe-conformance` "RFC-0039 constraint joints (chain holds length)"; `lang::tests::joint_*` |
+| 0040 | soft bodies (mass-spring grids) | Done | `pwe-conformance` "RFC-0040 soft bodies (8x8 grid stays finite)"; `lang::tests::soft_*` |
+| 0041 | self-contained offline viewer (vendored three.js) | Done | `present::tests` (viewer serves only `/vendor/three/…`); RFC-0041 |
+| 0042 | `struct` record types over flat slots | Done | `pwe-conformance` "RFC-0042 struct record types (flatten + cross-backend)"; `lang::tests::struct_record_types_*` |
+| 0043 | value types lowered to EIR (`int`/`bool`) | Proposed | RFC-0043 (not implemented) |
+| 0044 | typed arrays / SoA user types | Proposed | RFC-0044 (not implemented) |
 
 ## Language front end
 

@@ -6,7 +6,7 @@
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.81%2B-orange.svg)](https://www.rust-lang.org)
 [![tests](https://img.shields.io/badge/tests-387%20passing-brightgreen.svg)](#测试与符合性)
-[![conformance](https://img.shields.io/badge/conformance-18%2F18%20%C2%B7%200%20skips-brightgreen.svg)](#测试与符合性)
+[![conformance](https://img.shields.io/badge/conformance-23%2F23%20%C2%B7%200%20skips-brightgreen.svg)](#测试与符合性)
 [![RFCs](https://img.shields.io/badge/frozen%20contract-37%20RFCs-purple.svg)](#冻结契约)
 [![repo](https://img.shields.io/badge/github-open1s%2Fqwe-181717.svg)](https://github.com/open1s/qwe)
 
@@ -231,7 +231,7 @@ cargo run -p pwe-reference --example language_demo
 | 集成 / 其它 | 23 |
 | **合计** | **387** |
 
-外加 `pwe-conformance`：**18 / 18，零跳过**。`no_std` 检查：
+外加 `pwe-conformance`：**23 / 23，零跳过**。`no_std` 检查：
 `cargo check -p pwe-api --no-default-features`。
 
 ---

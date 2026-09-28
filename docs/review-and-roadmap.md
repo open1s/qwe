@@ -111,7 +111,9 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - [~] 分布式/插件沙箱、fuzz/Miri
   - [x] **fuzz（依赖无关、CI 可跑）**：`reference/tests/fuzz.rs` 用确定性 PRNG 向所有公开解码边界（EIR/extension/channel）与 parser/compiler/formatter 灌入随机字节/源码，断言**不 panic**、解析返回 `Result`、`format_source` **幂等**。Miri 用法记于 CONTRIBUTING（`cargo +nightly miri test --test fuzz`；`cfg!(miri)` 下自动减迭代）。
   - [ ] 分布式/插件沙箱（更大）
-- [ ] EIR 升级为显式 SSA CFG；RFC↔conformance ≥80%
+- [~] EIR 升级为显式 SSA CFG；RFC↔conformance ≥80%
+  - [x] RFC↔conformance：冻结集 RFC-0019–0036 全覆盖；**扩展 RFC-0037–0042 新增 6 个 `pwe-conformance` 用例**（场扫描/池/关节/软体/struct，cross-backend），报告 **total=23 failed=0**；`docs/rfc-alignment.md` 增补扩展 RFC 表（0043/0044 为 Proposed）。
+  - [ ] EIR 升级为显式 SSA CFG（更大）
 - [x] ADR/贡献指南/架构文档：`docs/architecture.md`（流水线/边界/执行层）、`CONTRIBUTING.md`（工具链/门禁/特性/流程）、`docs/adr/`（0001–0005：原生 cc 后端、进程内豁免、opt-in 线程化、SIMD 不采用、GPU 实验性）。
 
 ## 4. 已完成（本次迭代）

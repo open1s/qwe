@@ -450,6 +450,146 @@ fn render_frame(report: &mut Report) {
     );
 }
 
+/// Extension RFCs (0037-0042): bulk field sweeps, pooled entities, constraint
+/// joints, soft bodies, and struct record types — all run cross-backend
+/// (interpreter == JIT) with a behavioural invariant.
+fn extensions(report: &mut Report) {
+    fn run(source: &str, steps: u64) -> Result<pwe_reference::lang::LangRuntime, pwe_api::Error> {
+        let mut rt = pwe_reference::lang::LangRuntime::compile(source)?;
+        rt.step_cross_n(steps)?;
+        Ok(rt)
+    }
+    fn finite(rt: &pwe_reference::lang::LangRuntime, id: u128) -> bool {
+        if let Some(e) = rt.scene.get(EntityId(id)) {
+            if let Some(st) = e.state.as_ref() {
+                return st.values.iter().all(|v| v.is_finite());
+            }
+        }
+        rt.scene
+            .position(EntityId(id))
+            .map(|p| p.x.is_finite() && p.y.is_finite() && p.z.is_finite())
+            .unwrap_or(false)
+    }
+
+    // RFC-0037: a lossless wave field (leapfrog) sweeps on both backends.
+    let wave = r#"
+        world { gravity = (0,0,0)
+            field u  { width = 81; height = 1; dx = 1.0 }
+            field um { width = 81; height = 1; dx = 1.0 }
+            entity probe { state = (x = 0.0, y = 0.0, z = 0.0) } }
+        systems {
+            update { on = probe; dt = 0.5
+                for i in 0..81 { let sv = at(0.0) * sin(6.283185307179586 * i / 40.0)
+                    let _ = fset(u, i, 0, fget(u, i, 0) + sv)
+                    let _ = fset(um, i, 0, fget(um, i, 0) + sv) }
+                x = x + inte( (fget(u, 30, 0) - x) / 0.5 ) }
+            wave { field = u; prev = um; velocity = 1.0; dt = 0.5 } }
+    "#;
+    let wave_ok = run(wave, 40).map(|rt| finite(&rt, 1)).unwrap_or(false);
+    report.record(
+        "RFC-0037 bulk field sweep (wave leapfrog, cross-backend)",
+        if wave_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0038: a pool spawns into fixed slots.
+    let particles = r#"
+        world { gravity = (0,0,0)
+            entity emitter { position = (-6,0,0) state = (x=-6.0, vx=1.5) shape=box size=0.4 color=0xffaa33 }
+            pool p[24] { state = (x=0.0, vx=0.0) shape=sphere size=0.18 color=0x66ccff } }
+        systems {
+            spawn   { on = emitter; pool = p }
+            update  { on = p; dt = 0.1  x = x + inte( 0.0 + vx ) }
+            despawn { on = p; when = x > 6.0 } }
+    "#;
+    let pool_ok = run(particles, 40)
+        .map(|rt| rt.scene.entities.len() >= 25)
+        .unwrap_or(false);
+    report.record(
+        "RFC-0038 pooled entities (spawn/despawn, cross-backend)",
+        if pool_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0039: distance joints hold a chain together.
+    let chain = r#"
+        world { gravity = (0,-9.81,0)
+            entity anchor { position=(0,6,0) mass=1.0 dynamic=false }
+            entity b1 { position=(0,5,0) mass=1.0 dynamic=true }
+            entity b2 { position=(1,4,0) mass=1.0 dynamic=true }
+            entity b3 { position=(2,3,0) mass=1.0 dynamic=true }
+            entity bob { position=(3,2,0) mass=4.0 dynamic=true } }
+        systems {
+            gravity { gravity_y=-9.81; dt=0.016 }
+            integrate { dt=0.016 }
+            joint { on=anchor; other=b1; type=distance; length=1.0; iterations=12 }
+            joint { on=b1; other=b2; type=distance; length=1.0; iterations=12 }
+            joint { on=b2; other=b3; type=distance; length=1.0; iterations=12 }
+            joint { on=b3; other=bob; type=distance; length=1.0; iterations=12 } }
+    "#;
+    let joint_ok = run(chain, 120)
+        .map(|rt| {
+            let (a, b) = (
+                rt.scene.position(EntityId(2)),
+                rt.scene.position(EntityId(3)),
+            );
+            match (a, b) {
+                (Ok(a), Ok(b)) => {
+                    let d =
+                        ((a.x - b.x).powi(2) + (a.y - b.y).powi(2) + (a.z - b.z).powi(2)).sqrt();
+                    d < 3.0 && finite(&rt, 5)
+                }
+                _ => false,
+            }
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0039 constraint joints (chain holds length)",
+        if joint_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0040: a soft-body grid is nx*ny particles and stays finite.
+    let cloth = r#"
+        world { gravity = (0,-9.81,0)
+            soft cloth { nx=8; ny=8; spacing=0.4; origin=(-1.4,5.0,0); mass=0.1; shape=sphere; size=0.05 } }
+        systems {
+            gravity { gravity_y=-9.81; dt=0.016 }
+            integrate { dt=0.016 }
+            soft { body=cloth; stiffness=1.0; damping=0.3; iterations=6 } }
+    "#;
+    let soft_ok = run(cloth, 120)
+        .map(|rt| rt.scene.entities.len() == 64 && finite(&rt, 1))
+        .unwrap_or(false);
+    report.record(
+        "RFC-0040 soft bodies (8x8 grid stays finite)",
+        if soft_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0042: struct records flatten to dotted slots and run.
+    let structs = r#"
+        world { gravity = (0,0,0)
+            struct Vec3 { x=0.0; y=0.0; z=0.0 }
+            entity shooter { state = (pos = Vec3, vel = Vec3, mass = 1.0) }
+            entity probe { state = (height = 0.0) } }
+        systems {
+            update { on=shooter; dt=0.02
+                vel.y = vel.y + inte( 0.0 - 9.81 )
+                pos.x = pos.x + inte( vel.x )
+                pos.y = pos.y + inte( vel.y ) }
+            update { on=probe; dt=1.0  height = @shooter.pos.y } }
+    "#;
+    let struct_ok = run(structs, 120)
+        .map(|rt| {
+            let st = rt.scene.get(EntityId(2)).and_then(|e| e.state.as_ref());
+            st.map(|s| !s.values.is_empty() && s.values[0].is_finite())
+                .unwrap_or(false)
+                && finite(&rt, 1)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0042 struct record types (flatten + cross-backend)",
+        if struct_ok { Case::Pass } else { Case::Fail },
+    );
+}
+
 fn main() {
     let mut report = Report::new();
     wir_round_trip(&mut report);
@@ -463,6 +603,7 @@ fn main() {
     minimal_profile_scenario(&mut report);
     language_compile_cross(&mut report);
     physics_sanity(&mut report);
+    extensions(&mut report);
     report.emit();
 }
 
