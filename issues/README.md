@@ -195,4 +195,21 @@ WGSL-backend review batch (0037–0038, commit `aee7ae30`):
    backends. Both new backends remain un-wired (zero callers outside
    their modules), consistent with the RFC-0027 posture.
 
+Fix-verification pass 4 (`e9387274`, pass 10 — verification/closure of 0036):
+
+1. 0036 verified fixed and closed: `PweCtx.trap` shim records
+   `EirInvalid 18` (first trap wins via `get_or_insert`), an
+   `isnan(a) || isnan(b)` guard precedes every emitted compare, and
+   the differential matrix gained `a < b` / `a == b` over a NaN input
+   grid. Probe matrix (fresh process per mode): `lt/eq` with any NaN
+   operand now `Err d18` on both tiers; non-NaN compares keep their
+   previous results; `if <NaN flag>` CondBr traps on both; #30–#34
+   probes re-run with no regressions (arity guards, div trap, sign,
+   Select/CondBr bit-test). Gates: fmt, clippy, 317 tests,
+   conformance 18/18.
+2. TMPDIR audit: current tree leaks zero `pwe_native_*` dirs (probe
+   process, filtered native tests, and a fresh full `cargo test
+   --workspace` each leave the count unchanged); 7 dead-pid leftovers
+   from pre-push dev runs were removed manually.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
