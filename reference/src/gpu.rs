@@ -63,8 +63,9 @@ pub struct Gpu {
 }
 
 impl Gpu {
-    /// Creates the Metal device and compiles the stencil kernel. Errors (detail
-    /// 5) if there is no Metal device or the kernel fails to compile.
+    /// Creates the Metal device and compiles the stencil kernel. Errors with
+    /// detail **98** if there is no Metal device, or **99** if the kernel fails
+    /// to compile.
     pub fn new() -> Result<Self> {
         let device = metal::Device::system_default().ok_or_else(|| error(Status::Invalid, 98))?;
         let queue = device.new_command_queue();
