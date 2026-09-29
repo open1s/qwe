@@ -3506,3 +3506,26 @@ fn from_import_privacy_survives_module_reorder() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn merge_sources_ignores_module_line_inside_string() {
+    // #71: the artifact rebuild path (`merge_sources`) must derive declarations
+    // string-awarely; an in-string `module dup` line in two sources must not
+    // trigger a false duplicate-module error (compile succeeds, run must too).
+    let root = "world {\n  title = \"a\nmodule dup\nb\"\n  gravity=(0,0,0)\n  entity e { state=(x=1.0) } }\nsystems { update { on=e; dt=1.0 x = x + 1.0 } }\n";
+    let module = "world {\n  title = \"c\nmodule dup\nd\"\n  gravity=(0,0,0)\n  entity f { state=(x=1.0) } }\nsystems { update { on=f; dt=1.0 x = x + 1.0 } }\n";
+    let sources = crate::lang::ProgramSources {
+        root: root.to_string(),
+        modules: vec![(
+            "m".to_string(),
+            "m.pwe".to_string(),
+            module.to_string(),
+            vec!["m".to_string()],
+        )],
+        aliases: vec![],
+    };
+    assert!(
+        crate::lang::merge_sources(&sources).is_ok(),
+        "in-string `module` lines must not be treated as declarations"
+    );
+}

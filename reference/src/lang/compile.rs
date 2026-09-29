@@ -1396,14 +1396,8 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
         ns: String::new(),
         aliases: vec![String::new()],
         path: std::path::PathBuf::from("<root>"),
-        declared_name: src
-            .root
-            .lines()
-            .find_map(|l| parse_module_line(l).map(|(n, _)| n)),
-        declared_version: src
-            .root
-            .lines()
-            .find_map(|l| parse_module_line(l).and_then(|(_, v)| v)),
+        declared_name: strip_directives(&src.root).declared_name,
+        declared_version: strip_directives(&src.root).declared_version,
         exports: None,
         source: src.root.clone(),
         parsed: root_parsed,
@@ -1415,12 +1409,8 @@ pub fn merge_sources(src: &ProgramSources) -> Result<ParsedProgram> {
             ns: ns.clone(),
             aliases: aliases.clone(),
             path: std::path::PathBuf::from(path),
-            declared_name: source
-                .lines()
-                .find_map(|l| parse_module_line(l).map(|(n, _)| n)),
-            declared_version: source
-                .lines()
-                .find_map(|l| parse_module_line(l).and_then(|(_, v)| v)),
+            declared_name: strip_directives(source).declared_name,
+            declared_version: strip_directives(source).declared_version,
             exports: None,
             source: source.clone(),
             parsed,

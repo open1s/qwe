@@ -14,9 +14,36 @@ Directory entries are RFC-0020 entries. Module hash is SHA-256 over the file wit
 
 ## Functions and operations
 
-Functions are sorted by `FunctionId`: `u64 id | signature_type | u32 effect_mask | u32 block_count | blocks`. Blocks are sorted `u32 block_id`, start `u32 argument_count`, and finish with exactly one terminator. SSA IDs are monotonic `u32`; zero is invalid. Instruction: `u16 opcode | u16 flags | u32 result_id | u32 result_type | u32 operand_count | operand_ids`. Terminators have result 0: `RET=0x8000`, `BR=0x8001`, `COND_BR=0x8002`, `TRAP=0x8003`, `UNREACHABLE=0x8004`.
+Functions are sorted by `FunctionId`; the concrete byte layout is given below. Blocks are sorted by `u32 block_id` and finish with exactly one terminator. SSA IDs are monotonic `u32`; zero is invalid. Instruction: `u16 opcode | u16 flags | u32 result_id | u32 result_type | u32 operand_count | operand_ids`. Terminators have result 0: `RET=0x8000`, `BR=0x8001`, `COND_BR=0x8002`, `TRAP=0x8003`, `UNREACHABLE=0x8004`.
 
 Core opcodes: `NOP=0`, `CONST=1`, `ADD..REM=16..31`, `EQ..GE=32..39`, `SELECT=40`, `CALL=48`, `READ_VIEW=64`, `WRITE_VIEW=65`, `LOAD=66`, `STORE=67`, `ATOMIC=68`, `EMIT_EVENT=69`, `TIME=70`, `RANDOM=71`, `IO=72`. Vendor operations are `0x4000..0x7fff` and require RFC-0036 declaration. Effect bits: `READ_WORLD=1`, `WRITE_WORLD=2`, `READ_RESOURCE=4`, `WRITE_RESOURCE=8`, `ATOMIC=16`, `IO=32`, `DEVICE=64`, `NETWORK=128`, `TIME=256`, `RANDOM=512`.
+
+### Concrete FUNCTIONS layout (implementation)
+
+`Functions` are sorted by `FunctionId`. Each function is:
+
+```text
+u64 id | u32 signature_type | u32 effect_mask | blocks
+```
+
+with two encodings, selected by `block_count`:
+
+- **`block_count == 1` (legacy single block):**
+  `u32 block_count=1 | u32 block_id=0 | u32 argument_count | u32 instruction_count | instruction*`.
+- **`block_count > 1` (explicit basic blocks, RFC-0046):**
+  `u32 block_count | u32 argument_count | { u32 block_id | u32 param_count(reserved) |
+  u32 instruction_count | instruction* }*`.
+
+A block's terminator is its final instruction (`RET=0x8000`, `BR=0x8001`,
+`COND_BR=0x8002`, `TRAP=0x8003`, `UNREACHABLE=0x8004`); there is no separate
+terminator field. Blocks partition the instruction stream contiguously in order,
+so decoding concatenates them back to the flat stream.
+
+**Compatibility:** the extension is additive within the FUNCTIONS section, so
+`EIR_MINOR` stays `0`. Straight-line functions keep the byte-identical legacy
+layout; a reader that does not implement `block_count > 1` fails closed
+(`PWE_E_EIR_INVALID`). Bumping `EIR_MINOR` was rejected because the decoder
+requires an exact minor and it would reject every existing artifact.
 
 ## Verification and semantics
 

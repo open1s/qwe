@@ -50,17 +50,18 @@ dominated by its def (block-parameter uses are dominated by the corresponding
 edge from the predecessor). The existing single-block linear form is the
 degenerate case (one block, `Return`).
 
-### Wire format (RFC-0021)
+### Wire format (RFC-0021) — as shipped
 
-The EIR binary is the frozen contract. This RFC is **additive and versioned**:
+The FUNCTIONS section encodes the CFG **inline** (no separate section): a
+straight-line function keeps the original single-block layout
+(`block_count == 1`, byte-identical to legacy artifacts, `EIR_MINOR` unchanged),
+while a branched function is written as explicit blocks (`block_count > 1`:
+`argument_count`, then per block `block_id | param_count(reserved) |
+instruction_count | instruction*`). The decoder concatenates the blocks
+deterministically, so decoding reproduces the flat stream exactly and re-encoding
+is byte-identical. A reader that does not implement `block_count > 1` fails
+closed. RFC-0021 carries the concrete layout and the compatibility rationale.
 
-- Keep the FUNCTIONS section decoding the current flat instruction stream and
-  convert it **deterministically** to blocks at decode time (the same
-  `blocks_from_instructions` partition), so old artifacts load unchanged.
-- Add an optional BLOCKS section (or a FUNCTIONS minor bump) that encodes blocks
-  + edges + params explicitly for new artifacts; a module carrying it is decoded
-  directly. `module_hash` covers whichever sections are present, so identity
-  stays content-addressed.
 
 ### Execution
 

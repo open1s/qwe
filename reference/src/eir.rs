@@ -2228,13 +2228,30 @@ fn non_zero(id: u32) -> Option<u32> {
 /// terminator jumps to. Used by the RFC-0021 dominance gate.
 fn blocks_from_instructions(instructions: &[Instruction]) -> Vec<crate::dominance::Block> {
     use crate::dominance::{Block, Terminator};
+    // Degenerate input (an empty stream, or out-of-range branch targets) must not
+    // panic here: `encode` and the CFG gate both call this. An empty function is
+    // a single empty block; a target at/beyond the end is ignored (the dominance
+    // verifier rejects it separately).
+    if instructions.is_empty() {
+        return vec![Block::new(0, 0, 0, Terminator::Return)];
+    }
+    let n = instructions.len();
     let mut starts: Vec<usize> = vec![0usize];
     for ins in instructions {
         match ins.opcode {
-            Opcode::Br => starts.push(ins.operands.first().copied().unwrap_or(0) as usize),
+            Opcode::Br => {
+                let t = ins.operands.first().copied().unwrap_or(0) as usize;
+                if t < n {
+                    starts.push(t);
+                }
+            }
             Opcode::CondBr => {
-                starts.push(ins.operands.get(1).copied().unwrap_or(0) as usize);
-                starts.push(ins.operands.get(2).copied().unwrap_or(0) as usize);
+                for k in [1usize, 2] {
+                    let t = ins.operands.get(k).copied().unwrap_or(0) as usize;
+                    if t < n {
+                        starts.push(t);
+                    }
+                }
             }
             _ => {}
         }
@@ -4229,4 +4246,56 @@ fn eir_cfg_blocks_round_trip() {
     assert_eq!(decoded.functions[0].instructions.len(), 7);
     // Deterministic: re-encoding the decoded module is byte-identical.
     assert_eq!(decoded.encode().unwrap(), encoded);
+}
+
+#[test]
+fn eir_encode_does_not_panic_on_degenerate_input() {
+    // #73: `encode` partitions via `blocks_from_instructions`; an empty stream
+    // and an out-of-range branch target must not panic there.
+    let base = || EirModule {
+        module_hash: Hash256([0; 32]),
+        schema_set_hash: Hash256([0; 32]),
+        domain_ir_hash: Hash256([0; 32]),
+        target_kind: 0,
+        functions: vec![],
+    };
+    // Empty function body.
+    let mut m = base();
+    m.functions.push(Function {
+        id: 1,
+        effect_mask: 0,
+        argument_count: 0,
+        instructions: vec![],
+    });
+    assert!(m.encode().is_ok());
+
+    // Out-of-range CondBr target (a hand-built, unvalidated module).
+    let mut m = base();
+    m.functions.push(Function {
+        id: 1,
+        effect_mask: 0,
+        argument_count: 0,
+        instructions: vec![
+            Instruction {
+                opcode: Opcode::Const,
+                result_id: 1,
+                result_type: None,
+                operands: vec![],
+                constant: Some(Immediate::F64(1.0)),
+                target: None,
+            },
+            Instruction {
+                opcode: Opcode::CondBr,
+                result_id: 0,
+                result_type: None,
+                operands: vec![1, 99, 100],
+                constant: None,
+                target: None,
+            },
+        ],
+    });
+    assert!(
+        m.encode().is_ok(),
+        "out-of-range targets must not panic encode"
+    );
 }

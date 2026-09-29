@@ -45,7 +45,7 @@ Post-v0.2 extensions implemented by the reference slice. Each is covered by a
 | 0042 | `struct` record types over flat slots | Done | `pwe-conformance` "RFC-0042 struct record types (flatten + cross-backend)"; `lang::tests::struct_record_types_*` |
 | 0043 | value types lowered to EIR (`int`/`bool`) | Proposed | RFC-0043 (not implemented) |
 | 0045 | semantic module system (stable names+version, export/privacy, deterministic merge) | Done | `pwe-conformance` RFC-0045 cases; `lang::tests::module_*`, `from_import_respects_export_surface`; details 101/102 |
-| 0046 | EIR as an explicit SSA CFG (blocks/edges; explicit wire form) | Done | `eir::tests::eir_cfg_blocks_round_trip`; `EirModule::blocks`/`verify_cfg`; FUNCTIONS section encodes explicit blocks (block_count>1), legacy single-block still decodes |
+| 0046 | EIR as an explicit SSA CFG (blocks/edges; explicit wire form) | Done | `eir::tests::eir_cfg_blocks_round_trip`; `EirModule::blocks`/`verify_cfg`; FUNCTIONS section encodes explicit blocks (block_count>1), legacy single-block still decodes; RFC-0021 concrete layout + RFC-0046 reconciled |
 | 0044 | typed arrays / SoA user types | Proposed | RFC-0044 (not implemented) |
 
 ## Language front end
