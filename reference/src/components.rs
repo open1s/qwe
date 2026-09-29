@@ -727,13 +727,24 @@ mod tests {
 /// One primitive part of a user-defined custom shape, offset in the entity's
 /// local frame. `kind`: `1` = sphere (`a` = radius), `2` = box (`a,b,c` = dims),
 /// `3` = capsule (`a,b,c` = bottom radius, length, top radius).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShapePart {
     pub kind: u8,
     pub a: f64,
     pub b: f64,
     pub c: f64,
     pub offset: (f64, f64, f64),
+    /// Presentation-only override colour (`0xRRGGBB`); `None` = the entity's
+    /// colour. Lets one composite shape mix colours (e.g. protons vs neutrons).
+    pub color: Option<u32>,
+    /// Animated circular orbit for this part about the entity's local origin:
+    /// `(radius, angular_speed_rad_s, phase_rad)`. `None` = static. Used for
+    /// electrons orbiting an atomic nucleus.
+    pub orbit: Option<(f64, f64, f64)>,
+    /// Orbit plane normal in the entity's local frame; `None` = local `+Z`.
+    pub orbit_axis: Option<(f64, f64, f64)>,
+    /// Self-rotation speed of this part in rad/s; `0.0` = static.
+    pub spin: f64,
     /// For `kind == 4` (an `svg` part): the SVG path data (`d`), extruded to 3D.
     pub path: Option<String>,
     /// For `kind == 5` (a convex `hull`) / `kind == 6` (a `poly`): the vertices.

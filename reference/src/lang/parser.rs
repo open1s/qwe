@@ -1410,6 +1410,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         faces: Vec::new(),
                                         scale,
                                         name: Some(refname),
+                                        ..Default::default()
                                     });
                                     continue;
                                 }
@@ -1420,6 +1421,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     "svg" => 4,
                                     "hull" => 5,
                                     "poly" => 6,
+                                    "ring" => 8,
                                     _ => 0,
                                 };
                                 let val = next_pair(&mut pi)?;
@@ -1442,6 +1444,11 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 } else if val.as_rule() == Rule::vec3 {
                                     let v = parse_vec3(val);
                                     (v.x, v.y, v.z)
+                                } else if val.as_rule() == Rule::pair {
+                                    let mut it = val.into_inner();
+                                    let x = it.next().map(parse_value).unwrap_or(0.0);
+                                    let y = it.next().map(parse_value).unwrap_or(0.0);
+                                    (x, y, 0.0)
                                 } else {
                                     let x = parse_value(val);
                                     (x, x, x)
@@ -1449,8 +1456,21 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 let mut faces: Vec<Vec<u32>> = Vec::new();
                                 let mut scale = 1.0f64;
                                 let mut offset = (0.0, 0.0, 0.0);
+                                let mut color: Option<u32> = None;
+                                let mut orbit: Option<(f64, f64, f64)> = None;
+                                let mut orbit_axis: Option<(f64, f64, f64)> = None;
+                                let mut spin = 0.0f64;
                                 for opt in pi {
                                     let rule = opt.as_rule();
+                                    if rule == Rule::part_color_opt {
+                                        // `color = 0xRRGGBB` (an atomic rule).
+                                        let text = opt.as_str();
+                                        if let Some(pos) = text.find("0x") {
+                                            color = u32::from_str_radix(text[pos + 2..].trim(), 16)
+                                                .ok();
+                                        }
+                                        continue;
+                                    }
                                     let inner = next_pair(&mut opt.into_inner())?;
                                     match rule {
                                         Rule::at_opt => {
@@ -1459,6 +1479,15 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         }
                                         Rule::depth_opt => a = parse_value(inner),
                                         Rule::scale_opt => scale = parse_value(inner),
+                                        Rule::orbit_opt => {
+                                            let v = parse_vec3(inner);
+                                            orbit = Some((v.x, v.y, v.z));
+                                        }
+                                        Rule::axis_opt => {
+                                            let v = parse_vec3(inner);
+                                            orbit_axis = Some((v.x, v.y, v.z));
+                                        }
+                                        Rule::spin_opt => spin = parse_value(inner),
                                         Rule::faces_opt => {
                                             for f in inner.into_inner() {
                                                 let idx: Vec<u32> = f
@@ -1487,6 +1516,10 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         faces,
                                         scale,
                                         name: None,
+                                        color,
+                                        orbit,
+                                        orbit_axis,
+                                        spin,
                                     });
                                 }
                             }

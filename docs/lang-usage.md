@@ -585,10 +585,22 @@ Presentation-only: `color`, `shape = point\|sphere\|box\|capsule\|<custom>`,
 `part <kind> = <params> [at (x,y,z)] [scale s]`:
 
 * `sphere = r`, `box = (dx,dy,dz)`, `capsule = (r0, len, r1)`;
+* `ring = (radius, tube)` (a torus — e.g. an electron shell);
 * `hull = [(x,y,z), …]` (convex);
 * `poly = [(x,y,z), …] faces = [[i,j,k,…], …]` (arbitrary mesh);
 * `svg = "<d>" depth <d>`;
 * `part <other-shape> [at …] [scale …]` (composition, recursive).
+
+Presentation-only part options (all optional; they never affect semantics):
+
+* `color = 0xRRGGBB` — overrides the entity colour for this part (multi-colour
+  shapes: protons vs neutrons vs electrons);
+* `spin = s` — self-rotation speed in rad/s;
+* `orbit (radius, speed, phase)` — animates the part around the entity's local
+  origin (electrons orbiting a nucleus), `speed` in rad/s; `axis (x,y,z)` sets
+  the orbit-plane normal (default local `+Z`).
+
+`std/atoms/` uses these to draw atomic structure; `std/molecules/` for bonds.
 
 ## 2.6 Grid fields
 

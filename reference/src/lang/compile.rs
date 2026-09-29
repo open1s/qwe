@@ -1017,6 +1017,9 @@ pub fn expand_shapes(
                             p.offset.2 + s.offset.2 * p.scale,
                         ),
                         scale: s.scale * p.scale,
+                        orbit: s
+                            .orbit
+                            .map(|(radius, speed, phase)| (radius * p.scale, speed, phase)),
                         ..s
                     });
                 }

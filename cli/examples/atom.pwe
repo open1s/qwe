@@ -1,0 +1,10 @@
+# Layer A — atomic internal structure. `import` an atom module for its
+# `shape <Sym>_atom` (nucleus: protons/neutrons; shells: rings + electrons that
+# orbit over simulation time), then set it on an entity.
+import "../../std/atoms/O"
+
+world {
+  title = "Oxygen atom (Z=8) — nucleus + electron shells"
+  gravity = (0, 0, 0)
+  entity Oxygen { shape = O_atom; size = 2.5; color = 0x4EA1FF }
+}

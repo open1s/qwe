@@ -1,0 +1,20 @@
+# std/atoms/Li.pwe — Lithium atom (Z=3), schematic (generated).
+# `shape Li_atom`: nucleus + electron shells (orbiting). Set on an
+# entity: `entity x { shape = Li_atom; size = 2.0 }`.
+module atoms.Li
+world {
+  shape Li_atom {
+    part sphere=0.045 color=0xFF5555 at (0.0618, 0.1029, 0);
+    part sphere=0.045 color=0xFF5555 at (-0.0726, 0.0686, 0.0665);
+    part sphere=0.045 color=0xFF5555 at (0.0101, 0.0343, -0.1146);
+    part sphere=0.04 color=0x9AA0A6 at (0.073, 0, 0.0952);
+    part sphere=0.04 color=0x9AA0A6 at (-0.1132, -0.0343, -0.02);
+    part sphere=0.04 color=0x9AA0A6 at (0.0831, -0.0686, -0.0529);
+    part sphere=0.04 color=0x9AA0A6 at (-0.016, -0.1029, 0.0597);
+    part ring=(0.3, 0.010) color=0x7FB8FF;
+    part sphere=0.035 color=0x4EA1FF orbit (0.3, 2.6, 0.5);
+    part sphere=0.035 color=0x4EA1FF orbit (0.3, 2.6, 3.642);
+    part ring=(0.46, 0.010) color=0x7FB8FF;
+    part sphere=0.035 color=0x4EA1FF orbit (0.46, 1.3, 1);
+  }
+}

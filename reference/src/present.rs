@@ -33,7 +33,12 @@ pub enum Shape {
         radius_top: f64,
     },
     /// A user-defined custom shape: primitive parts with local offsets.
-    Group(Vec<(Shape, Vec3)>),
+    Group(Vec<Part>),
+    /// A torus (a `ring` part) — a shell/orbit ring, e.g. an electron shell.
+    Ring {
+        radius: f64,
+        tube: f64,
+    },
     /// An SVG path (`d`) extruded along Z into a 3D solid, then scaled.
     Svg {
         path: String,
@@ -47,6 +52,28 @@ pub enum Shape {
     },
     /// No collider: a point marker (e.g. a channel or a state-only body).
     Point,
+}
+
+/// One part of a composite (`group`) shape: a primitive with a local offset and
+/// an optional per-part colour and animation.
+#[derive(Clone, Debug)]
+pub struct Part {
+    pub shape: Shape,
+    pub offset: Vec3,
+    pub color: Option<u32>,
+    pub orbit: Option<Orbit>,
+    pub spin: f64,
+}
+
+/// A part's circular orbit about the entity's local origin (electrons around a
+/// nucleus): position is `radius·(cos θ, sin θ)` in the plane normal to `axis`,
+/// with `θ = phase + speed·t`.
+#[derive(Clone, Copy, Debug)]
+pub struct Orbit {
+    pub radius: f64,
+    pub speed: f64,
+    pub phase: f64,
+    pub axis: Vec3,
 }
 
 /// One visible entity in a frame.
@@ -261,7 +288,7 @@ pub fn snapshot_with(
                     } else {
                         1.0
                     };
-                    let group: Vec<(Shape, Vec3)> = parts
+                    let group: Vec<Part> = parts
                         .iter()
                         .map(|p| {
                             let base = if p.scale == 0.0 { 1.0 } else { p.scale };
@@ -297,16 +324,31 @@ pub fn snapshot_with(
                                         .collect(),
                                     faces: p.faces.clone(),
                                 },
+                                8 => Shape::Ring {
+                                    radius: p.a * sc,
+                                    tube: p.b * sc,
+                                },
                                 _ => Shape::Point,
                             };
-                            (
+                            Part {
                                 shape,
-                                Vec3::new(
+                                offset: Vec3::new(
                                     p.offset.0 * whole,
                                     p.offset.1 * whole,
                                     p.offset.2 * whole,
                                 ),
-                            )
+                                color: p.color,
+                                orbit: p.orbit.map(|(radius, speed, phase)| Orbit {
+                                    radius: radius * whole,
+                                    speed,
+                                    phase,
+                                    axis: p
+                                        .orbit_axis
+                                        .map(|(x, y, z)| Vec3::new(x, y, z))
+                                        .unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
+                                }),
+                                spin: p.spin,
+                            }
                         })
                         .collect();
                     vis.shape = Shape::Group(group);
@@ -472,57 +514,67 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
                     fmt_f64(*scale)
                 ));
             }
+            Shape::Ring { radius, tube } => {
+                out.push_str(&format!(
+                    "\"ring\",\"a\":{},\"b\":{}}}",
+                    fmt_f64(*radius),
+                    fmt_f64(*tube)
+                ));
+            }
             Shape::Group(parts) => {
                 out.push_str("\"group\",\"parts\":[");
-                for (j, (shape, off)) in parts.iter().enumerate() {
+                for (j, part) in parts.iter().enumerate() {
                     if j > 0 {
                         out.push(',');
                     }
-                    out.push_str(&format!("{{\"off\":{},", vec3_json(*off)));
-                    match shape {
+                    out.push_str(&format!("{{\"off\":{}", vec3_json(part.offset)));
+                    match &part.shape {
                         Shape::Sphere { radius } => {
-                            out.push_str(&format!("\"k\":1,\"a\":{}}}", fmt_f64(*radius)));
+                            let _ = write!(out, ",\"k\":1,\"a\":{}", fmt_f64(*radius));
                         }
                         Shape::Box { dims } => {
-                            out.push_str(&format!(
-                                "\"k\":2,\"a\":{},\"b\":{},\"c\":{}}}",
+                            let _ = write!(
+                                out,
+                                ",\"k\":2,\"a\":{},\"b\":{},\"c\":{}",
                                 fmt_f64(dims.x),
                                 fmt_f64(dims.y),
                                 fmt_f64(dims.z)
-                            ));
+                            );
                         }
                         Shape::Capsule {
                             radius_bottom,
                             length,
                             radius_top,
                         } => {
-                            out.push_str(&format!(
-                                "\"k\":3,\"a\":{},\"b\":{},\"c\":{}}}",
+                            let _ = write!(
+                                out,
+                                ",\"k\":3,\"a\":{},\"b\":{},\"c\":{}",
                                 fmt_f64(*radius_bottom),
                                 fmt_f64(*length),
                                 fmt_f64(*radius_top)
-                            ));
+                            );
                         }
                         Shape::Svg { path, depth, scale } => {
-                            out.push_str(&format!(
-                                "\"k\":4,\"d\":\"{}\",\"depth\":{},\"scale\":{}}}",
+                            let _ = write!(
+                                out,
+                                ",\"k\":4,\"d\":\"{}\",\"depth\":{},\"scale\":{}",
                                 path.replace('\\', "\\\\").replace('"', "\\\""),
                                 fmt_f64(*depth),
                                 fmt_f64(*scale)
-                            ));
+                            );
                         }
                         Shape::Hull { points } => {
-                            out.push_str("\"k\":5,\"pts\":[");
+                            out.push_str(",\"k\":5,\"pts\":[");
                             for (k, p) in points.iter().enumerate() {
                                 if k > 0 {
                                     out.push(',');
                                 }
                                 out.push_str(&vec3_json(*p));
                             }
-                            out.push_str("]}");
+                            out.push(']');
                         }
                         Shape::Poly { points, faces } => {
-                            out.push_str("\"k\":6,\"pts\":[");
+                            out.push_str(",\"k\":6,\"pts\":[");
                             for (k, p) in points.iter().enumerate() {
                                 if k > 0 {
                                     out.push(',');
@@ -543,10 +595,35 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
                                 }
                                 out.push(']');
                             }
-                            out.push_str("]}");
+                            out.push(']');
                         }
-                        _ => out.push_str("\"k\":0}"),
+                        Shape::Ring { radius, tube } => {
+                            let _ = write!(
+                                out,
+                                ",\"k\":8,\"a\":{},\"b\":{}",
+                                fmt_f64(*radius),
+                                fmt_f64(*tube)
+                            );
+                        }
+                        _ => out.push_str(",\"k\":0"),
                     }
+                    if let Some(c) = part.color {
+                        let _ = write!(out, ",\"color\":{c}");
+                    }
+                    if let Some(o) = &part.orbit {
+                        let _ = write!(
+                            out,
+                            ",\"orbit\":[{},{},{},{}]",
+                            fmt_f64(o.radius),
+                            fmt_f64(o.speed),
+                            fmt_f64(o.phase),
+                            vec3_json(o.axis)
+                        );
+                    }
+                    if part.spin != 0.0 {
+                        let _ = write!(out, ",\"spin\":{}", fmt_f64(part.spin));
+                    }
+                    out.push('}');
                 }
                 out.push(']');
                 out.push_str(",\"state\":[");
@@ -771,26 +848,47 @@ function capsuleGeo(r0,len,r1){{ const cs=8, pts=[];
   for(let i=0;i<=cs;i++){{const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r0*Math.sin(a), -len/2 - r0*Math.cos(a)));}}
   for(let i=0;i<=cs;i++){{const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r1*Math.cos(a), len/2 + r1*Math.sin(a)));}}
   return new THREE.LatheGeometry(pts,28); }}
-function makeMesh(e) {{
+function makeMesh(e, t) {{
+  t = t||0;
   const opacity = e.opacity==null?1:e.opacity, glow = e.glow==null?0.8:e.glow;
-  const mat = new THREE.MeshStandardMaterial({{color: e.color,emissive:new THREE.Color(e.color),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity}});
+  const matFor = (col)=>{{ const c = (col==null? e.color : col);
+    return new THREE.MeshStandardMaterial({{color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity}}); }};
+  const mat = matFor(null);
   if (e.kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(e.dims[0],e.dims[1],e.dims[2]), mat);
   if (e.kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(e.radius,20,16), mat);
+  if (e.kind==='ring') return new THREE.Mesh(new THREE.TorusGeometry(e.a||0.5, e.b||0.05, 12, 48), mat);
   if (e.kind==='hull' && e.points) {{
     const verts = e.points.map(p=>new THREE.Vector3(p[0],p[1],p[2]));
     let g; try {{ g = new ConvexGeometry(verts); }} catch(err) {{ g = new THREE.SphereGeometry(0.1,8,6); }}
     return new THREE.Mesh(g, mat);
   }}
   if (e.kind==='capsule') return new THREE.Mesh(capsuleGeo(e.r0||0.06, e.len||0.3, e.r1||0.06), mat);
-  if (e.kind==='group' && e.parts) {{ const g=new THREE.Group(); for (const p of e.parts) {{ let ch;
-    if (p.k===2) {{ ch=new THREE.Mesh(new THREE.BoxGeometry(p.a,p.b,p.c), mat); }}
-    else if (p.k===3) {{ ch=new THREE.Mesh(capsuleGeo(p.a,p.b,p.c), mat); }}
-    else if (p.k===4) {{ ch=new THREE.Mesh(svgGeo(p.d, p.depth, p.scale), mat); }}
-    else if (p.k===5) {{ ch=new THREE.Mesh(new ConvexGeometry((p.pts||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2]))), mat); }}
-    else if (p.k===6) {{ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), mat); }}
-    else {{ ch=new THREE.Mesh(new THREE.SphereGeometry(p.a,20,16), mat); }}
-    ch.position.set(p.off[0],p.off[1],p.off[2]); g.add(ch); }} return g; }}
+  if (e.kind==='group' && e.parts) return groupMesh(e.parts, t, matFor);
   return new THREE.Mesh(new THREE.SphereGeometry((e.size||0.25)/2,20,16), mat);
+}}
+function groupMesh(parts, t, matFor) {{
+  const g=new THREE.Group();
+  for (const p of parts) {{ const m=matFor(p.color); let ch;
+    if (p.k===2) {{ ch=new THREE.Mesh(new THREE.BoxGeometry(p.a,p.b,p.c), m); }}
+    else if (p.k===3) {{ ch=new THREE.Mesh(capsuleGeo(p.a,p.b,p.c), m); }}
+    else if (p.k===4) {{ ch=new THREE.Mesh(svgGeo(p.d, p.depth, p.scale), m); }}
+    else if (p.k===5) {{ ch=new THREE.Mesh(new ConvexGeometry((p.pts||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2]))), m); }}
+    else if (p.k===6) {{ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), m); }}
+    else if (p.k===8) {{ ch=new THREE.Mesh(new THREE.TorusGeometry(p.a,p.b,12,48), m); }}
+    else {{ ch=new THREE.Mesh(new THREE.SphereGeometry(p.a,20,16), m); }}
+    const off=p.off||[0,0,0];
+    if (p.orbit) {{ const o=p.orbit, ang=(o[2]||0)+(o[1]||0)*t;
+      const ax=new THREE.Vector3(o[3][0],o[3][1],o[3][2]); if(ax.lengthSq()<1e-12) ax.set(0,0,1); ax.normalize();
+      const u=new THREE.Vector3(1,0,0); if(Math.abs(ax.dot(u))>0.9) u.set(0,1,0);
+      const e1=u.clone().addScaledVector(ax,-ax.dot(u)).normalize();
+      const e2=new THREE.Vector3().crossVectors(ax,e1);
+      const pos=e1.multiplyScalar(o[0]*Math.cos(ang)).addScaledVector(e2,o[0]*Math.sin(ang));
+      ch.position.set(off[0]+pos.x, off[1]+pos.y, off[2]+pos.z);
+    }} else ch.position.set(off[0],off[1],off[2]);
+    if (p.spin) ch.rotation.y = p.spin*t;
+    g.add(ch);
+  }}
+  return g;
 }}
 const decals = [];
 function addOrbit(center, r, color) {{
@@ -943,7 +1041,7 @@ function applyFrame(f) {{
   for (const e of f.entities) {{ const r=Math.hypot(e.pos[0],e.pos[1]); if(!sun||r<sun.r) sun={{r:r,x:e.pos[0],y:e.pos[1],z:e.pos[2]}}; }}
   if (sun) sunLight.position.set(sun.x,sun.y,sun.z);
   for (const e of f.entities) {{
-    const m = makeMesh(e);
+    const m = makeMesh(e, f.time);
     m.position.set(e.pos[0],e.pos[1],e.pos[2]);
     m.quaternion.set(e.rot[0],e.rot[1],e.rot[2],e.rot[3]);
     if ((e.name==='sun'||(sun&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6)) && m.material) {{ m.material.emissive=new THREE.Color(e.color); if (e.glow==null) m.material.emissiveIntensity=1.2; }}
@@ -1211,21 +1309,41 @@ function capsuleGeo(r0,len,r1){ const cs=8, pts=[];
   for(let i=0;i<=cs;i++){const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r0*Math.sin(a), -len/2 - r0*Math.cos(a)));}
   for(let i=0;i<=cs;i++){const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r1*Math.cos(a), len/2 + r1*Math.sin(a)));}
   return new THREE.LatheGeometry(pts,28); }
-function make(e){
+function make(e, t){
+  t = t||0;
   const opacity=e.opacity==null?1:e.opacity, glow=e.glow==null?0.8:e.glow;
-  const mat=new THREE.MeshStandardMaterial({color:e.color,emissive:new THREE.Color(e.color),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity});
+  const matFor=(col)=>{ const c=(col==null? e.color : col);
+    return new THREE.MeshStandardMaterial({color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity}); };
+  const mat=matFor(null);
   if(e.kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(e.dims[0],e.dims[1],e.dims[2]),mat);
   if(e.kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(e.radius,20,16),mat);
+  if(e.kind==='ring') return new THREE.Mesh(new THREE.TorusGeometry(e.a||0.5, e.b||0.05, 12, 48),mat);
   if(e.kind==='hull'&&e.points){const v=e.points.map(p=>new THREE.Vector3(p[0],p[1],p[2]));let g;try{g=new ConvexGeometry(v);}catch(err){g=new THREE.SphereGeometry(0.1,8,6);}return new THREE.Mesh(g,mat);}
   if(e.kind==='capsule') return new THREE.Mesh(capsuleGeo(e.r0||0.06, e.len||0.3, e.r1||0.06), mat);
-  if(e.kind==='group' && e.parts){ const g=new THREE.Group(); for(const p of e.parts){ let ch;
-    if(p.k===2){ ch=new THREE.Mesh(new THREE.BoxGeometry(p.a,p.b,p.c), mat); }
-    else if(p.k===3){ ch=new THREE.Mesh(capsuleGeo(p.a,p.b,p.c), mat); }
-    else if(p.k===4){ ch=new THREE.Mesh(svgGeo(p.d, p.depth, p.scale), mat); }
-    else if(p.k===5){ ch=new THREE.Mesh(new ConvexGeometry((p.pts||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2]))), mat); }
-    else if(p.k===6){ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), mat); }
-    else { ch=new THREE.Mesh(new THREE.SphereGeometry(p.a,20,16), mat); }
-    ch.position.set(p.off[0],p.off[1],p.off[2]); g.add(ch); } return g; }
+  if(e.kind==='group' && e.parts){
+    const g=new THREE.Group();
+    for(const p of e.parts){ const m=matFor(p.color); let ch;
+      if(p.k===2){ ch=new THREE.Mesh(new THREE.BoxGeometry(p.a,p.b,p.c), m); }
+      else if(p.k===3){ ch=new THREE.Mesh(capsuleGeo(p.a,p.b,p.c), m); }
+      else if(p.k===4){ ch=new THREE.Mesh(svgGeo(p.d, p.depth, p.scale), m); }
+      else if(p.k===5){ ch=new THREE.Mesh(new ConvexGeometry((p.pts||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2]))), m); }
+      else if(p.k===6){ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), m); }
+      else if(p.k===8){ ch=new THREE.Mesh(new THREE.TorusGeometry(p.a,p.b,12,48), m); }
+      else { ch=new THREE.Mesh(new THREE.SphereGeometry(p.a,20,16), m); }
+      const off=p.off||[0,0,0];
+      if(p.orbit){ const o=p.orbit, ang=(o[2]||0)+(o[1]||0)*t;
+        const ax=new THREE.Vector3(o[3][0],o[3][1],o[3][2]); if(ax.lengthSq()<1e-12) ax.set(0,0,1); ax.normalize();
+        const u=new THREE.Vector3(1,0,0); if(Math.abs(ax.dot(u))>0.9) u.set(0,1,0);
+        const e1=u.clone().addScaledVector(ax,-ax.dot(u)).normalize();
+        const e2=new THREE.Vector3().crossVectors(ax,e1);
+        const pos=e1.multiplyScalar(o[0]*Math.cos(ang)).addScaledVector(e2,o[0]*Math.sin(ang));
+        ch.position.set(off[0]+pos.x, off[1]+pos.y, off[2]+pos.z);
+      } else ch.position.set(off[0],off[1],off[2]);
+      if(p.spin) ch.rotation.y = p.spin*t;
+      g.add(ch);
+    }
+    return g;
+  }
   return new THREE.Mesh(new THREE.SphereGeometry((e.size||0.25)/2,20,16),mat);
 }
 const fieldObjects = new Map();
@@ -1366,7 +1484,7 @@ function apply(f){
   for(const e of f.frame.entities){const r=Math.hypot(e.pos[0],e.pos[1]);if(!sun.r||r<sun.r){sun.r=r;sun.x=e.pos[0];sun.y=e.pos[1];sun.z=e.pos[2];}}
   sunLight.position.set(sun.x,sun.y,sun.z);
   for(const e of f.frame.entities){
-    const m=make(e);
+    const m=make(e, f.frame.time);
     m.position.set(e.pos[0],e.pos[1],e.pos[2]);m.quaternion.set(e.rot[0],e.rot[1],e.rot[2],e.rot[3]);
     if((e.name==='sun'||(sun.r&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6))&&m.material){m.material.emissive=new THREE.Color(e.color);if(e.glow==null)m.material.emissiveIntensity=0.6;}
     m.userData=e; scene.add(m);meshes.set(e.id,m);
@@ -1594,6 +1712,7 @@ mod tests {
                     points: Vec::new(),
                     faces: Vec::new(),
                     scale: 1.0,
+                    ..Default::default()
                 },
                 crate::components::ShapePart {
                     name: None,
@@ -1606,6 +1725,7 @@ mod tests {
                     points: Vec::new(),
                     faces: Vec::new(),
                     scale: 1.0,
+                    ..Default::default()
                 },
             ]),
             ..Default::default()

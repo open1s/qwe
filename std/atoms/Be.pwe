@@ -1,0 +1,23 @@
+# std/atoms/Be.pwe — Beryllium atom (Z=4), schematic (generated).
+# `shape Be_atom`: nucleus + electron shells (orbiting). Set on an
+# entity: `entity x { shape = Be_atom; size = 2.0 }`.
+module atoms.Be
+world {
+  shape Be_atom {
+    part sphere=0.045 color=0xFF5555 at (0.0641, 0.1244, 0);
+    part sphere=0.045 color=0xFF5555 at (-0.0769, 0.0933, 0.0705);
+    part sphere=0.045 color=0xFF5555 at (0.011, 0.0622, -0.1249);
+    part sphere=0.045 color=0xFF5555 at (0.0831, 0.0311, 0.1083);
+    part sphere=0.04 color=0x9AA0A6 at (-0.1379, 0, -0.0244);
+    part sphere=0.04 color=0x9AA0A6 at (0.1152, -0.0311, -0.0733);
+    part sphere=0.04 color=0x9AA0A6 at (-0.0326, -0.0622, 0.1211);
+    part sphere=0.04 color=0x9AA0A6 at (-0.0481, -0.0933, -0.0926);
+    part sphere=0.04 color=0x9AA0A6 at (0.0602, -0.1244, 0.022);
+    part ring=(0.3, 0.010) color=0x7FB8FF;
+    part sphere=0.035 color=0x4EA1FF orbit (0.3, 2.6, 0.5);
+    part sphere=0.035 color=0x4EA1FF orbit (0.3, 2.6, 3.642);
+    part ring=(0.46, 0.010) color=0x7FB8FF;
+    part sphere=0.035 color=0x4EA1FF orbit (0.46, 1.3, 1);
+    part sphere=0.035 color=0x4EA1FF orbit (0.46, 1.3, 4.142);
+  }
+}

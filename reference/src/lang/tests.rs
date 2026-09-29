@@ -3543,3 +3543,30 @@ fn bond_declaration_attaches_render_bonds() {
         "H-O pairs: {bonds:?}"
     );
 }
+
+#[test]
+fn micro_shape_parts_carry_ring_colour_and_orbit() {
+    // Layer A: composite shapes support a `ring` (torus) part, per-part colour,
+    // and animated orbit/spin — the primitives for atomic nuclei + electrons.
+    let src = "world { gravity=(0,0,0) \
+        shape atom { \
+            part sphere=0.3 color=0xFF5555 at (0,0,0); \
+            part ring=(0.6,0.02); \
+            part sphere=0.08 color=0x4EA1FF orbit (0.6, 3.0, 0.0) } \
+        entity e { shape = atom } }";
+    let rt = LangRuntime::compile(src).unwrap();
+    let json = crate::present::frame_to_json(&rt.present_frame(None));
+    assert!(json.contains("\"k\":8"), "ring part encoded: {json}");
+    assert!(
+        json.contains("\"color\":16733525"),
+        "proton colour 0xFF5555: {json}"
+    );
+    assert!(
+        json.contains("\"color\":5153279"),
+        "electron colour 0x4EA1FF: {json}"
+    );
+    assert!(
+        json.contains("\"orbit\":[0.6,3,0,[0,0,1]]"),
+        "orbit encoded: {json}"
+    );
+}

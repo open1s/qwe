@@ -1,0 +1,11 @@
+# std/atoms/H.pwe — Hydrogen atom (Z=1), schematic (generated).
+# `shape H_atom`: nucleus + electron shells (orbiting). Set on an
+# entity: `entity x { shape = H_atom; size = 2.0 }`.
+module atoms.H
+world {
+  shape H_atom {
+    part sphere=0.045 color=0xFF5555 at (0.06, 0, 0);
+    part ring=(0.3, 0.010) color=0x7FB8FF;
+    part sphere=0.035 color=0x4EA1FF orbit (0.3, 2.6, 0.5);
+  }
+}
