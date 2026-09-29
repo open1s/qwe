@@ -1,0 +1,23 @@
+# std/molecules/methane.pwe — methane (generated).
+# Atoms + `bond` lines (ball-and-stick). Import to render and to use
+# `methane.molar_mass()` / `methane.atom_count()`.
+module molecules.methane
+import "../elements/C"
+import "../elements/H"
+world {
+  gravity = (0, 0, 0)
+  entity C1 { position = (0, 0, 0); shape = sphere; size = 0.55; color = 0x909090 }
+  entity H1 { position = (0.629, 0.629, 0.629); shape = sphere; size = 0.3; color = 0xFFFFFF }
+  entity H2 { position = (-0.629, -0.629, 0.629); shape = sphere; size = 0.3; color = 0xFFFFFF }
+  entity H3 { position = (-0.629, 0.629, -0.629); shape = sphere; size = 0.3; color = 0xFFFFFF }
+  entity H4 { position = (0.629, -0.629, -0.629); shape = sphere; size = 0.3; color = 0xFFFFFF }
+  bond C1 H1
+  bond C1 H2
+  bond C1 H3
+  bond C1 H4
+}
+
+funcs {
+  atom_count() { 5.0 }
+  molar_mass() { C.atomic_mass() + H.atomic_mass() + H.atomic_mass() + H.atomic_mass() + H.atomic_mass() }
+}

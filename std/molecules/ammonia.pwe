@@ -1,0 +1,21 @@
+# std/molecules/ammonia.pwe — ammonia (generated).
+# Atoms + `bond` lines (ball-and-stick). Import to render and to use
+# `ammonia.molar_mass()` / `ammonia.atom_count()`.
+module molecules.ammonia
+import "../elements/H"
+import "../elements/N"
+world {
+  gravity = (0, 0, 0)
+  entity N1 { position = (0, 0, -0.28); shape = sphere; size = 0.5; color = 0x3050F8 }
+  entity H1 { position = (0.94, 0, 0.24); shape = sphere; size = 0.3; color = 0xFFFFFF }
+  entity H2 { position = (-0.47, 0.81, 0.24); shape = sphere; size = 0.3; color = 0xFFFFFF }
+  entity H3 { position = (-0.47, -0.81, 0.24); shape = sphere; size = 0.3; color = 0xFFFFFF }
+  bond N1 H1
+  bond N1 H2
+  bond N1 H3
+}
+
+funcs {
+  atom_count() { 4.0 }
+  molar_mass() { N.atomic_mass() + H.atomic_mass() + H.atomic_mass() + H.atomic_mass() }
+}

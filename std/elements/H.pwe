@@ -18,9 +18,13 @@ funcs {
   molar_heat_j_mol_k() { 28.836 }
   atomic_radius_pm() { 0.0 }
   valence_electrons() { 1.0 }
+  electrons() { 1.0 }
+  neutrons() { 0.0 }
+  shell_count() { 1.0 }
   is_metal() { 0.0 }
   is_metalloid() { 0.0 }
   is_nonmetal() { 1.0 }
   is_noble_gas() { 0.0 }
   is_gas_at_stp() { 1.0 }
+  shell_electrons(k) { if(k == 1, 1.0, 0.0) }
 }

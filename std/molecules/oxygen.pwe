@@ -1,0 +1,16 @@
+# std/molecules/oxygen.pwe — oxygen (generated).
+# Atoms + `bond` lines (ball-and-stick). Import to render and to use
+# `oxygen.molar_mass()` / `oxygen.atom_count()`.
+module molecules.oxygen
+import "../elements/O"
+world {
+  gravity = (0, 0, 0)
+  entity O1 { position = (0.6, 0, 0); shape = sphere; size = 0.5; color = 0xFF0D0D }
+  entity O2 { position = (-0.6, 0, 0); shape = sphere; size = 0.5; color = 0xFF0D0D }
+  bond O1 O2
+}
+
+funcs {
+  atom_count() { 2.0 }
+  molar_mass() { O.atomic_mass() + O.atomic_mass() }
+}

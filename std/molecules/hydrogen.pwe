@@ -1,0 +1,16 @@
+# std/molecules/hydrogen.pwe — hydrogen (generated).
+# Atoms + `bond` lines (ball-and-stick). Import to render and to use
+# `hydrogen.molar_mass()` / `hydrogen.atom_count()`.
+module molecules.hydrogen
+import "../elements/H"
+world {
+  gravity = (0, 0, 0)
+  entity H1 { position = (0.37, 0, 0); shape = sphere; size = 0.3; color = 0xFFFFFF }
+  entity H2 { position = (-0.37, 0, 0); shape = sphere; size = 0.3; color = 0xFFFFFF }
+  bond H1 H2
+}
+
+funcs {
+  atom_count() { 2.0 }
+  molar_mass() { H.atomic_mass() + H.atomic_mass() }
+}

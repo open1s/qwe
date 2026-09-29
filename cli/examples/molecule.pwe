@@ -1,0 +1,18 @@
+# Ball-and-stick molecule: `import` a molecule module (atoms + `bond` lines),
+# then drive an animation from its data functions.
+import "../../std/molecules/water"
+
+world {
+  title = "Water (H2O) — ball-and-stick"
+  gravity = (0, 0, 0)
+}
+
+systems {
+  update {
+    on = O1
+    dt = 1.0
+    # Rotate the oxygen marker's state from the molecule's molar mass.
+    s0 = water.molar_mass()
+    s1 = water.atom_count()
+  }
+}

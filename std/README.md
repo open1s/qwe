@@ -3,8 +3,9 @@
 A foundational package of PWE modules (`import "std/<name>"`) covering the
 domains a general simulation language needs: mathematics, point kinematics,
 forces, rigid-body mechanics, chemistry, thermal physics, acoustics, optics,
-electromagnetism, robotics, and the **periodic table** (`std/periodic` lookup
-by atomic number, plus one module per element in `std/elements/`).
+electromagnetism, robotics, the **periodic table** (`std/periodic` lookup by
+atomic number, plus one module per element in `std/elements/`), and
+**molecules** (`std/molecules/`, renderable atoms + `bond` lines).
 
 ## How modules are used
 
@@ -48,6 +49,7 @@ A composing example lives at `cli/examples/domains.pwe`.
 | `std/em` | `coulomb_force electric_field potential lorentz_force cyclotron_radius biot_savart_wire poynting plane_wave_b plane_wave_e impedance_free_space` (params `c_light`, `k_coulomb`, `mu0`) |
 | `std/robotics` | `planar2_x planar2_y planar2_ik_q1 planar2_ik_q2 pid joint_accel diff_drive_v_left diff_drive_v_right trapezoid_peak reach rotate_x rotate_y` |
 | `std/units` | `kmh_to_ms ms_to_kmh mph_to_ms knot_to_ms fahrenheit_to_celsius celsius_to_fahrenheit celsius_to_kelvin kelvin_to_celsius kwh_to_j cal_to_j kcal_to_j ev_to_j btu_to_j atm_to_pa bar_to_pa psi_to_pa mmhg_to_pa angstrom_to_m nm_to_m au_to_m ly_to_m parsec_to_m mile_to_m nautical_mile_to_m foot_to_m inch_to_m lb_to_kg oz_to_kg tonne_to_kg deg_to_rad rad_to_deg arcmin_to_rad arcsec_to_rad g_to_ms2 lbf_to_n` |
+| `std/molecules` | Renderable molecules: each module declares one entity per atom (CPK colour, size) with `bond` lines and exposes `molar_mass()` / `atom_count()` composed from `std/elements/` |
 | `std/control` | `first_order second_order low_pass complementary integrate derivative pid pid_clamped feedforward state_feedback bang_bang hysteresis rate_limit_delta lead within slew` |
 
 ## Field solver system kinds

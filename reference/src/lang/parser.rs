@@ -1369,6 +1369,12 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let value = inner.next().map(parse_value).unwrap_or(0.0);
                             model.channels.push(crate::dsl::ChanDecl { name, value });
                         }
+                        Rule::bond_stmt => {
+                            let mut inner = item.into_inner();
+                            let a = next_pair(&mut inner)?.as_str().to_string();
+                            let b = next_pair(&mut inner)?.as_str().to_string();
+                            model.bonds.push((a, b));
+                        }
                         Rule::shape_stmt => {
                             // `shape <name> { part <kind> = <params> [at (x,y,z)]; }`
                             let mut it = item.into_inner();

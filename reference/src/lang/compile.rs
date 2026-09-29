@@ -1740,6 +1740,13 @@ pub(crate) fn merge_modules(
         for sd in &m.parsed.model.softs {
             model.softs.push(sd.clone());
         }
+        // Render bonds (`bond a b`) merge by name-pair, deduplicated so a module
+        // imported under several namespaces does not repeat its bonds.
+        for b in &m.parsed.model.bonds {
+            if !model.bonds.contains(b) {
+                model.bonds.push(b.clone());
+            }
+        }
         for (name, def) in &m.parsed.model.structs {
             model.structs.insert(name.clone(), def.clone());
         }

@@ -1,0 +1,17 @@
+# std/molecules/sodium_chloride.pwe — sodium chloride (generated).
+# Atoms + `bond` lines (ball-and-stick). Import to render and to use
+# `sodium_chloride.molar_mass()` / `sodium_chloride.atom_count()`.
+module molecules.sodium_chloride
+import "../elements/Cl"
+import "../elements/Na"
+world {
+  gravity = (0, 0, 0)
+  entity Na1 { position = (0, 0, 0); shape = sphere; size = 0.65; color = 0xAB5CF2 }
+  entity Cl1 { position = (2.36, 0, 0); shape = sphere; size = 0.6; color = 0x1FF01F }
+  bond Na1 Cl1
+}
+
+funcs {
+  atom_count() { 2.0 }
+  molar_mass() { Na.atomic_mass() + Cl.atomic_mass() }
+}

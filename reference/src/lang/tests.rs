@@ -3529,3 +3529,17 @@ fn merge_sources_ignores_module_line_inside_string() {
         "in-string `module` lines must not be treated as declarations"
     );
 }
+
+#[test]
+fn bond_declaration_attaches_render_bonds() {
+    // `bond <a> <b>` (world item) renders as ball-and-stick: the frame carries
+    // the resolved entity-id pairs.
+    let src = "world { gravity=(0,0,0)\n  entity O { position=(0,0,0) }\n  entity H1 { position=(1,0,0) }\n  entity H2 { position=(-1,0,0) }\n  bond H1 O\n  bond H2 O }\n";
+    let rt = LangRuntime::compile(src).unwrap();
+    let bonds = rt.present_frame(None).bonds;
+    assert_eq!(bonds.len(), 2, "two bonds");
+    assert!(
+        bonds.contains(&(2, 1)) && bonds.contains(&(3, 1)),
+        "H-O pairs: {bonds:?}"
+    );
+}

@@ -43,8 +43,9 @@ pub struct LangRuntime {
     /// Field names that are solver-internal (`wave`'s `prev` time-shift buffer)
     /// and are not presented as physical fields.
     hidden_fields: std::collections::BTreeSet<String>,
-    /// RFC-0040: soft-body render bonds (entity-id pairs).
-    soft_bonds: Vec<(u128, u128)>,
+    /// Render bonds (entity-id pairs): RFC-0040 soft-body edges plus declared
+    /// `bond a b` (molecules). Drawn as ball-and-stick lines.
+    bonds: Vec<(u128, u128)>,
     /// Optional peer region: when set, `send` also routes to the peer's channel.
     peer_region: Option<pwe_api::RegionId>,
     /// Execution context for `time`/`random`/`emit` (seeded → reproducible).
@@ -217,7 +218,16 @@ impl LangRuntime {
             .filter(|s| s.kind == "wave")
             .filter_map(|s| s.string_params.get("prev").cloned())
             .collect();
-        let soft_bonds = compiled.parsed.model.soft_bonds();
+        let mut bonds = compiled.parsed.model.soft_bonds();
+        {
+            let name_to_id: std::collections::BTreeMap<&String, u128> =
+                entity_names.iter().map(|(id, n)| (n, *id)).collect();
+            for (a, b) in &compiled.parsed.model.bonds {
+                if let (Some(&ia), Some(&ib)) = (name_to_id.get(a), name_to_id.get(b)) {
+                    bonds.push((ia, ib));
+                }
+            }
+        }
         let optimized = module.optimize();
         let call_index = optimized.prepare_index();
         Ok(Self {
@@ -229,7 +239,7 @@ impl LangRuntime {
             clock: 0,
             sim_dt,
             hidden_fields,
-            soft_bonds,
+            bonds,
             region,
             jit,
             jit_key,
@@ -371,8 +381,8 @@ impl LangRuntime {
                 .fields
                 .retain(|f| !self.hidden_fields.contains(&f.name));
         }
-        if !self.soft_bonds.is_empty() {
-            frame.bonds = self.soft_bonds.clone();
+        if !self.bonds.is_empty() {
+            frame.bonds = self.bonds.clone();
         }
         frame
     }

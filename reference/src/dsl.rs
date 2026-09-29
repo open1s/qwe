@@ -175,6 +175,9 @@ pub struct WorldModel {
     pub fields: Vec<FieldDecl>,
     /// User-defined custom shapes: name -> parts (multi-primitive, local offsets).
     pub shapes: std::collections::BTreeMap<String, Vec<crate::components::ShapePart>>,
+    /// Render bonds between named entities (`bond a b`), drawn as ball-and-stick
+    /// lines (e.g. molecules). Visualization only; not a physics constraint.
+    pub bonds: Vec<(String, String)>,
 }
 
 impl WorldModel {
@@ -194,6 +197,7 @@ impl WorldModel {
             channels: Vec::new(),
             fields: Vec::new(),
             shapes: std::collections::BTreeMap::new(),
+            bonds: Vec::new(),
         }
     }
 

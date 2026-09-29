@@ -18,9 +18,13 @@ funcs {
   molar_heat_j_mol_k() { 26.23 }
   atomic_radius_pm() { 0.0 }
   valence_electrons() { 2.0 }
+  electrons() { 90.0 }
+  neutrons() { 142.0 }
+  shell_count() { 7.0 }
   is_metal() { 1.0 }
   is_metalloid() { 0.0 }
   is_nonmetal() { 0.0 }
   is_noble_gas() { 0.0 }
   is_gas_at_stp() { 0.0 }
+  shell_electrons(k) { if(k <= 3, if(k <= 1, if(k == 1, 2.0, 0.0), if(k <= 2, if(k == 2, 8.0, 0.0), if(k == 3, 18.0, 0.0))), if(k <= 5, if(k <= 4, if(k == 4, 32.0, 0.0), if(k == 5, 18.0, 0.0)), if(k <= 6, if(k == 6, 10.0, 0.0), if(k == 7, 2.0, 0.0)))) }
 }

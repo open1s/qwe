@@ -34,7 +34,7 @@ param_decl = { ident ~ (":" ~ unit_expr)? }
 
 // -- world model -------------------------------------------------------------
 world_section = { "world" ~ "{" ~ world_item* ~ "}" }
-world_item = _{ gravity_stmt | chan_stmt | struct_stmt | entity_stmt | pool_stmt | soft_stmt | field_stmt | params_stmt | title_stmt | lang_version_stmt | units_stmt | shape_stmt }
+world_item = _{ gravity_stmt | chan_stmt | struct_stmt | entity_stmt | pool_stmt | soft_stmt | field_stmt | params_stmt | title_stmt | lang_version_stmt | units_stmt | shape_stmt | bond_stmt }
 gravity_stmt = { "gravity" ~ "=" ~ vec3 }
 // A human-readable title for the run (shown by `pwe present`).
 title_stmt = { "title" ~ "=" ~ string }
@@ -54,6 +54,9 @@ unit_name = @{ "kat" | "cd" | "mol" | "ohm" | "Pa" | "Hz" | "Wb" | "Gy" | "Sv" |
 unit_exp = @{ "-"? ~ ASCII_DIGIT+ }
 unit_op = @{ "*" | "/" }
 chan_stmt = { "chan" ~ ident ~ "{" ~ "value" ~ "=" ~ value ~ ";"? ~ "}" }
+// A render bond between two entities (`bond H1 O`), drawn as a ball-and-stick
+// line. Presentation only (not a physics constraint); used for molecules.
+bond_stmt = { "bond" ~ ident ~ ident }
 // `struct Name { field = <default>; field = <other-struct>; … }` — a named
 // record flattened to dotted state slots (`pos.x`, `pos.y`, …).
 struct_stmt = { "struct" ~ ident ~ "{" ~ struct_field* ~ "}" }

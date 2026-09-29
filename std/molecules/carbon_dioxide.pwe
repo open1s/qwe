@@ -1,0 +1,19 @@
+# std/molecules/carbon_dioxide.pwe — carbon dioxide (generated).
+# Atoms + `bond` lines (ball-and-stick). Import to render and to use
+# `carbon_dioxide.molar_mass()` / `carbon_dioxide.atom_count()`.
+module molecules.carbon_dioxide
+import "../elements/C"
+import "../elements/O"
+world {
+  gravity = (0, 0, 0)
+  entity C1 { position = (0, 0, 0); shape = sphere; size = 0.55; color = 0x909090 }
+  entity O1 { position = (1.16, 0, 0); shape = sphere; size = 0.5; color = 0xFF0D0D }
+  entity O2 { position = (-1.16, 0, 0); shape = sphere; size = 0.5; color = 0xFF0D0D }
+  bond C1 O1
+  bond C1 O2
+}
+
+funcs {
+  atom_count() { 3.0 }
+  molar_mass() { C.atomic_mass() + O.atomic_mass() + O.atomic_mass() }
+}

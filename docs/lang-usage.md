@@ -549,7 +549,13 @@ Precedence (high → low): unary `-`, `not`/`!` → `* / %` → `+ -` → compar
 | `field <name> { width; height; dx; depth? }` | a scalar grid. |
 | `pool <name>[N] { … }` | N inactive slots for dynamic entities. |
 | `soft <name> { nx; ny; nz?; spacing; origin; mass }` | a mass-spring grid. |
+| `bond <a> <b>` | a render bond between two named entities (ball-and-stick line). |
 | `import "…"` | module import (path relative to the file). |
+
+`bond` is **presentation only** (not a physics constraint): it draws a stick
+between the centres of entities `<a>` and `<b>`. It is the basis of the
+`std/molecules/` package, where each atom is an entity and each chemical bond a
+`bond` line — see L9 and `cli/examples/molecule.pwe`.
 
 **Entity id order**: declared entities `1..E`, then channels, then pool slots
 (`<pool>#k`), then soft particles (`<soft>#k`).
