@@ -1,5 +1,6 @@
 use pwe_api::EntityId;
 use pwe_reference::lang::LangRuntime;
+use pwe_reference::present::Shape;
 
 fn std_dir() -> &'static str {
     concat!(env!("CARGO_MANIFEST_DIR"), "/../std")
@@ -19,6 +20,9 @@ const MODULES: &[&str] = &[
     "units",
     "control",
     "periodic",
+    "micro",
+    "atoms/O",
+    "atoms/Fe",
     "elements/Fe",
     "elements/F",
     "elements/He",
@@ -173,6 +177,12 @@ fn periodic_table_lookups() {
             ("fe_mass_elem", "Fe.atomic_mass()"),
             ("f_en_elem", "F.electronegativity()"),
             ("he_gas_elem", "He.is_gas_at_stp()"),
+            ("o_electrons", "periodic.electrons(8.0)"),
+            ("o_neutrons", "periodic.neutrons(8.0)"),
+            ("o_shells", "periodic.shell_count(8.0)"),
+            ("o_shell1", "periodic.shell_electrons(8.0, 1.0)"),
+            ("o_shell2", "periodic.shell_electrons(8.0, 2.0)"),
+            ("fe_shell3", "Fe.shell_electrons(3.0)"),
         ],
     );
     assert!(close(v[0], 55.8452), "Fe mass = {}", v[0]);
@@ -185,4 +195,73 @@ fn periodic_table_lookups() {
     assert!(close(v[7], 55.8452), "Fe module mass = {}", v[7]);
     assert!(close(v[8], 3.98), "F module electronegativity = {}", v[8]);
     assert!(close(v[9], 1.0), "He module is a gas = {}", v[9]);
+    assert!(close(v[10], 8.0), "O electrons = {}", v[10]);
+    assert!(close(v[11], 8.0), "O neutrons = {}", v[11]);
+    assert!(close(v[12], 2.0), "O shells = {}", v[12]);
+    assert!(close(v[13], 2.0), "O shell 1 = {}", v[13]);
+    assert!(close(v[14], 6.0), "O shell 2 = {}", v[14]);
+    assert!(close(v[15], 14.0), "Fe shell 3 = {}", v[15]);
+}
+
+/// A molecule module declares renderable atoms + `bond` lines and composes its
+/// molar mass from the element modules it imports.
+#[test]
+fn molecule_modules_build_atoms_and_bonds() {
+    let path = format!("{}/molecules/water.pwe", std_dir());
+    let rt = LangRuntime::compile_file(std::path::Path::new(&path)).unwrap();
+    let frame = rt.present_frame(None);
+    assert_eq!(frame.bonds.len(), 2, "water has two O-H bonds");
+    assert_eq!(frame.entities.len(), 3, "water has three atoms");
+
+    // `water.molar_mass()` / `atom_count()` evaluate correctly when imported.
+    let src = format!(
+        "import \"{}/molecules/water\"\nworld {{\n  gravity = (0, 0, 0)\n           entity probe {{ state = (mm = 0.0, n = 0.0) }}\n}}\n         systems {{\n  update {{ on = probe; dt = 1.0\n    mm = water.molar_mass() + 0.0\n             n = water.atom_count() + 0.0\n  }}\n}}\n",
+        std_dir()
+    );
+    let p = std::env::temp_dir().join("pwe_molecule_water.pwe");
+    std::fs::write(&p, &src).unwrap();
+    let mut rt = LangRuntime::compile_file(&p).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert!(
+        close(st.values[0], 18.015),
+        "water molar mass = {}",
+        st.values[0]
+    );
+    assert!(
+        close(st.values[1], 3.0),
+        "water atom count = {}",
+        st.values[1]
+    );
+}
+
+/// Layer A: `std/atoms/<Sym>` declares a schematic atomic structure — a nucleus
+/// (protons + neutrons) and orbiting electrons on shell rings.
+#[test]
+fn atom_modules_render_nucleus_and_orbiting_electrons() {
+    let src = format!(
+        "import \"{}/atoms/O\"\nworld {{\n  gravity = (0, 0, 0)\n  \
+         entity a {{ shape = O_atom; size = 2.0 }}\n}}\n",
+        std_dir()
+    );
+    let p = std::env::temp_dir().join("pwe_atom_o.pwe");
+    std::fs::write(&p, &src).unwrap();
+    let rt = LangRuntime::compile_file(&p).unwrap();
+    let frame = rt.present_frame(None);
+    match &frame.entities[0].shape {
+        Shape::Group(parts) => {
+            let rings = parts
+                .iter()
+                .filter(|p| matches!(p.shape, Shape::Ring { .. }))
+                .count();
+            let orbiting = parts.iter().filter(|p| p.orbit.is_some()).count();
+            assert_eq!(rings, 2, "oxygen has two occupied shells");
+            assert!(orbiting >= 2, "electrons orbit: {orbiting}");
+            assert!(
+                parts.iter().any(|p| p.color == Some(0xFF_5555)),
+                "protons are coloured"
+            );
+        }
+        other => panic!("expected a composite shape, got {other:?}"),
+    }
 }

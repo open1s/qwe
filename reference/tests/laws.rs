@@ -462,3 +462,73 @@ fn nbody_three_body_conserves_momentum() {
         );
     }
 }
+
+/// Evaluates a `std/micro` expression for one step (imports the module from disk).
+fn micro_eval(expr: &str) -> f64 {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../std");
+    let src = format!(
+        "import \"{dir}/micro\"\nworld {{ gravity=(0,0,0) entity e {{ state=(x = 0.0) }} }}\n\
+         systems {{ update {{ on=e; dt=1.0  x = {expr} + 0.0 }} }}\n"
+    );
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let p = std::env::temp_dir().join(format!(
+        "pwe_micro_laws_{}_{}.pwe",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&p, src).unwrap();
+    let mut rt = LangRuntime::compile_file(&p).expect("compile micro program");
+    rt.step_cross_n(1).unwrap();
+    state(&rt, 1, 0)
+}
+
+/// Lennard-Jones: zero force and minimum energy at r = 2^(1/6)σ; sign of the
+/// force changes from repulsive (r < r_min) to attractive (r > r_min).
+#[test]
+fn lennard_jones_matches_its_minimum() {
+    let rmin = 1.122_462_048_309_373; // 2^(1/6)
+    assert!(micro_eval(&format!("micro.lj_force(1.0, 1.0, {rmin})")).abs() < 1e-9);
+    assert!((micro_eval(&format!("micro.lj_potential(1.0, 1.0, {rmin})")) + 1.0).abs() < 1e-6);
+    assert!(
+        micro_eval("micro.lj_force(1.0, 1.0, 0.9)") > 0.0,
+        "repulsive"
+    );
+    assert!(
+        micro_eval("micro.lj_force(1.0, 1.0, 2.0)") < 0.0,
+        "attractive"
+    );
+}
+
+/// Morse bond: zero force at the equilibrium separation, well depth `De`, and
+/// the potential vanishes at large separation.
+#[test]
+fn morse_bond_matches_equilibrium() {
+    assert!(micro_eval("micro.morse_force(1.0, 2.0, 1.2, 1.2)").abs() < 1e-12);
+    assert!((micro_eval("micro.morse_potential(1.0, 2.0, 1.2, 1.2)") + 1.0).abs() < 1e-9);
+    assert!(
+        micro_eval("micro.morse_force(1.0, 2.0, 1.2, 1.0)") > 0.0,
+        "compressed"
+    );
+    assert!(
+        micro_eval("micro.morse_force(1.0, 2.0, 1.2, 1.6)") < 0.0,
+        "stretched"
+    );
+    assert!(micro_eval("micro.morse_potential(1.0, 2.0, 1.2, 10.0)").abs() < 1e-3);
+}
+
+/// Coulomb and harmonic-bond signs: like charges repel; a stretched bond pulls
+/// together and a compressed bond pushes apart.
+#[test]
+fn coulomb_and_harmonic_bond_signs() {
+    assert!(micro_eval("micro.coulomb_force(1.0, 1.0, 1.0, 1.0)") > 0.0);
+    assert!(micro_eval("micro.coulomb_force(1.0, 1.0, -1.0, 1.0)") < 0.0);
+    assert!(
+        micro_eval("micro.bond_force(2.0, 1.5, 1.0)") < 0.0,
+        "stretched"
+    );
+    assert!(
+        micro_eval("micro.bond_force(2.0, 0.5, 1.0)") > 0.0,
+        "compressed"
+    );
+}

@@ -99,7 +99,11 @@ fn main() -> pwe_api::Result<()> {
         let mut g = live.write().unwrap();
         g.step = frame_no;
         let base = rt.present_frame(Some(cam));
-        g.frame = present::with_bonds(&base, &bonds);
+        let bond_objs: Vec<present::Bond> = bonds
+            .iter()
+            .map(|&(a, b)| present::Bond::single(a, b))
+            .collect();
+        g.frame = present::with_bonds(&base, &bond_objs);
         g.info = vec![
             "carbon molecules — CO2 (linear) & CH4 (tetrahedral)".to_string(),
             format!(
