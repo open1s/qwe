@@ -65,7 +65,9 @@ world {
   entity ground { position = (0, 0, 0); dynamic = false; shape = terrain; color = 0x6F8F4F; label = false }
   entity path   { position = (0, 0, 0); dynamic = false; shape = path; color = 0xC9B27C; label = false }
   entity wallN { position = (0, -0.05, 3.05); dynamic = false; box = (8.2, 2.5, 0.15); color = 0xA9663E; opacity = 0.35; label = false }
-  entity wallS { position = (0, -0.05, -3.05); dynamic = false; box = (8.2, 2.5, 0.15); color = 0xA9663E; opacity = 0.35; label = false }
+  entity wallSW { position = (-2.45, -0.05, -3.05); dynamic = false; box = (3.30, 2.5, 0.15); color = 0xA9663E; opacity = 0.35; label = false }
+  entity wallSE { position = ( 2.45, -0.05, -3.05); dynamic = false; box = (3.30, 2.5, 0.15); color = 0xA9663E; opacity = 0.35; label = false }
+  entity patio  { position = (0, -0.75, -4.00); dynamic = false; box = (2.10, 0.30, 2.60); color = 0xC9B27C; label = false }
   entity wallE { position = (4.05, -0.05, 0); dynamic = false; box = (0.15, 2.5, 6.2); color = 0xA9663E; opacity = 0.35; label = false }
   entity wallW { position = (-4.05, -0.05, 0); dynamic = false; box = (0.15, 2.5, 6.2); color = 0xA9663E; opacity = 0.35; label = false }
 
@@ -75,17 +77,17 @@ world {
   entity tree     { position = (-2.4, -0.64, 2.2); dynamic = false; shape = tree; label = false }
 
   # --- people: ten slots (…, rx,ry,rz) with orient = true ---
-  entity p1 { state = (x = -2.4, y = 0.0, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, rx = 0.0, ry = 0.0, rz = 0.0) shape = person; orient = true; vector = false; color = 0xE4572E }
+  entity p1 { state = (x = -2.4, y = 0.0, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, rx = 0.0, ry = 0.0, rz = 0.0, vy = 0.0) shape = person; orient = true; vector = false; color = 0xE4572E }
   entity p1_lleg { state = (x = -2.4, y = 0.3, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0xE4572E; label = false }
   entity p1_rleg { state = (x = -2.4, y = 0.3, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0xE4572E; label = false }
   entity p1_larm { state = (x = -2.4, y = 0.78, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, rx = 0.0, ry = 0.0, rz = 0.0) shape = arm; orient = true; vector = false; color = 0xE4572E; label = false }
   entity p1_rarm { state = (x = -2.4, y = 0.78, z = -1.4, vx = 0.8, vz = 0.6, dx = 0.8, dz = 0.6, rx = 0.0, ry = 0.0, rz = 0.0) shape = arm; orient = true; vector = false; color = 0xE4572E; label = false }
-  entity p2 { state = (x = 0.6, y = 0.0, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, rx = 0.0, ry = 0.0, rz = 0.0) shape = person; orient = true; color = 0x2E86DE }
+  entity p2 { state = (x = 0.6, y = 0.0, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, rx = 0.0, ry = 0.0, rz = 0.0, vy = 0.0) shape = person; orient = true; color = 0x2E86DE }
   entity p2_lleg { state = (x = 0.6, y = 0.3, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0x2E86DE; label = false }
   entity p2_rleg { state = (x = 0.6, y = 0.3, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0x2E86DE; label = false }
   entity p2_larm { state = (x = 0.6, y = 0.78, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, rx = 0.0, ry = 0.0, rz = 0.0) shape = arm; orient = true; vector = false; color = 0x2E86DE; label = false }
   entity p2_rarm { state = (x = 0.6, y = 0.78, z = 1.6, vx = -0.6, vz = 0.8, dx = -0.6, dz = 0.8, rx = 0.0, ry = 0.0, rz = 0.0) shape = arm; orient = true; vector = false; color = 0x2E86DE; label = false }
-  entity p3 { state = (x = 2.4, y = 0.0, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71, rx = 0.0, ry = 0.0, rz = 0.0) shape = person; orient = true; color = 0x9B5DE5 }
+  entity p3 { state = (x = 2.4, y = 0.0, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71, rx = 0.0, ry = 0.0, rz = 0.0, vy = 0.0) shape = person; orient = true; color = 0x9B5DE5 }
   entity p3_lleg { state = (x = 2.4, y = 0.3, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0x9B5DE5; label = false }
   entity p3_rleg { state = (x = 2.4, y = 0.3, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71, rx = 0.0, ry = 0.0, rz = 0.0) shape = leg; orient = true; vector = false; color = 0x9B5DE5; label = false }
   entity p3_larm { state = (x = 2.4, y = 0.78, z = -0.6, vx = -0.71, vz = -0.71, dx = -0.71, dz = -0.71, rx = 0.0, ry = 0.0, rz = 0.0) shape = arm; orient = true; vector = false; color = 0x9B5DE5; label = false }
@@ -120,7 +122,7 @@ systems {
     let ndx = if(wander, cos(ra), dx)
     let ndz = if(wander, sin(ra), dz)
     let wx = if(x > 3.05 and ndx > 0.0, -ndx, if(x < -3.05 and ndx < 0.0, -ndx, ndx))
-    let wz = if(z > 2.15 and ndz > 0.0, -ndz, if(z < -2.15 and ndz < 0.0, -ndz, ndz))
+    let wz = if(z > 2.15 and ndz > 0.0, -ndz, if(z < -2.15 and ndz < 0.0 and abs(x) > 0.80, -ndz, ndz))
     let hx = vx + turn * (wx - vx)
     let hz = vz + turn * (wz - vz)
     let inv = 1.0 / sqrt(hx*hx + hz*hz + 0.000001)
@@ -135,8 +137,13 @@ systems {
     let bob = 0.02 * sin(4.0 * pi * phase)
     let yaw = atan2(nvx, nvz)
     x = min(max(x + inte(  speed * nvx ), -3.45), 3.45)
-    z = min(max(z + inte(  speed * nvz ), -2.60), 2.60)
-    y = hh + bob
+    z = min(max(z + inte(  speed * nvz ), if(abs(x) < 0.80, -6.00, -2.60)), 2.60)
+    let in_t = if(abs(x) < 3.58 and abs(z) < 2.73, 1.0, 0.0)
+    let in_p = if(abs(x) < 1.05 and z < -2.70 and z > -5.35, 1.0, 0.0)
+    let gx = if(in_t > 0.5, hh, if(in_p > 0.5, -0.60, -999.0))
+    let grd = if(y <= gx + 0.25, 1.0, 0.0)
+    vy = if(grd > 0.5, 0.0, vy + inte(  0.0 - 0.03 ))
+    y = if(grd > 0.5, gx + bob, y + inte(  vy ))
     vx = vx + inte(  nvx - vx )
     vz = vz + inte(  nvz - vz )
     dx = wx + avoid_x(x, z)
@@ -152,7 +159,7 @@ systems {
     let ndx = if(wander, cos(ra), dx)
     let ndz = if(wander, sin(ra), dz)
     let wx = if(x > 3.05 and ndx > 0.0, -ndx, if(x < -3.05 and ndx < 0.0, -ndx, ndx))
-    let wz = if(z > 2.15 and ndz > 0.0, -ndz, if(z < -2.15 and ndz < 0.0, -ndz, ndz))
+    let wz = if(z > 2.15 and ndz > 0.0, -ndz, if(z < -2.15 and ndz < 0.0 and abs(x) > 0.80, -ndz, ndz))
     let hx = vx + turn * (wx - vx)
     let hz = vz + turn * (wz - vz)
     let inv = 1.0 / sqrt(hx*hx + hz*hz + 0.000001)
@@ -167,8 +174,13 @@ systems {
     let bob = 0.02 * sin(4.0 * pi * phase)
     let yaw = atan2(nvx, nvz)
     x = min(max(x + inte(  speed * nvx ), -3.45), 3.45)
-    z = min(max(z + inte(  speed * nvz ), -2.60), 2.60)
-    y = hh + bob
+    z = min(max(z + inte(  speed * nvz ), if(abs(x) < 0.80, -6.00, -2.60)), 2.60)
+    let in_t = if(abs(x) < 3.58 and abs(z) < 2.73, 1.0, 0.0)
+    let in_p = if(abs(x) < 1.05 and z < -2.70 and z > -5.35, 1.0, 0.0)
+    let gx = if(in_t > 0.5, hh, if(in_p > 0.5, -0.60, -999.0))
+    let grd = if(y <= gx + 0.25, 1.0, 0.0)
+    vy = if(grd > 0.5, 0.0, vy + inte(  0.0 - 0.03 ))
+    y = if(grd > 0.5, gx + bob, y + inte(  vy ))
     vx = vx + inte(  nvx - vx )
     vz = vz + inte(  nvz - vz )
     dx = wx + avoid_x(x, z)
@@ -184,7 +196,7 @@ systems {
     let ndx = if(wander, cos(ra), dx)
     let ndz = if(wander, sin(ra), dz)
     let wx = if(x > 3.05 and ndx > 0.0, -ndx, if(x < -3.05 and ndx < 0.0, -ndx, ndx))
-    let wz = if(z > 2.15 and ndz > 0.0, -ndz, if(z < -2.15 and ndz < 0.0, -ndz, ndz))
+    let wz = if(z > 2.15 and ndz > 0.0, -ndz, if(z < -2.15 and ndz < 0.0 and abs(x) > 0.80, -ndz, ndz))
     let hx = vx + turn * (wx - vx)
     let hz = vz + turn * (wz - vz)
     let inv = 1.0 / sqrt(hx*hx + hz*hz + 0.000001)
@@ -199,8 +211,13 @@ systems {
     let bob = 0.02 * sin(4.0 * pi * phase)
     let yaw = atan2(nvx, nvz)
     x = min(max(x + inte(  speed * nvx ), -3.45), 3.45)
-    z = min(max(z + inte(  speed * nvz ), -2.60), 2.60)
-    y = hh + bob
+    z = min(max(z + inte(  speed * nvz ), if(abs(x) < 0.80, -6.00, -2.60)), 2.60)
+    let in_t = if(abs(x) < 3.58 and abs(z) < 2.73, 1.0, 0.0)
+    let in_p = if(abs(x) < 1.05 and z < -2.70 and z > -5.35, 1.0, 0.0)
+    let gx = if(in_t > 0.5, hh, if(in_p > 0.5, -0.60, -999.0))
+    let grd = if(y <= gx + 0.25, 1.0, 0.0)
+    vy = if(grd > 0.5, 0.0, vy + inte(  0.0 - 0.03 ))
+    y = if(grd > 0.5, gx + bob, y + inte(  vy ))
     vx = vx + inte(  nvx - vx )
     vz = vz + inte(  nvz - vz )
     dx = wx + avoid_x(x, z)
