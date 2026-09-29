@@ -98,6 +98,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0069](https://github.com/open1s/qwe/issues/69) | Low | LSP buffer override runs after the 101 duplicate-module check and never re-checks: buffer-declared `module` collision passes LSP (EMPTY diagnostics) while CLI rejects with 101 | reference/src/lang/compile.rs (load_program_sources_inner order) |
 | [0070](https://github.com/open1s/qwe/issues/70) | Medium | `from … import` alias resolution indexes `modules` with a stale `seen` map after the RFC-0045 reorder: an unexported `from … import g` compiles (detail 102 bypassed) and silently binds to another module's `g` (probe `state=[101.0]` = zmod's `g`, not amod's) | reference/src/lang/compile.rs (load_program_sources_inner :1466-1474 reorder, :1494-1499 lookup) |
 | [0071](https://github.com/open1s/qwe/issues/71) | Medium | `merge_sources` re-derives module declarations from raw text (not the string-aware stripper): an in-string `module` line compiles fine but the artifact fails to run with a false `error 101` — compile/run divergence | reference/src/lang/compile.rs (merge_sources `lines().find_map(parse_module_line)`) |
+| [0072](https://github.com/open1s/qwe/issues/72) | Medium | RFC-0046 body ≠ shipped impl: the Status line was rewritten for the `block_count>1`-in-FUNCTIONS form, but Design/Wire-format still prescribe a BLOCKS section / FUNCTIONS minor bump and a `Block{params,ops,term}` model; RFC-0021 (frozen v0.2.0) not updated and `EIR_MINOR` stays 0 — same program, different bytes, same declared version | rfc/RFC-0046-eir-ssa-cfg.md (Design / Wire format), rfc/RFC-0021 §Functions, reference/src/eir.rs :41-42, :2100-2112 |
+| [0073](https://github.com/open1s/qwe/issues/73) | Low | `encode_functions_section` now routes artifacts through `blocks_from_instructions` (write path); that helper panics on an empty instruction stream (`e-1` underflow) or an out-of-range `Br`/`CondBr` target (`instructions[e-1]` OOB) | reference/src/eir.rs (encode_functions_section :2077/:2090, blocks_from_instructions :2229) |
 
 ## Suggested order
 
@@ -930,5 +932,78 @@ blocks + `162af962` fix(#70); verified 0070 fixed & closed, filed 0071):
 6. This file gained a parallel pass-29 record and a 0070 index row from the
    concurrent reviewer; both are kept — pass 30 above complements pass 29
    (WIP review vs landed review + fix verification).
+
+Review pass 31 (spec-sync review of `9fdb4515` RFC-0046; filed 0072-0073):
+
+1. Corrected the pass-30 note above. The wire gap is **not** "RFC-0021 lacks
+   `block_count`" — RFC-0021 §Functions already carries `u32 block_count |
+   blocks`. The real gaps are: (a) RFC-0046's normative body (Design /
+   Wire format / Validation) still describes the *abandoned* BLOCKS-section /
+   minor-bump design and a `Block{params,ops,term}` + `Terminator` model, while
+   only the Status line was rewritten to match the shipped code; and (b)
+   RFC-0021 was not updated and `EIR_MINOR` was not bumped.
+2. 0072 filed (Medium): evidence — `9fdb4515` touched only `reference/src/eir.rs`
+   + `rfc/RFC-0046-…md` + two docs (`rfc/RFC-0021` untouched);
+   `EIR_MAJOR/MINOR = 2/0` (eir.rs:41-42); decoder rejects any other minor
+   (:2126); pre-0046 decoder rejects `block_count != 1` (error 30). Shipped
+   multi-block framing (`block_count | function-level argument_count | per
+   block: block_id | params(reserved) | instruction_count | instrs`,
+   eir.rs:2100-2112) is not spelled out by the normative RFC → same program,
+   different bytes, same declared version.
+3. 0073 filed (Low): `encode()` newly routes through `blocks_from_instructions`
+   (eir.rs:2090 → def :2229), which panics on degenerate input (empty stream →
+   `e-1` underflow; out-of-range `Br`/`CondBr` target → `instructions[e-1]`
+   OOB). Partly pre-existing (validate :1145 and the view :722/738 already call
+   it); reachability from real source is low.
+4. Numbering note: a concurrent reviewer took **0071** (`merge_sources` re-derives
+   module declarations), so this pass filed 0072/0073.
+
+Review pass 32 (landed `faf08619` std periodic package + fix verification of
+`f38aac54`; closed 0071-0073 — 0 open issues):
+
+1. Gates green on BOTH commits: fmt, clippy `-D warnings`, tests **399** at
+   `faf08619` (+1 `periodic_table_lookups`) → **401** at `f38aac54` (+2 fix
+   tests), conformance **25/25**, release builds.
+2. `faf08619` black-box: all 118 `std/elements/*.pwe` compile standalone (the
+   test suite itself covers Fe/F/He + the on-disk count); `std/periodic.pwe`
+   compiles in ~55 ms (38 fns, 1.7 MB artifact); runtime values match the
+   table (CLI probe Fe: `state=[55.8452, 8.0, 1.0]`; test covers F 3.98,
+   He noble 1, O valence 6, U period 7); artifact hash stable across
+   recompiles; LSP diagnostics EMPTY for a std-importing buffer and for
+   `Fe.pwe`; MIT attribution + units table present in `std/elements/README.md`;
+   README counts 399.
+3. Privacy semantics re-checked around the package: modules without `export`
+   are fully public by design (`Fe.x()` file-stem alias and
+   `elements.Fe.x()` declared name both resolve); dotted partial-export fires
+   102 on CLI and LSP (`foo.Qux.h2`; LSP range at 0:0 for system-body calls —
+   the from-import path still positions at the item name);
+   `from "<path>" import x` honors the export surface (102).
+4. 0071 reproduced on `faf08619` (compile rc 0 / run false 101), then verified
+   **fixed** on `f38aac54`: `pois2` probe runs (rc 0, 60 steps); a REAL
+   duplicate still errors (`101 … in v101/a.pwe and v101/b.pwe`); test
+   `merge_sources_ignores_module_line_inside_string`. Closed. Residual stays
+   on record: `merge_sources` still hard-codes `exports: None` → 102 never
+   runs on the artifact run path (pass-29 note, not filed).
+5. 0072 verified **fixed** on `f38aac54`: RFC-0046 §Wire format now reads
+   "— as shipped" and matches `encode_functions_section` byte-for-byte (the
+   BLOCKS-section/minor-bump bullet is gone); RFC-0021 gains the concrete
+   FUNCTIONS layout for both encodings + a Compatibility rationale for
+   `EIR_MINOR = 0` (exact-minor decoder; a bump would reject every existing
+   artifact); alignment row updated. Closed with one recorded residual:
+   RFC-0046 Design/Representation still specifies the block-params target
+   (`Block{params,ops,term}`) while shipped `dominance::Block` is a range
+   view — Status marks params reserved/future, accepted as target design.
+6. 0073 verified **fixed** on `f38aac54`: empty stream → one empty Return
+   block (no `e-1` underflow), out-of-range branch targets ignored;
+   test `eir_encode_does_not_panic_on_degenerate_input` (empty body +
+   `CondBr [1,99,100]` → `encode().is_ok()`). Closed. No valid-source
+   black-box trigger existed pre-fix (error 55 rejects empty update bodies;
+   lowering always emits); the underflow/OOB at `eir.rs:2247` was confirmed
+   at code level, matching the Low severity.
+7. Observations (not filed): the `std/elements/README.md` example
+   `import "std/periodic"` assumes the program sits at the repo root (imports
+   resolve file-relative — rc 0 from root, 76 from a subdir);
+   `strip_directives(&src.root)` runs twice for the root source in
+   `merge_sources` (negligible).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
