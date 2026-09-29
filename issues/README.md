@@ -106,6 +106,10 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0077](https://github.com/open1s/qwe/issues/77) | Low | commit messages claim stdlib tests ("atomic structure, molecule molar mass/bonds" in f4726072; "stdlib atom structure" in 60b5dc62) that exist only as uncommitted `reference/tests/stdlib.rs` WIP — tests went 401→402→404 (+1 each), not the claimed areas | issues (f4726072, 60b5dc62 messages), reference/tests/stdlib.rs (uncommitted) |
 | [0078](https://github.com/open1s/qwe/issues/78) | Medium | `b12572a4` leaves `reference/examples/molecule_demo.rs` on the old `&[(u128,u128)]` bond tuples after `with_bonds` took `&[Bond]` — `cargo test --workspace` and `clippy --all-targets` fail with E0308 on main (fmt/release/conformance unaffected; a matching fix sits uncommitted in the working copy) | reference/examples/molecule_demo.rs:102, present.rs `with_bonds` signature |
 | [0079](https://github.com/open1s/qwe/issues/79) | Low | `0194079e` message claims camera auto-fit (marker/orbit extents), regenerated atom proportions and a 1D-label fix — none are in the diff (`present.rs`/`std/atoms` untouched; auto-frame code dates to the initial commit and uses point bounds only; `1D sine` still hardcoded at present.rs:1481) | 0194079e message, cli/src/main.rs:1034, reference/src/present.rs:1481 |
+| [0080](https://github.com/open1s/qwe/issues/80) | Medium | `pwe fmt --check` fails on every committed `.pwe` file: tool canonical is 4-space indent (CLI hardcoded, LSP ignores `tabSize`) while the whole repo is 2-space; `fmt -w` would churn the tree, and no gate runs `pwe fmt --check` | docs/review-and-roadmap.md fmt section, all cli/examples/*.pwe + std/**/*.pwe |
+| [0081](https://github.com/open1s/qwe/issues/81) | Low | per-part `opacity` (7b6e4f4e) accepts out-of-range values (`opacity=2`/`-1` compile rc 0) and duplicate opts despite docs promising `0..1`; raw value flows into `frame_to_json` and `material.opacity` | lang.pest `part_opacity_opt`, lang/parser.rs, lang/compile.rs `p.opacity.or(s.opacity)`, docs/lang-usage.md:600 |
+| [0082](https://github.com/open1s/qwe/issues/82) | Low | per-part opacity ships with zero tests across parser/compile/ref-override/JSON/both viewers + 118 regenerated atom files; suite still 412 (tests.rs untouched in 7b6e4f4e) | reference/src/lang/tests.rs |
+| [0083](https://github.com/open1s/qwe/issues/83) | Low | 118 new `<Sym>_nucleus` shapes (7b6e4f4e) undocumented: std/README.md:54 and std/atoms/README.md still describe only `<Sym>_atom` | std/README.md:54, std/atoms/README.md |
 
 ## Suggested order
 
@@ -1202,5 +1206,55 @@ proportions; fix #74 #75 #76"; closed 0076, filed 0079):
    record's "label generalized" claim was itself only half-verified).
    `fix #74/#75/#76` bullets in the same message are accurate (partial as
    noted above).
+
+Review pass 38 (landed `7b6e4f4e` — "per-part opacity + externally-pumped
+laser demo"; reopened 0074, filed 0080/0081/0082/0083, commented 0075/0079):
+
+1. Gates green: fmt, clippy `--all-targets`, **412 tests**, conformance
+   **25/25**, release build, `pwe doctest docs/lang-usage.md` 13 blocks.
+   Suite count unchanged — the commit adds no tests (see 0082).
+2. New `opacity = v` part opt: parses (builtin + shape_ref branches),
+   flows `ShapePart.opacity` → `expand_shapes` ref override →
+   `snapshot_with` → `frame_to_json`; end-to-end: `pwe present
+   laser.pweb` `/state` carries `"opacity":0.22` on the level rings, both
+   viewers use `matFor(col, op)`. `pwe fmt` idempotent on opacity syntax.
+   But unvalidated: `opacity=2`, `-1`, duplicates all compile rc 0 vs docs
+   `0..1` → 0081; zero tests → 0082.
+3. **0080 (Medium)**: `pwe fmt --check` fails on *every* committed `.pwe`
+   (laser, interactions, old and new atoms) — tool canonical is 4-space
+   (roadmap doc: "4 空格缩进… `--check`/`-w`"), repo is 2-space
+   everywhere; `diff -w` on fmt output is empty (indent-only churn); LSP
+   formatter ignores `tabSize:2` and still emits 4-space. No gate runs it.
+4. **0074 reopened**: dev closed it at 07:31 ("Fixed in 0194079e") but
+   only README.md was fixed (412/355/21/6 ✓); README-ZH still 399
+   (badge :8, comment :210, 合计 :232; `git log` unchanged since
+   faf08619) — reopened with evidence after re-verifying at 7b6e4f4e.
+5. **0083**: `std/README.md:54` + `std/atoms/README.md` still document only
+   `<Sym>_atom`; the 118 new `<Sym>_nucleus` shapes (laser demo's API) are
+   undocumented. Atom regeneration otherwise verified: all 118 compile,
+   exactly one `_nucleus` each, U_nucleus = protons+neutrons only, H
+   nucleus = single proton.
+6. **0075/0079 commented**: `lang.pest:121` still says `spin = s` —
+   `7b6e4f4e` added `part_opacity_opt` at :124 directly beneath it;
+   `present.rs:1493` still `1D sine` (playground page) despite the commit's
+   "generalise the 1D field label" bullet (interactive page :1047 fixed).
+7. **0079's other two claims landed honestly here**: atom proportions
+   (gen_atoms: nucleons 0.045→0.030, shells 0.30→0.55, electrons
+   0.035→0.045) and docs. Camera auto-fit still absent (not claimed here).
+8. **Claim verified TRUE**: "update rules read the original slot values —
+   no intra-step chaining" (docs/lang-usage.md:630). Black-box:
+   `vx = vx + 1.0; x = x + dt*vx` with `dt=0.5`, `vx0=1` → step 1 gives
+   `x=0.5, vx=2.0` (invariant `abs(x) < 0.6` passes; chained would be 1.0).
+   `pwe run` also reports "interpreter == JIT, cross-checked every 16 steps".
+9. **laser.pwe black-box**: compiles (252 EIR fns), runs to 460 steps rc 0;
+   full cycle observed — electron n=1→2 (pumped), relaxes n=2→1, photon
+   spawns from the pool (RFC-0038), flies radially out (`photon#0` at
+   r=2.74), despawns past r>4, pool respawns on the next relaxation;
+   `spawn every=300 phase=120` cycle verified across steps 60/400/460.
+   LSP: no diagnostics on laser.pwe or opacity programs.
+10. Observation (not filed): the viewer guard `hi-lo < 1e-6` now *removes*
+   stale isosurfaces (good — fixes the 1e-5-residue ghost) but also makes
+   any genuinely low-amplitude field (<1e-6 range) invisible with no
+    rescale fallback; acceptable tradeoff, worth a future opt-in scale.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
