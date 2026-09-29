@@ -100,6 +100,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0071](https://github.com/open1s/qwe/issues/71) | Medium | `merge_sources` re-derives module declarations from raw text (not the string-aware stripper): an in-string `module` line compiles fine but the artifact fails to run with a false `error 101` — compile/run divergence | reference/src/lang/compile.rs (merge_sources `lines().find_map(parse_module_line)`) |
 | [0072](https://github.com/open1s/qwe/issues/72) | Medium | RFC-0046 body ≠ shipped impl: the Status line was rewritten for the `block_count>1`-in-FUNCTIONS form, but Design/Wire-format still prescribe a BLOCKS section / FUNCTIONS minor bump and a `Block{params,ops,term}` model; RFC-0021 (frozen v0.2.0) not updated and `EIR_MINOR` stays 0 — same program, different bytes, same declared version | rfc/RFC-0046-eir-ssa-cfg.md (Design / Wire format), rfc/RFC-0021 §Functions, reference/src/eir.rs :41-42, :2100-2112 |
 | [0073](https://github.com/open1s/qwe/issues/73) | Low | `encode_functions_section` now routes artifacts through `blocks_from_instructions` (write path); that helper panics on an empty instruction stream (`e-1` underflow) or an out-of-range `Br`/`CondBr` target (`instructions[e-1]` OOB) | reference/src/eir.rs (encode_functions_section :2077/:2090, blocks_from_instructions :2229) |
+| [0074](https://github.com/open1s/qwe/issues/74) | Low | README test counts stale: badges + `cargo test` comment + table totals say 399 in both languages while the workspace is 402 (f38aac54 +2, f4726072 +1, neither refreshed); unit row 347 needs 350 | README.md:9/:223/:237-244, README-ZH.md:8/:210/:226/:232 |
 
 ## Suggested order
 
@@ -1005,5 +1006,43 @@ Review pass 32 (landed `faf08619` std periodic package + fix verification of
    resolve file-relative — rc 0 from root, 76 from a subdir);
    `strip_directives(&src.root)` runs twice for the root source in
    `merge_sources` (negligible).
+
+Review pass 33 (landed `f4726072` bond/molecules + `261f75bc` native call-scope
+fix; filed 0074):
+
+1. Gates green on both commits: fmt, clippy `-D warnings`, conformance
+   **25/25**, release builds; tests **402** at `f4726072`
+   (+1 `bond_declaration_attaches_render_bonds`) → **403** at `261f75bc`
+   (+1 `native_two_calls_in_one_function_compile`).
+2. `f4726072` `bond <a> <b>` black-box: grammar is additive — an entity or a
+   state slot named `bond` still parses and runs (`state=[61.0]` probes);
+   malformed `bond A` gives error 60 at the failing token (3:1 = `}`); names
+   that match no entity are silently dropped (presentation-only, documented);
+   artifact hash stable across recompiles; `pwe fmt` preserves both `bond`
+   lines in `water.pwe`; LSP diagnostics EMPTY for the demo, water, and the
+   ghost-bond buffer. Merge dedup is exact-tuple — `(a,b)` vs `(b,a)` both
+   kept (noted, not filed; presentation-only).
+3. Molecules: all 9 `std/molecules/*.pwe` compile; `water.pwe` standalone runs
+   (3 entities); `cli/examples/molecule.pwe` compiles and runs with
+   `state=[18.0150, 3.0000]` (H₂O molar mass + atom count correct; `s0`/`s1`
+   auto-create on an entity that declares no `state`).
+4. Atomic structure: all 118 element modules compile with the +4 functions;
+   probes — Fe `electrons=26, neutrons=30, shell_count=4,
+   shell_electrons(3)=14`; `periodic.neutrons(26.0)=30`; `std/periodic.pwe`
+   compiles.
+5. 0074 filed (Low): both READMEs still say 399 (badge, `cargo test` comment,
+   table totals; unit row 347) while the workspace is 402 — `faf08619`
+   refreshed counts by convention, `f38aac54` and `f4726072` did not.
+6. `261f75bc` verified: the Call arm now wraps each call in its own C block so
+   `t{i}`/`ta[]` temporaries cannot collide across two calls in one block.
+   Black-box: a two-call program (`f(a,b) { g(a) + g(b) }`) run with
+   `--steps 200` (crosses `NATIVE_PROMOTE = 64`) — native-on rc 0,
+   `x = 10.0`, output identical to `--no-native-jit`; regression test asserts
+   `native.call(id, [3,4]) == 14.0` (skips when `cc` is absent).
+7. Observation (not filed — in-flight): `f4726072`'s message claims
+   "tests (… atomic structure, molecule molar mass/bonds)" but those stdlib
+   tests exist only as uncommitted working-copy WIP
+   (`reference/tests/stdlib.rs`, +44 lines); the commit itself contains only
+   the bond test. Will file if a subsequent commit lands without them.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
