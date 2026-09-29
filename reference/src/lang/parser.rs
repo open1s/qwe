@@ -1410,8 +1410,21 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     let refname = next_pair(&mut pi)?.as_str().to_string();
                                     let mut offset = (0.0, 0.0, 0.0);
                                     let mut scale = 1.0f64;
+                                    let mut color: Option<u32> = None;
+                                    let mut orbit: Option<(f64, f64, f64)> = None;
+                                    let mut orbit_axis: Option<(f64, f64, f64)> = None;
+                                    let mut spin = 0.0f64;
                                     for opt in pi {
                                         let rule = opt.as_rule();
+                                        if rule == Rule::part_color_opt {
+                                            let text = opt.as_str();
+                                            if let Some(pos) = text.find("0x") {
+                                                color =
+                                                    u32::from_str_radix(text[pos + 2..].trim(), 16)
+                                                        .ok();
+                                            }
+                                            continue;
+                                        }
                                         let inner = next_pair(&mut opt.into_inner())?;
                                         match rule {
                                             Rule::at_opt => {
@@ -1419,6 +1432,15 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                                 offset = (o.x, o.y, o.z);
                                             }
                                             Rule::scale_opt => scale = parse_value(inner),
+                                            Rule::orbit_opt => {
+                                                let v = parse_vec3(inner);
+                                                orbit = Some((v.x, v.y, v.z));
+                                            }
+                                            Rule::axis_opt => {
+                                                let v = parse_vec3(inner);
+                                                orbit_axis = Some((v.x, v.y, v.z));
+                                            }
+                                            Rule::spin_opt => spin = parse_value(inner),
                                             _ => {}
                                         }
                                     }
@@ -1433,7 +1455,10 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         faces: Vec::new(),
                                         scale,
                                         name: Some(refname),
-                                        ..Default::default()
+                                        color,
+                                        orbit,
+                                        orbit_axis,
+                                        spin,
                                     });
                                     continue;
                                 }

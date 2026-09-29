@@ -1017,9 +1017,15 @@ pub fn expand_shapes(
                             p.offset.2 + s.offset.2 * p.scale,
                         ),
                         scale: s.scale * p.scale,
-                        orbit: s
+                        // A shape-ref's own display options override the inlined
+                        // sub-part's ones (orbit radius scales like offsets).
+                        orbit: p
                             .orbit
+                            .or(s.orbit)
                             .map(|(radius, speed, phase)| (radius * p.scale, speed, phase)),
+                        color: p.color.or(s.color),
+                        orbit_axis: p.orbit_axis.or(s.orbit_axis),
+                        spin: if p.spin != 0.0 { p.spin } else { s.spin },
                         ..s
                     });
                 }

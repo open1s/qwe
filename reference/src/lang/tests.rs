@@ -3602,3 +3602,23 @@ fn non_lowercase_field_name_is_rejected() {
     .expect("field name must be rejected");
     assert_eq!(err.detail, 103);
 }
+
+#[test]
+fn shape_ref_overrides_part_colour_and_orbit() {
+    // `part <other-shape> ... color=.. orbit=..` overrides the inlined sub-part's
+    // display options (they are not silently dropped).
+    let src = "world { gravity=(0,0,0) \
+        shape inner { part sphere=0.1 at (0,0,0) } \
+        shape outer { part inner at (0,0,0) color=0xFF5555 orbit (0.5, 2.0, 0.0) } \
+        entity e { shape = outer } }";
+    let rt = LangRuntime::compile(src).unwrap();
+    let json = crate::present::frame_to_json(&rt.present_frame(None));
+    assert!(
+        json.contains("\"color\":16733525"),
+        "colour override: {json}"
+    );
+    assert!(
+        json.contains("\"orbit\":[0.5,2,0,"),
+        "orbit override: {json}"
+    );
+}

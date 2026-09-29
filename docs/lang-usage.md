@@ -597,7 +597,7 @@ Presentation-only part options (all optional; they never affect semantics):
 
 * `color = 0xRRGGBB` — overrides the entity colour for this part (multi-colour
   shapes: protons vs neutrons vs electrons);
-* `spin = s` — self-rotation speed in rad/s;
+* `spin s` — self-rotation speed in rad/s;
 * `orbit (radius, speed, phase)` — animates the part around the entity's local
   origin (electrons orbiting a nucleus), `speed` in rad/s; `axis (x,y,z)` sets
   the orbit-plane normal (default local `+Z`).
