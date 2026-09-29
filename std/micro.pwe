@@ -1,0 +1,49 @@
+# std/micro.pwe — micro-scale interaction laws (interatomic forces & potentials).
+#
+# Pure scalar functions for the "作用" between atoms/molecules: van der Waals
+# (Lennard-Jones), chemical-bond (Morse), harmonic bond, and electrostatics.
+# Forces are the negative gradient (`F = -dU/dr`); positive = repulsive (pushes
+# the pair apart), negative = attractive. Energies are in the caller's units.
+module micro
+
+world { }
+
+funcs {
+  # Lennard-Jones (van der Waals): U(r) = 4 eps [ (sigma/r)^12 - (sigma/r)^6 ].
+  lj_potential(eps, sigma, r) {
+    4.0 * eps * (pow(sigma / r, 12.0) - pow(sigma / r, 6.0))
+  }
+  lj_force(eps, sigma, r) {
+    24.0 * eps / r * (2.0 * pow(sigma / r, 12.0) - pow(sigma / r, 6.0))
+  }
+  # Equilibrium separation r_min = 2^(1/6) sigma; well depth = eps.
+  lj_r_min(sigma) { 1.122462048309373 * sigma }
+
+  # Morse potential (a chemical bond): U(r) = De [ (1 - e^{-a(r-re)})^2 - 1 ].
+  morse_potential(De, a, re, r) {
+    De * (pow(1.0 - exp(0.0 - a * (r - re)), 2.0) - 1.0)
+  }
+  morse_force(De, a, re, r) {
+    0.0 - 2.0 * De * a * exp(0.0 - a * (r - re)) * (1.0 - exp(0.0 - a * (r - re)))
+  }
+
+  # Harmonic bond (small-displacement spring): U = 1/2 k (r-re)^2.
+  bond_potential(k, r, re) { 0.5 * k * (r - re) * (r - re) }
+  bond_force(k, r, re) { 0.0 - k * (r - re) }
+
+  # Electrostatics (Coulomb): U = k q1 q2 / r; force = k q1 q2 / r^2.
+  coulomb_energy(k, q1, q2, r) { k * q1 * q2 / r }
+  coulomb_force(k, q1, q2, r) { k * q1 * q2 / (r * r) }
+
+  # A screened (Debye) Coulomb: U = k q1 q2 e^{-r/ld} / r.
+  screened_coulomb(k, q1, q2, r, ld) { k * q1 * q2 * exp(0.0 - r / ld) / r }
+
+  # A crude hydrogen bond: an LJ core plus an attractive dipole term.
+  hbond_energy(eps, sigma, r, dipole) {
+    4.0 * eps * (pow(sigma / r, 12.0) - pow(sigma / r, 6.0)) - dipole / (r * r)
+  }
+
+  # Force -> acceleration, and the harmonic bond's angular frequency.
+  accel(force, mass) { force / mass }
+  bond_omega(k, mass) { sqrt(k / mass) }
+}

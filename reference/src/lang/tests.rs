@@ -3589,3 +3589,16 @@ fn micro_shape_parts_carry_ring_colour_and_orbit() {
         "orbit encoded: {json}"
     );
 }
+
+#[test]
+fn non_lowercase_field_name_is_rejected() {
+    // Component identities require lowercase names; the compiler reports it
+    // cleanly (detail 103) instead of failing later in the identity hash.
+    let err = LangRuntime::compile(
+        "world { gravity=(0,0,0) field U { width=4; height=4; dx=1.0 } \
+         entity e { state=(x=0.0) } }",
+    )
+    .err()
+    .expect("field name must be rejected");
+    assert_eq!(err.detail, 103);
+}

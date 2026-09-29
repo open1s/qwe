@@ -41,6 +41,7 @@ A composing example lives at `cli/examples/domains.pwe`.
 | --- | --- |
 | `std/math` | `clamp clamp01 lerp mix inv_lerp remap step smoothstep smootherstep wrap sqr deg rad hypot2 hypot3 min3 max3 sgn deadzone ease_in ease_out` |
 | `std/particles` | `terminal_velocity drag_step ballistic_x ballistic_y ballistic_vy bounce_vy reflect radius_from_mass stopping_distance freefall_time speed` |
+| `std/micro` | Micro-scale interaction laws: `lj_potential lj_force lj_r_min` (van der Waals), `morse_potential morse_force` (chemical bond), `bond_potential bond_force bond_omega` (harmonic), `coulomb_energy coulomb_force screened_coulomb`, `hbond_energy`, `accel` |
 | `std/forces` | `hooke spring_accel damping_accel drag_linear_accel drag_quadratic_accel coulomb_force gravity_force inverse_square_accel buoyancy_force thrust_accel damper_force` |
 | `std/mechanics` | `momentum kinetic_energy reduced_mass elastic_1d_v1 elastic_1d_v2 impulse friction_force normal_impulse inertia_rod inertia_disk inertia_sphere torque angular_accel angular_kinetic` |
 | `std/chemistry` | Periodic table 1–118: `atomic_mass element_period element_group valence_electrons shell_capacity neutrons`, plus `mol_from_mass mass_from_mol molecules molarity dilute ideal_pressure ideal_volume arrhenius rate_constant activation_ratio ph h_from_ph neutralization_volume half_life_decay radioactive_amount` (params `R_gas`, `avogadro`) |

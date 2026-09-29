@@ -1551,6 +1551,14 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         Rule::field_stmt => {
                             let mut inner = item.into_inner();
                             let name = next_pair(&mut inner)?.as_str().to_string();
+                            // Component identities are lowercase; reject any other
+                            // field name here with a clear diagnostic.
+                            if !name
+                                .chars()
+                                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                            {
+                                return Err(error(Status::Invalid, 103));
+                            }
                             let mut params: std::collections::BTreeMap<String, f64> =
                                 Default::default();
                             for p in inner {

@@ -20,12 +20,32 @@ use pwe_api::{ComponentTypeId, Hash256, Result};
 ///
 /// Names are fixed, lowercase, and versioned here, so `type_id()` cannot fail.
 fn canonical_component_id(namespace: &str, stable_name: &str, major: u32) -> ComponentTypeId {
-    let identity = ComponentIdentity {
+    let build = || ComponentIdentity {
         namespace: namespace.into(),
         stable_name: stable_name.into(),
         major_version: major,
     };
-    identity.type_id().expect("fixed valid component identity")
+    // Names are lowercase by construction; if an unexpected name is ever derived,
+    // fall back to its lowercase form rather than panicking in a runtime path.
+    build()
+        .type_id()
+        .or_else(|_| {
+            ComponentIdentity {
+                namespace: namespace.into(),
+                stable_name: stable_name.to_lowercase(),
+                major_version: major,
+            }
+            .type_id()
+        })
+        .unwrap_or_else(|_| {
+            ComponentIdentity {
+                namespace: "pwe.lang".into(),
+                stable_name: "invalid_component".into(),
+                major_version: 1,
+            }
+            .type_id()
+            .expect("fixed valid component identity")
+        })
 }
 
 // The fixed component ids are pure functions of constant strings, but deriving
