@@ -1130,4 +1130,43 @@ filed 0078):
    `BondDecl` equality — `bond A B` and `bond A B order=2` both survive the
    merge (duplicate stick pair; presentation-only).
 
+Review pass 36 (landed `83c37473` micro-scale laws + `cec1094a` follow-up
+tests; closed 0077/0078):
+
+1. `83c37473` gates were red — the same E0308 as 0078 (`molecule_demo.rs`
+   still on `&[(u128,u128)]`) persisted across a second commit; fmt,
+   release build and conformance 25/25 unaffected. **0078 stayed open with
+   a comment** until `cec1094a` fixed the example; gates re-run on
+   `cec1094a`: fmt ✓, clippy `--all-targets` ✓, **411 tests**, conformance
+   **25/25**, release ✓ → closed 0078.
+2. `std/micro.pwe` math verified by black-box probe (10 values, eps=sigma=De
+   etc. = 1): `lj_force(0.5)=+390144` (repulsive), `lj_force(2)=-0.18164`
+   (attractive), `lj_force(2^(1/6))≈0` (well minimum);
+   `morse_force(1.5)=-0.4773` / `(0.5)=+2.1391` (stretch attract / compress
+   repel — F = −2·De·a·E·(1−E) matches the analytic −dU/dr exactly);
+   `bond_force ±2` around `re`; `coulomb_force` like-charge `+1` /
+   opposite `-1` (F = k·q1·q2/r² with the documented positive-repulsive
+   convention); `bond_omega(100,1)=10`. All signs agree with the header's
+   `F = -dU/dr; positive = repulsive`. `lj_r_min` = 2^(1/6)·sigma to
+   15 digits.
+3. Hardening verified: `field U { … }` → **rc 1, `error 103`**, no panic
+   (previously panicked in the identity hash); the check accepts
+   `[a-z0-9_]+` only; LSP reports `code: 103` for the same buffer; the code
+   is documented in the docs/lang-usage error table (new row 103).
+   `canonical_component_id` in physics_eir.rs now falls back
+   lowercase → fixed `pwe.lang/invalid_component` instead of `.expect()` —
+   the last `expect` is on fully-controlled constants (locally proven).
+4. Demo `cli/examples/interactions.pwe` compiles and runs (Morse curve
+   written into `field u` via `fset`, 64 sample points, De=1 a=2 re=1.2;
+   U(0.7)=+1.95 wall, U(1.2)=-1 well, U(3.22)≈-0.035 asymptote — values
+   checked against the formula); `pwe fmt` identity on the demo and on
+   `std/micro.pwe`; LSP clean for both. Viewer 1D label generalized
+   ("1D sine" → "1D").
+5. `cec1094a` delivers the claimed-but-missing tests from both Layers: laws
+   sign tests (+4) and stdlib coverage (atoms/molecules/micro compile +
+   value checks). This was the **third** message-vs-content instance
+   (after f4726072, 60b5dc62) — commented on 0077 and closed it as the test
+   debt is paid (outstanding ask: same-commit discipline).
+6. Counts for 0074: 411 now (READMEs still 399) — commented on the issue.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
