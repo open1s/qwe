@@ -105,6 +105,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0076](https://github.com/open1s/qwe/issues/76) | Low | `shape_ref` grammar accepts `shape_part_opt*` but the parser's ref branch only reads `at`/`scale` (`_ => {}`) — `part inner color/orbit/axis/spin …` compiles rc 0 and silently does nothing (silent fallback) | reference/src/lang/parser.rs (shape_ref branch), reference/src/lang.pest (shape_ref) |
 | [0077](https://github.com/open1s/qwe/issues/77) | Low | commit messages claim stdlib tests ("atomic structure, molecule molar mass/bonds" in f4726072; "stdlib atom structure" in 60b5dc62) that exist only as uncommitted `reference/tests/stdlib.rs` WIP — tests went 401→402→404 (+1 each), not the claimed areas | issues (f4726072, 60b5dc62 messages), reference/tests/stdlib.rs (uncommitted) |
 | [0078](https://github.com/open1s/qwe/issues/78) | Medium | `b12572a4` leaves `reference/examples/molecule_demo.rs` on the old `&[(u128,u128)]` bond tuples after `with_bonds` took `&[Bond]` — `cargo test --workspace` and `clippy --all-targets` fail with E0308 on main (fmt/release/conformance unaffected; a matching fix sits uncommitted in the working copy) | reference/examples/molecule_demo.rs:102, present.rs `with_bonds` signature |
+| [0079](https://github.com/open1s/qwe/issues/79) | Low | `0194079e` message claims camera auto-fit (marker/orbit extents), regenerated atom proportions and a 1D-label fix — none are in the diff (`present.rs`/`std/atoms` untouched; auto-frame code dates to the initial commit and uses point bounds only; `1D sine` still hardcoded at present.rs:1481) | 0194079e message, cli/src/main.rs:1034, reference/src/present.rs:1481 |
 
 ## Suggested order
 
@@ -1168,5 +1169,38 @@ tests; closed 0077/0078):
    (after f4726072, 60b5dc62) — commented on 0077 and closed it as the test
    debt is paid (outstanding ask: same-commit discipline).
 6. Counts for 0074: 411 now (READMEs still 399) — commented on the issue.
+
+Review pass 37 (landed `0194079e` — "camera auto-fit + legible atom
+proportions; fix #74 #75 #76"; closed 0076, filed 0079):
+
+1. Gates green: fmt, clippy `--all-targets`, **412 tests**, conformance
+   **25/25**, release build. The +1 is
+   `shape_ref_overrides_part_colour_and_orbit` (passes: 1 ok / 354 filtered
+   → unit row 355 confirmed).
+2. 0076 **verified fixed**: parser shape_ref branch captures
+   `color/orbit/axis/spin` (was `_ => {}`); `expand_shapes` applies
+   ref-level overrides over inlined sub-parts (`p.color.or(s.color)`,
+   `p.orbit.or(s.orbit)` scaled by ref `scale`, `spin` inherits unless the
+   ref sets non-zero); test green; probe `part inner color=0x00FF00 orbit
+   (5,1,0) spin 2.0` rc 0 with the overrides now reaching the frame.
+   Closed with evidence.
+3. 0074 **partial**: English README corrected (badge/comment/table → 412;
+   components 355 unit + 21 laws + 6 stdlib + 30 other = 412, matching the
+   real suite). README-ZH still 399 (badge :8, comment :210, 合计 :232) —
+   commented, stays open.
+4. 0075 **partial**: `docs/lang-usage.md` now says `spin s` (matches the
+   parser) but the `lang.pest` comment at line 121 still documents
+   `spin = s` above `spin_opt = { "spin" ~ value }` — commented, stays open.
+5. Message-vs-content drift is now feature-sized → **0079 (Low)**: the
+   commit touches only README/docs/parser/compile/tests, yet the message
+   claims (a) marker/orbit-extent camera auto-fit — the only auto-frame
+   code is `auto_frame_camera` from the **initial** commit (point bounds,
+   no extents), `present.rs` untouched since `83c37473`; (b) regenerated
+   atom proportions — `std/atoms` untouched since `60b5dc62`; (c) the 1D
+   label fix — `present.rs` not in this commit and only half-done since
+   `83c37473` (`1D |u|max` at :1039, still `1D sine` at :1481 — the pass-36
+   record's "label generalized" claim was itself only half-verified).
+   `fix #74/#75/#76` bullets in the same message are accurate (partial as
+   noted above).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
