@@ -1,0 +1,26 @@
+# std/elements/Np.pwe — Neptunium (Z=93) (generated).
+module elements.Np
+world { }
+
+funcs {
+  atomic_number() { 93.0 }
+  atomic_mass() { 237.0 }
+  group() { 3.0 }
+  period() { 7.0 }
+  block() { 4.0 }
+  category() { 10.0 }
+  electronegativity() { 1.36 }
+  density_g_cm3() { 20.45 }
+  melt_k() { 912.0 }
+  boil_k() { 4447.0 }
+  electron_affinity_kj() { 45.85 }
+  ionization_kj() { 604.5 }
+  molar_heat_j_mol_k() { 29.46 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

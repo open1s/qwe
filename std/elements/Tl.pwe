@@ -1,0 +1,26 @@
+# std/elements/Tl.pwe — Thallium (Z=81) (generated).
+module elements.Tl
+world { }
+
+funcs {
+  atomic_number() { 81.0 }
+  atomic_mass() { 204.38 }
+  group() { 13.0 }
+  period() { 6.0 }
+  block() { 2.0 }
+  category() { 4.0 }
+  electronegativity() { 1.62 }
+  density_g_cm3() { 11.85 }
+  melt_k() { 577.0 }
+  boil_k() { 1746.0 }
+  electron_affinity_kj() { 36.4 }
+  ionization_kj() { 589.4 }
+  molar_heat_j_mol_k() { 26.32 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 3.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

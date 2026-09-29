@@ -1,0 +1,26 @@
+# std/elements/As.pwe — Arsenic (Z=33) (generated).
+module elements.As
+world { }
+
+funcs {
+  atomic_number() { 33.0 }
+  atomic_mass() { 74.9215956 }
+  group() { 15.0 }
+  period() { 4.0 }
+  block() { 2.0 }
+  category() { 5.0 }
+  electronegativity() { 2.18 }
+  density_g_cm3() { 5.727 }
+  melt_k() { 0.0 }
+  boil_k() { 0.0 }
+  electron_affinity_kj() { 77.65 }
+  ionization_kj() { 947.0 }
+  molar_heat_j_mol_k() { 24.64 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 5.0 }
+  is_metal() { 0.0 }
+  is_metalloid() { 1.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

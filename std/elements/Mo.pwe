@@ -1,0 +1,26 @@
+# std/elements/Mo.pwe — Molybdenum (Z=42) (generated).
+module elements.Mo
+world { }
+
+funcs {
+  atomic_number() { 42.0 }
+  atomic_mass() { 95.951 }
+  group() { 6.0 }
+  period() { 5.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 2.16 }
+  density_g_cm3() { 10.28 }
+  melt_k() { 2896.0 }
+  boil_k() { 4912.0 }
+  electron_affinity_kj() { 72.1 }
+  ionization_kj() { 684.3 }
+  molar_heat_j_mol_k() { 24.06 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 1.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

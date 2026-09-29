@@ -1,0 +1,26 @@
+# std/elements/Cn.pwe — Copernicium (Z=112) (generated).
+module elements.Cn
+world { }
+
+funcs {
+  atomic_number() { 112.0 }
+  atomic_mass() { 285.0 }
+  group() { 12.0 }
+  period() { 7.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 0.0 }
+  density_g_cm3() { 14.0 }
+  melt_k() { 0.0 }
+  boil_k() { 3570.0 }
+  electron_affinity_kj() { 0.0 }
+  ionization_kj() { 0.0 }
+  molar_heat_j_mol_k() { 0.0 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

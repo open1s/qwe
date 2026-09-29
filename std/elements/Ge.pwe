@@ -1,0 +1,26 @@
+# std/elements/Ge.pwe — Germanium (Z=32) (generated).
+module elements.Ge
+world { }
+
+funcs {
+  atomic_number() { 32.0 }
+  atomic_mass() { 72.6308 }
+  group() { 14.0 }
+  period() { 4.0 }
+  block() { 2.0 }
+  category() { 5.0 }
+  electronegativity() { 2.01 }
+  density_g_cm3() { 5.323 }
+  melt_k() { 1211.4 }
+  boil_k() { 3106.0 }
+  electron_affinity_kj() { 118.9352 }
+  ionization_kj() { 762.0 }
+  molar_heat_j_mol_k() { 23.222 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 4.0 }
+  is_metal() { 0.0 }
+  is_metalloid() { 1.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

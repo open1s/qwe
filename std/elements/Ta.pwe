@@ -1,0 +1,26 @@
+# std/elements/Ta.pwe — Tantalum (Z=73) (generated).
+module elements.Ta
+world { }
+
+funcs {
+  atomic_number() { 73.0 }
+  atomic_mass() { 180.947882 }
+  group() { 5.0 }
+  period() { 6.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 1.5 }
+  density_g_cm3() { 16.69 }
+  melt_k() { 3290.0 }
+  boil_k() { 5731.0 }
+  electron_affinity_kj() { 31.0 }
+  ionization_kj() { 761.0 }
+  molar_heat_j_mol_k() { 25.36 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

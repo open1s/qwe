@@ -1,0 +1,26 @@
+# std/elements/Ru.pwe — Ruthenium (Z=44) (generated).
+module elements.Ru
+world { }
+
+funcs {
+  atomic_number() { 44.0 }
+  atomic_mass() { 101.072 }
+  group() { 8.0 }
+  period() { 5.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 2.2 }
+  density_g_cm3() { 12.45 }
+  melt_k() { 2607.0 }
+  boil_k() { 4423.0 }
+  electron_affinity_kj() { 100.96 }
+  ionization_kj() { 710.2 }
+  molar_heat_j_mol_k() { 24.06 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 1.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

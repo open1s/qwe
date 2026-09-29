@@ -1,0 +1,26 @@
+# std/elements/Ir.pwe — Iridium (Z=77) (generated).
+module elements.Ir
+world { }
+
+funcs {
+  atomic_number() { 77.0 }
+  atomic_mass() { 192.2173 }
+  group() { 9.0 }
+  period() { 6.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 2.2 }
+  density_g_cm3() { 22.56 }
+  melt_k() { 2719.0 }
+  boil_k() { 4403.0 }
+  electron_affinity_kj() { 150.94 }
+  ionization_kj() { 880.0 }
+  molar_heat_j_mol_k() { 25.1 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

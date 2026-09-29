@@ -1,0 +1,26 @@
+# std/elements/Po.pwe — Polonium (Z=84) (generated).
+module elements.Po
+world { }
+
+funcs {
+  atomic_number() { 84.0 }
+  atomic_mass() { 209.0 }
+  group() { 16.0 }
+  period() { 6.0 }
+  block() { 2.0 }
+  category() { 4.0 }
+  electronegativity() { 2.0 }
+  density_g_cm3() { 9.196 }
+  melt_k() { 527.0 }
+  boil_k() { 1235.0 }
+  electron_affinity_kj() { 136.0 }
+  ionization_kj() { 812.1 }
+  molar_heat_j_mol_k() { 26.4 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 6.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

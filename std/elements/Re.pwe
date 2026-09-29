@@ -1,0 +1,26 @@
+# std/elements/Re.pwe — Rhenium (Z=75) (generated).
+module elements.Re
+world { }
+
+funcs {
+  atomic_number() { 75.0 }
+  atomic_mass() { 186.2071 }
+  group() { 7.0 }
+  period() { 6.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 1.9 }
+  density_g_cm3() { 21.02 }
+  melt_k() { 3459.0 }
+  boil_k() { 5869.0 }
+  electron_affinity_kj() { 5.8273 }
+  ionization_kj() { 760.0 }
+  molar_heat_j_mol_k() { 25.48 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

@@ -1,0 +1,26 @@
+# std/elements/Au.pwe — Gold (Z=79) (generated).
+module elements.Au
+world { }
+
+funcs {
+  atomic_number() { 79.0 }
+  atomic_mass() { 196.9665695 }
+  group() { 11.0 }
+  period() { 6.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 2.54 }
+  density_g_cm3() { 19.3 }
+  melt_k() { 1337.33 }
+  boil_k() { 3243.0 }
+  electron_affinity_kj() { 222.747 }
+  ionization_kj() { 890.1 }
+  molar_heat_j_mol_k() { 25.418 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 1.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

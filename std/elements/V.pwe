@@ -1,0 +1,26 @@
+# std/elements/V.pwe — Vanadium (Z=23) (generated).
+module elements.V
+world { }
+
+funcs {
+  atomic_number() { 23.0 }
+  atomic_mass() { 50.94151 }
+  group() { 5.0 }
+  period() { 4.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 1.63 }
+  density_g_cm3() { 6.0 }
+  melt_k() { 2183.0 }
+  boil_k() { 3680.0 }
+  electron_affinity_kj() { 50.911 }
+  ionization_kj() { 650.9 }
+  molar_heat_j_mol_k() { 24.89 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

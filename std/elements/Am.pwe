@@ -1,0 +1,26 @@
+# std/elements/Am.pwe — Americium (Z=95) (generated).
+module elements.Am
+world { }
+
+funcs {
+  atomic_number() { 95.0 }
+  atomic_mass() { 243.0 }
+  group() { 3.0 }
+  period() { 7.0 }
+  block() { 4.0 }
+  category() { 10.0 }
+  electronegativity() { 1.13 }
+  density_g_cm3() { 12.0 }
+  melt_k() { 1449.0 }
+  boil_k() { 2880.0 }
+  electron_affinity_kj() { 9.93 }
+  ionization_kj() { 578.0 }
+  molar_heat_j_mol_k() { 62.7 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

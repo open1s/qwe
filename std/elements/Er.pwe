@@ -1,0 +1,26 @@
+# std/elements/Er.pwe — Erbium (Z=68) (generated).
+module elements.Er
+world { }
+
+funcs {
+  atomic_number() { 68.0 }
+  atomic_mass() { 167.2593 }
+  group() { 3.0 }
+  period() { 6.0 }
+  block() { 4.0 }
+  category() { 9.0 }
+  electronegativity() { 1.24 }
+  density_g_cm3() { 9.066 }
+  melt_k() { 1802.0 }
+  boil_k() { 3141.0 }
+  electron_affinity_kj() { 30.1 }
+  ionization_kj() { 589.3 }
+  molar_heat_j_mol_k() { 28.12 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

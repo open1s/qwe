@@ -1,0 +1,26 @@
+# std/elements/Ca.pwe — Calcium (Z=20) (generated).
+module elements.Ca
+world { }
+
+funcs {
+  atomic_number() { 20.0 }
+  atomic_mass() { 40.0784 }
+  group() { 2.0 }
+  period() { 4.0 }
+  block() { 1.0 }
+  category() { 2.0 }
+  electronegativity() { 1.0 }
+  density_g_cm3() { 1.55 }
+  melt_k() { 1115.0 }
+  boil_k() { 1757.0 }
+  electron_affinity_kj() { 2.37 }
+  ionization_kj() { 589.8 }
+  molar_heat_j_mol_k() { 25.929 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

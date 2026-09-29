@@ -1,0 +1,26 @@
+# std/elements/I.pwe — Iodine (Z=53) (generated).
+module elements.I
+world { }
+
+funcs {
+  atomic_number() { 53.0 }
+  atomic_mass() { 126.904473 }
+  group() { 17.0 }
+  period() { 5.0 }
+  block() { 2.0 }
+  category() { 6.0 }
+  electronegativity() { 2.66 }
+  density_g_cm3() { 4.933 }
+  melt_k() { 386.85 }
+  boil_k() { 457.4 }
+  electron_affinity_kj() { 295.1531 }
+  ionization_kj() { 1008.4 }
+  molar_heat_j_mol_k() { 0.0 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 7.0 }
+  is_metal() { 0.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 1.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

@@ -1,0 +1,26 @@
+# std/elements/Ti.pwe — Titanium (Z=22) (generated).
+module elements.Ti
+world { }
+
+funcs {
+  atomic_number() { 22.0 }
+  atomic_mass() { 47.8671 }
+  group() { 4.0 }
+  period() { 4.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 1.54 }
+  density_g_cm3() { 4.506 }
+  melt_k() { 1941.0 }
+  boil_k() { 3560.0 }
+  electron_affinity_kj() { 7.289 }
+  ionization_kj() { 658.8 }
+  molar_heat_j_mol_k() { 25.06 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

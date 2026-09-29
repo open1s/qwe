@@ -1,0 +1,26 @@
+# std/elements/In.pwe — Indium (Z=49) (generated).
+module elements.In
+world { }
+
+funcs {
+  atomic_number() { 49.0 }
+  atomic_mass() { 114.8181 }
+  group() { 13.0 }
+  period() { 5.0 }
+  block() { 2.0 }
+  category() { 4.0 }
+  electronegativity() { 1.78 }
+  density_g_cm3() { 7.31 }
+  melt_k() { 429.7485 }
+  boil_k() { 2345.0 }
+  electron_affinity_kj() { 37.043 }
+  ionization_kj() { 558.3 }
+  molar_heat_j_mol_k() { 26.74 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 3.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

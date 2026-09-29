@@ -18,6 +18,10 @@ const MODULES: &[&str] = &[
     "robotics",
     "units",
     "control",
+    "periodic",
+    "elements/Fe",
+    "elements/F",
+    "elements/He",
 ];
 
 /// Every standard-library module is a valid standalone program.
@@ -143,4 +147,42 @@ fn std_modules_compute_data() {
     assert!(close(v[9], 5.0), "first_order = {}", v[9]);
     assert!(close(v[10], 1.0), "pid_clamped = {}", v[10]);
     assert!(close(v[11], 1.0), "within = {}", v[11]);
+}
+
+/// RFC: the full periodic table (`std/periodic.pwe` + one module per element)
+/// provides accurate values and per-element accessors.
+#[test]
+fn periodic_table_lookups() {
+    let count = std::fs::read_dir(format!("{}/elements", std_dir()))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "pwe"))
+        .count();
+    assert_eq!(count, 118, "one `std/elements/<Symbol>.pwe` per element");
+
+    let v = eval(
+        "periodic",
+        &[
+            ("fe_mass", "periodic.atomic_mass(26.0)"),
+            ("f_en", "periodic.electronegativity(9.0)"),
+            ("he_noble", "periodic.is_noble_gas(2.0)"),
+            ("o_val", "periodic.valence_electrons(8.0)"),
+            ("fe_group", "periodic.group(26.0)"),
+            ("fe_block", "periodic.block(26.0)"),
+            ("u_period", "periodic.period(92.0)"),
+            ("fe_mass_elem", "Fe.atomic_mass()"),
+            ("f_en_elem", "F.electronegativity()"),
+            ("he_gas_elem", "He.is_gas_at_stp()"),
+        ],
+    );
+    assert!(close(v[0], 55.8452), "Fe mass = {}", v[0]);
+    assert!(close(v[1], 3.98), "F electronegativity = {}", v[1]);
+    assert!(close(v[2], 1.0), "He is noble = {}", v[2]);
+    assert!(close(v[3], 6.0), "O valence = {}", v[3]);
+    assert!(close(v[4], 8.0), "Fe group = {}", v[4]);
+    assert!(close(v[5], 3.0), "Fe is a d-block element = {}", v[5]);
+    assert!(close(v[6], 7.0), "U period = {}", v[6]);
+    assert!(close(v[7], 55.8452), "Fe module mass = {}", v[7]);
+    assert!(close(v[8], 3.98), "F module electronegativity = {}", v[8]);
+    assert!(close(v[9], 1.0), "He module is a gas = {}", v[9]);
 }

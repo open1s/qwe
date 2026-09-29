@@ -1,0 +1,26 @@
+# std/elements/Sc.pwe — Scandium (Z=21) (generated).
+module elements.Sc
+world { }
+
+funcs {
+  atomic_number() { 21.0 }
+  atomic_mass() { 44.9559085 }
+  group() { 3.0 }
+  period() { 4.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 1.36 }
+  density_g_cm3() { 2.985 }
+  melt_k() { 1814.0 }
+  boil_k() { 3109.0 }
+  electron_affinity_kj() { 18.0 }
+  ionization_kj() { 633.1 }
+  molar_heat_j_mol_k() { 25.52 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

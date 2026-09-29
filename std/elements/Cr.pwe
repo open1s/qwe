@@ -1,0 +1,26 @@
+# std/elements/Cr.pwe — Chromium (Z=24) (generated).
+module elements.Cr
+world { }
+
+funcs {
+  atomic_number() { 24.0 }
+  atomic_mass() { 51.99616 }
+  group() { 6.0 }
+  period() { 4.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 1.66 }
+  density_g_cm3() { 7.19 }
+  melt_k() { 2180.0 }
+  boil_k() { 2944.0 }
+  electron_affinity_kj() { 65.21 }
+  ionization_kj() { 652.9 }
+  molar_heat_j_mol_k() { 23.35 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 1.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

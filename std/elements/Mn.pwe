@@ -1,0 +1,26 @@
+# std/elements/Mn.pwe — Manganese (Z=25) (generated).
+module elements.Mn
+world { }
+
+funcs {
+  atomic_number() { 25.0 }
+  atomic_mass() { 54.9380443 }
+  group() { 7.0 }
+  period() { 4.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 1.55 }
+  density_g_cm3() { 7.21 }
+  melt_k() { 1519.0 }
+  boil_k() { 2334.0 }
+  electron_affinity_kj() { -50.0 }
+  ionization_kj() { 717.3 }
+  molar_heat_j_mol_k() { 26.32 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

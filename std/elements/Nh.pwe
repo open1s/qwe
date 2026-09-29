@@ -1,0 +1,26 @@
+# std/elements/Nh.pwe — Nihonium (Z=113) (generated).
+module elements.Nh
+world { }
+
+funcs {
+  atomic_number() { 113.0 }
+  atomic_mass() { 286.0 }
+  group() { 13.0 }
+  period() { 7.0 }
+  block() { 2.0 }
+  category() { 0.0 }
+  electronegativity() { 0.0 }
+  density_g_cm3() { 16.0 }
+  melt_k() { 700.0 }
+  boil_k() { 1430.0 }
+  electron_affinity_kj() { 66.6 }
+  ionization_kj() { 0.0 }
+  molar_heat_j_mol_k() { 0.0 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 3.0 }
+  is_metal() { 0.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

@@ -1,0 +1,26 @@
+# std/elements/Dy.pwe — Dysprosium (Z=66) (generated).
+module elements.Dy
+world { }
+
+funcs {
+  atomic_number() { 66.0 }
+  atomic_mass() { 162.5001 }
+  group() { 3.0 }
+  period() { 6.0 }
+  block() { 4.0 }
+  category() { 9.0 }
+  electronegativity() { 1.22 }
+  density_g_cm3() { 8.54 }
+  melt_k() { 1680.0 }
+  boil_k() { 2840.0 }
+  electron_affinity_kj() { 33.96 }
+  ionization_kj() { 573.0 }
+  molar_heat_j_mol_k() { 27.7 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

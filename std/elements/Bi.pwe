@@ -1,0 +1,26 @@
+# std/elements/Bi.pwe — Bismuth (Z=83) (generated).
+module elements.Bi
+world { }
+
+funcs {
+  atomic_number() { 83.0 }
+  atomic_mass() { 208.980401 }
+  group() { 15.0 }
+  period() { 6.0 }
+  block() { 2.0 }
+  category() { 4.0 }
+  electronegativity() { 2.02 }
+  density_g_cm3() { 9.78 }
+  melt_k() { 544.7 }
+  boil_k() { 1837.0 }
+  electron_affinity_kj() { 90.924 }
+  ionization_kj() { 703.0 }
+  molar_heat_j_mol_k() { 25.52 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 5.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

@@ -1,0 +1,26 @@
+# std/elements/Ba.pwe — Barium (Z=56) (generated).
+module elements.Ba
+world { }
+
+funcs {
+  atomic_number() { 56.0 }
+  atomic_mass() { 137.3277 }
+  group() { 2.0 }
+  period() { 6.0 }
+  block() { 1.0 }
+  category() { 2.0 }
+  electronegativity() { 0.89 }
+  density_g_cm3() { 3.51 }
+  melt_k() { 1000.0 }
+  boil_k() { 2118.0 }
+  electron_affinity_kj() { 13.954 }
+  ionization_kj() { 502.9 }
+  molar_heat_j_mol_k() { 28.07 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

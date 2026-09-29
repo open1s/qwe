@@ -1,0 +1,26 @@
+# std/elements/Os.pwe — Osmium (Z=76) (generated).
+module elements.Os
+world { }
+
+funcs {
+  atomic_number() { 76.0 }
+  atomic_mass() { 190.233 }
+  group() { 8.0 }
+  period() { 6.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 2.2 }
+  density_g_cm3() { 22.59 }
+  melt_k() { 3306.0 }
+  boil_k() { 5285.0 }
+  electron_affinity_kj() { 103.99 }
+  ionization_kj() { 840.0 }
+  molar_heat_j_mol_k() { 24.7 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

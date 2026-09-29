@@ -1,0 +1,26 @@
+# std/elements/Lu.pwe — Lutetium (Z=71) (generated).
+module elements.Lu
+world { }
+
+funcs {
+  atomic_number() { 71.0 }
+  atomic_mass() { 174.96681 }
+  group() { 3.0 }
+  period() { 6.0 }
+  block() { 3.0 }
+  category() { 9.0 }
+  electronegativity() { 1.27 }
+  density_g_cm3() { 9.841 }
+  melt_k() { 1925.0 }
+  boil_k() { 3675.0 }
+  electron_affinity_kj() { 33.4 }
+  ionization_kj() { 523.5 }
+  molar_heat_j_mol_k() { 26.86 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

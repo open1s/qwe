@@ -1,0 +1,26 @@
+# std/elements/C.pwe — Carbon (Z=6) (generated).
+module elements.C
+world { }
+
+funcs {
+  atomic_number() { 6.0 }
+  atomic_mass() { 12.011 }
+  group() { 14.0 }
+  period() { 2.0 }
+  block() { 2.0 }
+  category() { 6.0 }
+  electronegativity() { 2.55 }
+  density_g_cm3() { 1.821 }
+  melt_k() { 0.0 }
+  boil_k() { 0.0 }
+  electron_affinity_kj() { 121.7763 }
+  ionization_kj() { 1086.5 }
+  molar_heat_j_mol_k() { 8.517 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 4.0 }
+  is_metal() { 0.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 1.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

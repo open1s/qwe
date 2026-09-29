@@ -1,0 +1,26 @@
+# std/elements/At.pwe — Astatine (Z=85) (generated).
+module elements.At
+world { }
+
+funcs {
+  atomic_number() { 85.0 }
+  atomic_mass() { 210.0 }
+  group() { 17.0 }
+  period() { 6.0 }
+  block() { 2.0 }
+  category() { 5.0 }
+  electronegativity() { 2.2 }
+  density_g_cm3() { 6.35 }
+  melt_k() { 575.0 }
+  boil_k() { 610.0 }
+  electron_affinity_kj() { 233.0 }
+  ionization_kj() { 899.003 }
+  molar_heat_j_mol_k() { 0.0 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 7.0 }
+  is_metal() { 0.0 }
+  is_metalloid() { 1.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

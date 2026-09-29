@@ -1,0 +1,26 @@
+# std/elements/Ga.pwe — Gallium (Z=31) (generated).
+module elements.Ga
+world { }
+
+funcs {
+  atomic_number() { 31.0 }
+  atomic_mass() { 69.7231 }
+  group() { 13.0 }
+  period() { 4.0 }
+  block() { 2.0 }
+  category() { 4.0 }
+  electronegativity() { 1.81 }
+  density_g_cm3() { 5.91 }
+  melt_k() { 302.9146 }
+  boil_k() { 2673.0 }
+  electron_affinity_kj() { 41.0 }
+  ionization_kj() { 578.8 }
+  molar_heat_j_mol_k() { 25.86 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 3.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

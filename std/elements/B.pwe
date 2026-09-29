@@ -1,0 +1,26 @@
+# std/elements/B.pwe — Boron (Z=5) (generated).
+module elements.B
+world { }
+
+funcs {
+  atomic_number() { 5.0 }
+  atomic_mass() { 10.81 }
+  group() { 13.0 }
+  period() { 2.0 }
+  block() { 2.0 }
+  category() { 5.0 }
+  electronegativity() { 2.04 }
+  density_g_cm3() { 2.08 }
+  melt_k() { 2349.0 }
+  boil_k() { 4200.0 }
+  electron_affinity_kj() { 26.989 }
+  ionization_kj() { 800.6 }
+  molar_heat_j_mol_k() { 11.087 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 3.0 }
+  is_metal() { 0.0 }
+  is_metalloid() { 1.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

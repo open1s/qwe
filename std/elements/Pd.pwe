@@ -1,0 +1,26 @@
+# std/elements/Pd.pwe — Palladium (Z=46) (generated).
+module elements.Pd
+world { }
+
+funcs {
+  atomic_number() { 46.0 }
+  atomic_mass() { 106.421 }
+  group() { 10.0 }
+  period() { 5.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 2.2 }
+  density_g_cm3() { 12.023 }
+  melt_k() { 1828.05 }
+  boil_k() { 3236.0 }
+  electron_affinity_kj() { 54.24 }
+  ionization_kj() { 804.4 }
+  molar_heat_j_mol_k() { 25.98 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 18.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

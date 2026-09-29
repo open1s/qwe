@@ -1,0 +1,26 @@
+# std/elements/Se.pwe — Selenium (Z=34) (generated).
+module elements.Se
+world { }
+
+funcs {
+  atomic_number() { 34.0 }
+  atomic_mass() { 78.9718 }
+  group() { 16.0 }
+  period() { 4.0 }
+  block() { 2.0 }
+  category() { 6.0 }
+  electronegativity() { 2.55 }
+  density_g_cm3() { 4.81 }
+  melt_k() { 494.0 }
+  boil_k() { 958.0 }
+  electron_affinity_kj() { 194.9587 }
+  ionization_kj() { 941.0 }
+  molar_heat_j_mol_k() { 25.363 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 6.0 }
+  is_metal() { 0.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 1.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

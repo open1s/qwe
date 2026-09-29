@@ -1,0 +1,26 @@
+# std/elements/Na.pwe — Sodium (Z=11) (generated).
+module elements.Na
+world { }
+
+funcs {
+  atomic_number() { 11.0 }
+  atomic_mass() { 22.989769282 }
+  group() { 1.0 }
+  period() { 3.0 }
+  block() { 1.0 }
+  category() { 1.0 }
+  electronegativity() { 0.93 }
+  density_g_cm3() { 0.968 }
+  melt_k() { 370.944 }
+  boil_k() { 1156.09 }
+  electron_affinity_kj() { 52.867 }
+  ionization_kj() { 495.8 }
+  molar_heat_j_mol_k() { 28.23 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 1.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

@@ -1,0 +1,26 @@
+# std/elements/Pb.pwe — Lead (Z=82) (generated).
+module elements.Pb
+world { }
+
+funcs {
+  atomic_number() { 82.0 }
+  atomic_mass() { 207.21 }
+  group() { 14.0 }
+  period() { 6.0 }
+  block() { 2.0 }
+  category() { 4.0 }
+  electronegativity() { 1.87 }
+  density_g_cm3() { 11.34 }
+  melt_k() { 600.61 }
+  boil_k() { 2022.0 }
+  electron_affinity_kj() { 34.4204 }
+  ionization_kj() { 715.6 }
+  molar_heat_j_mol_k() { 26.65 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 4.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

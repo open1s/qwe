@@ -1,0 +1,26 @@
+# std/elements/Rh.pwe — Rhodium (Z=45) (generated).
+module elements.Rh
+world { }
+
+funcs {
+  atomic_number() { 45.0 }
+  atomic_mass() { 102.905502 }
+  group() { 9.0 }
+  period() { 5.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 2.28 }
+  density_g_cm3() { 12.41 }
+  melt_k() { 2237.0 }
+  boil_k() { 3968.0 }
+  electron_affinity_kj() { 110.27 }
+  ionization_kj() { 719.7 }
+  molar_heat_j_mol_k() { 24.98 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 1.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

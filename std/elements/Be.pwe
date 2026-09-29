@@ -1,0 +1,26 @@
+# std/elements/Be.pwe — Beryllium (Z=4) (generated).
+module elements.Be
+world { }
+
+funcs {
+  atomic_number() { 4.0 }
+  atomic_mass() { 9.01218315 }
+  group() { 2.0 }
+  period() { 2.0 }
+  block() { 1.0 }
+  category() { 2.0 }
+  electronegativity() { 1.57 }
+  density_g_cm3() { 1.85 }
+  melt_k() { 1560.0 }
+  boil_k() { 2742.0 }
+  electron_affinity_kj() { -48.0 }
+  ionization_kj() { 899.5 }
+  molar_heat_j_mol_k() { 16.443 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

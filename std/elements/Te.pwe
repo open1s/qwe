@@ -1,0 +1,26 @@
+# std/elements/Te.pwe — Tellurium (Z=52) (generated).
+module elements.Te
+world { }
+
+funcs {
+  atomic_number() { 52.0 }
+  atomic_mass() { 127.603 }
+  group() { 16.0 }
+  period() { 5.0 }
+  block() { 2.0 }
+  category() { 5.0 }
+  electronegativity() { 2.1 }
+  density_g_cm3() { 6.24 }
+  melt_k() { 722.66 }
+  boil_k() { 1261.0 }
+  electron_affinity_kj() { 190.161 }
+  ionization_kj() { 869.3 }
+  molar_heat_j_mol_k() { 25.73 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 6.0 }
+  is_metal() { 0.0 }
+  is_metalloid() { 1.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

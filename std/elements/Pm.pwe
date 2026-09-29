@@ -1,0 +1,26 @@
+# std/elements/Pm.pwe — Promethium (Z=61) (generated).
+module elements.Pm
+world { }
+
+funcs {
+  atomic_number() { 61.0 }
+  atomic_mass() { 145.0 }
+  group() { 3.0 }
+  period() { 6.0 }
+  block() { 4.0 }
+  category() { 9.0 }
+  electronegativity() { 1.13 }
+  density_g_cm3() { 7.26 }
+  melt_k() { 1315.0 }
+  boil_k() { 3273.0 }
+  electron_affinity_kj() { 12.45 }
+  ionization_kj() { 540.0 }
+  molar_heat_j_mol_k() { 0.0 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

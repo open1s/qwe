@@ -1,0 +1,26 @@
+# std/elements/Zn.pwe — Zinc (Z=30) (generated).
+module elements.Zn
+world { }
+
+funcs {
+  atomic_number() { 30.0 }
+  atomic_mass() { 65.382 }
+  group() { 12.0 }
+  period() { 4.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 1.65 }
+  density_g_cm3() { 7.14 }
+  melt_k() { 692.68 }
+  boil_k() { 1180.0 }
+  electron_affinity_kj() { -58.0 }
+  ionization_kj() { 906.4 }
+  molar_heat_j_mol_k() { 25.47 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

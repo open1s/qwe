@@ -1,0 +1,26 @@
+# std/elements/Ne.pwe — Neon (Z=10) (generated).
+module elements.Ne
+world { }
+
+funcs {
+  atomic_number() { 10.0 }
+  atomic_mass() { 20.17976 }
+  group() { 18.0 }
+  period() { 2.0 }
+  block() { 2.0 }
+  category() { 8.0 }
+  electronegativity() { 0.0 }
+  density_g_cm3() { 0.9002 }
+  melt_k() { 24.56 }
+  boil_k() { 27.104 }
+  electron_affinity_kj() { -116.0 }
+  ionization_kj() { 2080.7 }
+  molar_heat_j_mol_k() { 0.0 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 8.0 }
+  is_metal() { 0.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 1.0 }
+  is_gas_at_stp() { 1.0 }
+}

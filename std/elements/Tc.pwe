@@ -1,0 +1,26 @@
+# std/elements/Tc.pwe — Technetium (Z=43) (generated).
+module elements.Tc
+world { }
+
+funcs {
+  atomic_number() { 43.0 }
+  atomic_mass() { 98.0 }
+  group() { 7.0 }
+  period() { 5.0 }
+  block() { 3.0 }
+  category() { 3.0 }
+  electronegativity() { 1.9 }
+  density_g_cm3() { 11.0 }
+  melt_k() { 2430.0 }
+  boil_k() { 4538.0 }
+  electron_affinity_kj() { 53.0 }
+  ionization_kj() { 702.0 }
+  molar_heat_j_mol_k() { 24.27 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

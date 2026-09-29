@@ -1,0 +1,26 @@
+# std/elements/K.pwe — Potassium (Z=19) (generated).
+module elements.K
+world { }
+
+funcs {
+  atomic_number() { 19.0 }
+  atomic_mass() { 39.09831 }
+  group() { 1.0 }
+  period() { 4.0 }
+  block() { 1.0 }
+  category() { 1.0 }
+  electronegativity() { 0.82 }
+  density_g_cm3() { 0.862 }
+  melt_k() { 336.7 }
+  boil_k() { 1032.0 }
+  electron_affinity_kj() { 48.383 }
+  ionization_kj() { 418.8 }
+  molar_heat_j_mol_k() { 29.6 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 1.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

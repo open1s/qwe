@@ -1,0 +1,26 @@
+# std/elements/U.pwe — Uranium (Z=92) (generated).
+module elements.U
+world { }
+
+funcs {
+  atomic_number() { 92.0 }
+  atomic_mass() { 238.028913 }
+  group() { 3.0 }
+  period() { 7.0 }
+  block() { 4.0 }
+  category() { 10.0 }
+  electronegativity() { 1.38 }
+  density_g_cm3() { 19.1 }
+  melt_k() { 1405.3 }
+  boil_k() { 4404.0 }
+  electron_affinity_kj() { 50.94 }
+  ionization_kj() { 597.6 }
+  molar_heat_j_mol_k() { 27.665 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 2.0 }
+  is_metal() { 1.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 0.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}

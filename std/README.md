@@ -3,7 +3,8 @@
 A foundational package of PWE modules (`import "std/<name>"`) covering the
 domains a general simulation language needs: mathematics, point kinematics,
 forces, rigid-body mechanics, chemistry, thermal physics, acoustics, optics,
-electromagnetism, and robotics.
+electromagnetism, robotics, and the **periodic table** (`std/periodic` lookup
+by atomic number, plus one module per element in `std/elements/`).
 
 ## How modules are used
 

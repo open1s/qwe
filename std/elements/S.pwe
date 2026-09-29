@@ -1,0 +1,26 @@
+# std/elements/S.pwe — Sulfur (Z=16) (generated).
+module elements.S
+world { }
+
+funcs {
+  atomic_number() { 16.0 }
+  atomic_mass() { 32.06 }
+  group() { 16.0 }
+  period() { 3.0 }
+  block() { 2.0 }
+  category() { 6.0 }
+  electronegativity() { 2.58 }
+  density_g_cm3() { 2.07 }
+  melt_k() { 388.36 }
+  boil_k() { 717.8 }
+  electron_affinity_kj() { 200.4101 }
+  ionization_kj() { 999.6 }
+  molar_heat_j_mol_k() { 22.75 }
+  atomic_radius_pm() { 0.0 }
+  valence_electrons() { 6.0 }
+  is_metal() { 0.0 }
+  is_metalloid() { 0.0 }
+  is_nonmetal() { 1.0 }
+  is_noble_gas() { 0.0 }
+  is_gas_at_stp() { 0.0 }
+}
