@@ -96,6 +96,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0067](https://github.com/open1s/qwe/issues/67) | Medium | detail 102 privacy check walks only `parsed.systems`: `util.g` (unexported) compiles from a `funcs` body; non-`when` system params not walked either | reference/src/lang/compile.rs (check_module_privacy) |
 | [0068](https://github.com/open1s/qwe/issues/68) | Low | `strip_directives` in-string tracker (naive odd-quote count) is poisoned by an unbalanced `"` in a comment: later directive lines not stripped → bogus error 60 (CLI regression vs always-strip) | reference/src/lang/compile.rs (strip_directives) |
 | [0069](https://github.com/open1s/qwe/issues/69) | Low | LSP buffer override runs after the 101 duplicate-module check and never re-checks: buffer-declared `module` collision passes LSP (EMPTY diagnostics) while CLI rejects with 101 | reference/src/lang/compile.rs (load_program_sources_inner order) |
+| [0070](https://github.com/open1s/qwe/issues/70) | Medium | `from … import` alias resolution indexes `modules` with a stale `seen` map after the RFC-0045 reorder: an unexported `from … import g` compiles (detail 102 bypassed) and silently binds to another module's `g` (probe `state=[101.0]` = zmod's `g`, not amod's) | reference/src/lang/compile.rs (load_program_sources_inner :1466-1474 reorder, :1494-1499 lookup) |
+| [0071](https://github.com/open1s/qwe/issues/71) | Medium | `merge_sources` re-derives module declarations from raw text (not the string-aware stripper): an in-string `module` line compiles fine but the artifact fails to run with a false `error 101` — compile/run divergence | reference/src/lang/compile.rs (merge_sources `lines().find_map(parse_module_line)`) |
 
 ## Suggested order
 
@@ -869,5 +871,64 @@ Review pass 28 (triage: closed 0064 as completed):
    0043/0045/0046/0044, mixed status vocabulary (`Done`/`Accepted` vs
    sibling `Normative`).
 3. **Zero open issues** as of this pass.
+
+Review pass 29 (RFC-0045 from-import review; filed 0070):
+
+1. Reviewed the uncommitted RFC-0045 module-system slice (working copy `@`
+   `ff2f49ed`, parent `f741f570`): the `module`/`export`/`import`/`from … import`
+   directives, the shared string-aware stripper, `check_module_privacy`, 2 new
+   unit tests, and 1 conformance case (`modules`). Gates green at the copy:
+   fmt, clippy, both new tests pass, `pwe-conformance` compiles.
+2. 0070 filed (Medium): `load_program_sources_inner` reorders `modules`
+   (root out → stable sort by `(ns, version, path)` → root back, :1466-1474)
+   but the `from … import` alias loop still resolves the child namespace via
+   the **pre-reorder** `seen` index (`:1494-1499` → `modules[i].ns`). With ≥2
+   imports whose discovery order ≠ ns-sorted order the index points at a
+   sibling, so detail 102 consults the wrong module's `export` surface and the
+   alias is rewritten to the wrong qualified name. Probe (CLI `pwe compile`):
+   the identical `from "amod" import g` (g unexported) gives `error 102` with
+   `import "amod"` alone and with `amod`-then-`zmod`, but **compiles rc 0**
+   with `zmod`-then-`amod`; `pwe run --steps 1` of the artifact yields
+   `state=[101.0]` (zmod's `g` = x+100), not the imported `amod.g` (x−1) —
+   a silent, order-dependent wrong binding. The existing 2-module tests can
+   never trigger the reorder, so the defect is uncovered.
+3. Noted (not filed): the export-surface gate runs only at compile time —
+   `merge_sources` never calls `check_module_privacy` and `ProgramSources`
+   drops `exports`. Acceptable today (artifacts come from already-validated
+   compiles); would matter if artifacts are ever loaded from untrusted sources.
+
+Review pass 30 (`23190a53` RFC-0045 complete + `9fdb4515` RFC-0046 basic
+blocks + `162af962` fix(#70); verified 0070 fixed & closed, filed 0071):
+
+1. Snapshot gates green at `162af962`: fmt, clippy `-D warnings`, **398**
+   tests (394 + 4), conformance **25/25** (two new RFC-0045 cases: cross-
+   backend modules + export surface). Builds of 9fdb4515 were green too
+   (397/25).
+2. 23190a53 verified: `from "u" import g` (unexported) → detail 102 on CLI
+   and LSP (position at the item name); exported import compiles; `module
+   util 1.0` parses and compiles; artifact hash changes when an imported
+   module's comment changes (RFC-0045 identity claim, hash
+   `baacf37f… → 98e5297a…`); README/README-ZH/alignment/RFC updated.
+3. 9fdb4515 verified: old `.pweb` (ddc88472 build) runs on the new binary;
+   new straight-line artifact runs on the old binary; branched-gate program
+   runs under `--native-jit`; `eir_cfg_blocks_round_trip` covers block
+   encode/decode determinism; 0046 row → Done, roadmap checkbox updated.
+   Residual noted: RFC-0046 uses `Accepted` (off the sibling `Normative`
+   convention) — cosmetic, non-blocking per the 0064 close.
+4. 0070 independently verified on 9fdb4515 (bug case rc 0 + `state=[101.0]`
+   wrong binding vs control 102) and **closed** after 162af962: both orders
+   now give 102, and with both modules exporting `g` the artifact binds
+   `amod.g` (`state=[0.0]`, order-independent). Comment with probes on the
+   issue; regression test `from_import_privacy_survives_module_reorder`.
+5. 0071 filed (Medium): `merge_sources` uses raw `lines().find_map(parse_module_line)`
+   on embedded (post-strip) sources, so a `module util 9.9` line inside a
+   multi-line `title` is *content* at compile time but a *declaration* at run
+   time — `pwe compile` rc 0, `pwe run` → `error 101: duplicate module name
+   'util' (in <root> and t/u2.pwe)`. Still reproduces on 162af962. Same fix
+   (use `strip_directives`) would also restore the 101/102 checks on the run
+   path (noted, not separately filed, in pass 29).
+6. This file gained a parallel pass-29 record and a 0070 index row from the
+   concurrent reviewer; both are kept — pass 30 above complements pass 29
+   (WIP review vs landed review + fix verification).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
