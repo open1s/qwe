@@ -743,14 +743,18 @@ fn emit_function(f: &Function) -> String {
                 let args = &o[1..];
                 let mut init = String::new();
                 for (i, a) in args.iter().enumerate() {
-                    init.push_str(&format!("  double t{i} = r[{a}];\n"));
+                    init.push_str(&format!("    double t{i} = r[{a}];\n"));
                 }
-                let mut arr = String::from("  { ");
+                let mut arr = String::from("{ ");
                 for i in 0..args.len() {
                     arr.push_str(&format!("t{i}, "));
                 }
                 arr.push('}');
-                format!("{init}  double ta[] = {arr};\n  r[{res}] = pwe_f_{target}(ctx, ta);\n")
+                // Scope each call so its argument temporaries cannot collide with
+                // those of another `Call` in the same block (C has one namespace).
+                format!(
+                    "  {{\n{init}    double ta[] = {arr};\n    r[{res}] = pwe_f_{target}(ctx, ta);\n  }}\n"
+                )
             }
             Opcode::Return => {
                 if let Some(v) = o.first() {
@@ -920,6 +924,23 @@ mod tests {
             "too many must be Err"
         );
         assert!(native.call(999, &[1.0]).is_err(), "unknown id must be Err");
+    }
+
+    #[test]
+    fn native_two_calls_in_one_function_compile() {
+        if !cc_available() {
+            eprintln!("skipping: no `cc` available");
+            return;
+        }
+        // Two `Call`s in the same block must not collide in C's single namespace
+        // (regression: `double ta[]` was redefined).
+        let src = "world { gravity=(0,0,0) entity e { state=(a=0.0, b=0.0, x=0.0) } } \
+                   funcs { g(v) { v * 2.0 } f(a, b) { g(a) + g(b) } } \
+                   systems { update { on=e; dt=1.0  x = f(a, b) } }";
+        let native = NativeProgram::compile(&eir_of(src))
+            .expect("a function calling another twice must compile natively");
+        let id = 0xF000_0001u64; // `f` is the second declared function
+        assert_eq!(native.call(id, &[3.0, 4.0]).unwrap(), 14.0);
     }
 
     #[test]
