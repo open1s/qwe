@@ -1,7 +1,7 @@
 //! Canonical source formatting (`pwe fmt`).
 //!
 //! The formatter is **token-preserving**: it only changes leading indentation
-//! (4 spaces per `{}` block level), strips trailing whitespace, collapses runs
+//! (2 spaces per `{}` block level), strips trailing whitespace, collapses runs
 //! of blank lines, and ensures a single trailing newline. Internal spacing and
 //! comments (`# …`) are left untouched, so the token stream — and therefore the
 //! parsed program and the compiled artifact — is identical. That property is
@@ -86,7 +86,7 @@ pub fn format_source(src: &str) -> String {
             depth
         };
         for _ in 0..indent {
-            out.push_str("    ");
+            out.push_str("  ");
         }
         out.push_str(content);
         out.push('\n');
@@ -125,7 +125,7 @@ mod tests {
             "string mutated:\n{out}"
         );
         // `entity e` is one block level in (inside `world {`), not corrupted.
-        assert!(out.contains("\n    entity e {"), "depth corrupted:\n{out}");
+        assert!(out.contains("\n  entity e {"), "depth corrupted:\n{out}");
     }
 
     #[test]
@@ -134,9 +134,9 @@ mod tests {
         // and braces inside a `//` comment must not change block depth.
         let src = "world {\n  # a \" quote in a comment\n  // { { { comment\n entity e {\n  state=(x=0.0)\n }\n}\n";
         let out = format_source(src);
-        assert!(out.contains("\n    entity e {"), "depth corrupted:\n{out}");
+        assert!(out.contains("\n  entity e {"), "depth corrupted:\n{out}");
         assert!(
-            out.contains("\n        state=(x=0.0)"),
+            out.contains("\n    state=(x=0.0)"),
             "depth corrupted:\n{out}"
         );
         // The comment lines are preserved (indented, content intact).
@@ -162,8 +162,8 @@ mod tests {
         );
         assert!(out.ends_with('\n'));
         assert!(!out.contains("\n\n\n"), "blank runs collapsed");
-        // Indentation is 4 spaces per level.
-        assert!(out.contains("\n    entity e {"));
-        assert!(out.contains("\n        state = (x=1.0)"));
+        // Indentation is 2 spaces per level.
+        assert!(out.contains("\n  entity e {"));
+        assert!(out.contains("\n    state = (x=1.0)"));
     }
 }

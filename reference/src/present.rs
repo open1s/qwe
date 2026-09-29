@@ -887,8 +887,8 @@ function capsuleGeo(r0,len,r1){{ const cs=8, pts=[];
 function makeMesh(e, t) {{
   t = t||0;
   const opacity = e.opacity==null?1:e.opacity, glow = e.glow==null?0.8:e.glow;
-  const matFor = (col, op)=>{{ const c = (col==null? e.color : col), o = (op==null? opacity : op);
-    return new THREE.MeshStandardMaterial({{color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:o<1,opacity:o}}); }};
+  const matFor = (col, op, ds)=>{{ const c = (col==null? e.color : col), o = (op==null? opacity : op);
+    return new THREE.MeshStandardMaterial({{color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:o<1,opacity:o,side:ds?THREE.DoubleSide:THREE.FrontSide}}); }};
   const mat = matFor(null);
   if (e.kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(e.dims[0],e.dims[1],e.dims[2]), mat);
   if (e.kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(e.radius,20,16), mat);
@@ -909,7 +909,7 @@ function groupMesh(parts, t, matFor) {{
     else if (p.k===3) {{ ch=new THREE.Mesh(capsuleGeo(p.a,p.b,p.c), m); }}
     else if (p.k===4) {{ ch=new THREE.Mesh(svgGeo(p.d, p.depth, p.scale), m); }}
     else if (p.k===5) {{ ch=new THREE.Mesh(new ConvexGeometry((p.pts||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2]))), m); }}
-    else if (p.k===6) {{ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), m); }}
+    else if (p.k===6) {{ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), matFor(p.color, p.opacity, true)); }}
     else if (p.k===8) {{ ch=new THREE.Mesh(new THREE.TorusGeometry(p.a,p.b,12,48), m); }}
     else {{ ch=new THREE.Mesh(new THREE.SphereGeometry(p.a,20,16), m); }}
     const off=p.off||[0,0,0];
@@ -1380,8 +1380,8 @@ function capsuleGeo(r0,len,r1){ const cs=8, pts=[];
 function make(e, t){
   t = t||0;
   const opacity=e.opacity==null?1:e.opacity, glow=e.glow==null?0.8:e.glow;
-  const matFor=(col,op)=>{ const c=(col==null? e.color : col), o=(op==null? opacity : op);
-    return new THREE.MeshStandardMaterial({color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:o<1,opacity:o}); };
+  const matFor=(col,op,ds)=>{ const c=(col==null? e.color : col), o=(op==null? opacity : op);
+    return new THREE.MeshStandardMaterial({color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:o<1,opacity:o,side:ds?THREE.DoubleSide:THREE.FrontSide}); };
   const mat=matFor(null);
   if(e.kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(e.dims[0],e.dims[1],e.dims[2]),mat);
   if(e.kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(e.radius,20,16),mat);
@@ -1395,7 +1395,7 @@ function make(e, t){
       else if(p.k===3){ ch=new THREE.Mesh(capsuleGeo(p.a,p.b,p.c), m); }
       else if(p.k===4){ ch=new THREE.Mesh(svgGeo(p.d, p.depth, p.scale), m); }
       else if(p.k===5){ ch=new THREE.Mesh(new ConvexGeometry((p.pts||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2]))), m); }
-      else if(p.k===6){ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), m); }
+      else if(p.k===6){ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), matFor(p.color, p.opacity, true)); }
       else if(p.k===8){ ch=new THREE.Mesh(new THREE.TorusGeometry(p.a,p.b,12,48), m); }
       else { ch=new THREE.Mesh(new THREE.SphereGeometry(p.a,20,16), m); }
       const off=p.off||[0,0,0];
