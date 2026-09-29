@@ -104,6 +104,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0075](https://github.com/open1s/qwe/issues/75) | Low | docs/lang-usage + the `lang.pest` comment document the new part option as `spin = s`, but `spin_opt = { "spin" ~ value }` rejects `=` — the documented form is a parse error (60); only bare `spin 1.5` compiles | docs/lang-usage.md:598, reference/src/lang.pest (spin_opt), f4726072→60b5dc62 docs |
 | [0076](https://github.com/open1s/qwe/issues/76) | Low | `shape_ref` grammar accepts `shape_part_opt*` but the parser's ref branch only reads `at`/`scale` (`_ => {}`) — `part inner color/orbit/axis/spin …` compiles rc 0 and silently does nothing (silent fallback) | reference/src/lang/parser.rs (shape_ref branch), reference/src/lang.pest (shape_ref) |
 | [0077](https://github.com/open1s/qwe/issues/77) | Low | commit messages claim stdlib tests ("atomic structure, molecule molar mass/bonds" in f4726072; "stdlib atom structure" in 60b5dc62) that exist only as uncommitted `reference/tests/stdlib.rs` WIP — tests went 401→402→404 (+1 each), not the claimed areas | issues (f4726072, 60b5dc62 messages), reference/tests/stdlib.rs (uncommitted) |
+| [0078](https://github.com/open1s/qwe/issues/78) | Medium | `b12572a4` leaves `reference/examples/molecule_demo.rs` on the old `&[(u128,u128)]` bond tuples after `with_bonds` took `&[Bond]` — `cargo test --workspace` and `clippy --all-targets` fail with E0308 on main (fmt/release/conformance unaffected; a matching fix sits uncommitted in the working copy) | reference/examples/molecule_demo.rs:102, present.rs `with_bonds` signature |
 
 ## Suggested order
 
@@ -1087,5 +1088,46 @@ schematic atomic structure; filed 0075/0076/0077, commented 0074):
    (`0x1`, `0xFF5555FF` accepted; part colours not normalized to 24-bit);
    the `60b5dc62` message contains a broken fragment ("a `ring` (torus) part
    kind — ;"). `main` advanced to `b12572a4` (Layer B) during this round.
+
+Review pass 35 (landed `b12572a4` — bond order/polarity/electron cloud;
+filed 0078):
+
+1. **Gates red at the landed commit**: `cargo test --workspace` and
+   `clippy --all-targets` fail with E0308 —
+   `reference/examples/molecule_demo.rs:102` still passes `&[(u128,u128); 6]`
+   to `with_bonds`, which now takes `&[Bond]`. fmt, the release CLI build and
+   conformance **25/25** are unaffected. Filed **0078 (Medium)**; a matching
+   fix sits in the uncommitted working copy. With that 4-line patch applied
+   (map via `present::Bond::single`): clippy clean, **405 tests**
+   (+1 `bond_options_order_polarity_cloud`), fmt clean.
+2. Grammar additive: `bond a b [order=n] [polarity=p] [cloud=true]`.
+   Parser silently normalizes: `order` rounds + clamps to 1..=3, `polarity`
+   clamps to 0..=1 — probe `order=9 polarity=2.5` compiles rc 0 (recorded as
+   an observation; presentation-only, docs promise no error).
+3. Model/frame types: `WorldModel.bonds: Vec<BondDecl>`,
+   `present::Bond {a,b,order,polarity,cloud}`, frame JSON bonds change from
+   `[a,b]` arrays to objects. Old recorded frames degrade gracefully in the
+   replay page (`bd.a` undefined → `meshes.get(undefined)` → skip). Soft-body
+   edges map through `Bond::single` (conformance RFC-0040 green).
+4. Viewer fix verified: pre-fix, the frames template called `addBonds(f)` at
+   line 1054 with no definition anywhere in that page (definition existed
+   only in the playground page) — molecule presentation would throw
+   ReferenceError. Both pages now define and call `addBonds`
+   (`if (isMol)` / `if(isMol)`), rendering order (parallel sticks, offset
+   0.11), polarity tint lerp, and the translucent `0x66ccff` cloud; the page
+   served by `pwe present` contains all of them.
+5. Black-box: all 9 `std/molecules` compile; demo runs with unchanged
+   `state=[18.0150, 3.0000]`; `pwe fmt` identity on bond options
+   (`nitrogen.pwe` `order=3 cloud=true` survives); double-compile hash
+   stable; LSP clean for `nitrogen`, `carbon_dioxide`, and the clamp-edge
+   buffer. Data spot-check: CO2 `order=2`×2 + `polarity=0.4` + cloud, N2
+   `order=3` + cloud, O2 `order=2` + cloud, water `polarity=0.35`×2, NaCl
+   `polarity=1.0`, HCl `polarity=0.55`, ball radii reduced (e.g. O/H size
+   0.3/0.22); `tools/gen_molecules.py` has no RNG (deterministic).
+6. 0077 did not recur — this message's "Docs + tests" matches what landed.
+7. Observation (not filed): the bond merge at
+   `compile.rs:1748` comments "merge by name-pair" but now dedups on full
+   `BondDecl` equality — `bond A B` and `bond A B order=2` both survive the
+   merge (duplicate stick pair; presentation-only).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
