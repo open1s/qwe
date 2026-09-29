@@ -101,6 +101,9 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0072](https://github.com/open1s/qwe/issues/72) | Medium | RFC-0046 body ≠ shipped impl: the Status line was rewritten for the `block_count>1`-in-FUNCTIONS form, but Design/Wire-format still prescribe a BLOCKS section / FUNCTIONS minor bump and a `Block{params,ops,term}` model; RFC-0021 (frozen v0.2.0) not updated and `EIR_MINOR` stays 0 — same program, different bytes, same declared version | rfc/RFC-0046-eir-ssa-cfg.md (Design / Wire format), rfc/RFC-0021 §Functions, reference/src/eir.rs :41-42, :2100-2112 |
 | [0073](https://github.com/open1s/qwe/issues/73) | Low | `encode_functions_section` now routes artifacts through `blocks_from_instructions` (write path); that helper panics on an empty instruction stream (`e-1` underflow) or an out-of-range `Br`/`CondBr` target (`instructions[e-1]` OOB) | reference/src/eir.rs (encode_functions_section :2077/:2090, blocks_from_instructions :2229) |
 | [0074](https://github.com/open1s/qwe/issues/74) | Low | README test counts stale: badges + `cargo test` comment + table totals say 399 in both languages while the workspace is 402 (f38aac54 +2, f4726072 +1, neither refreshed); unit row 347 needs 350 | README.md:9/:223/:237-244, README-ZH.md:8/:210/:226/:232 |
+| [0075](https://github.com/open1s/qwe/issues/75) | Low | docs/lang-usage + the `lang.pest` comment document the new part option as `spin = s`, but `spin_opt = { "spin" ~ value }` rejects `=` — the documented form is a parse error (60); only bare `spin 1.5` compiles | docs/lang-usage.md:598, reference/src/lang.pest (spin_opt), f4726072→60b5dc62 docs |
+| [0076](https://github.com/open1s/qwe/issues/76) | Low | `shape_ref` grammar accepts `shape_part_opt*` but the parser's ref branch only reads `at`/`scale` (`_ => {}`) — `part inner color/orbit/axis/spin …` compiles rc 0 and silently does nothing (silent fallback) | reference/src/lang/parser.rs (shape_ref branch), reference/src/lang.pest (shape_ref) |
+| [0077](https://github.com/open1s/qwe/issues/77) | Low | commit messages claim stdlib tests ("atomic structure, molecule molar mass/bonds" in f4726072; "stdlib atom structure" in 60b5dc62) that exist only as uncommitted `reference/tests/stdlib.rs` WIP — tests went 401→402→404 (+1 each), not the claimed areas | issues (f4726072, 60b5dc62 messages), reference/tests/stdlib.rs (uncommitted) |
 
 ## Suggested order
 
@@ -1044,5 +1047,45 @@ fix; filed 0074):
    tests exist only as uncommitted working-copy WIP
    (`reference/tests/stdlib.rs`, +44 lines); the commit itself contains only
    the bond test. Will file if a subsequent commit lands without them.
+
+Review pass 34 (landed `60b5dc62` — animated composite-shape parts +
+schematic atomic structure; filed 0075/0076/0077, commented 0074):
+
+1. Gates green: fmt, clippy `-D warnings`, **404 tests** (+1
+   `micro_shape_parts_carry_ring_colour_and_orbit`), conformance **25/25**,
+   release build. `std/atoms/` = 118 modules + README (119 files).
+2. Grammar additive: `ring` kind (id 8; 7 is the pre-existing shape
+   reference), `pair` `(radius, tube)` value, part opts
+   `color = 0x… | orbit (r,s,p) | axis (x,y,z) | spin <s>`. `expand_shapes`
+   scales a referenced shape's orbit radius by the ref `scale`; snapshot
+   scales by entity size; `present::Shape::Ring` + `Part{color,orbit,spin}`
+   encode as `"k":8`, `"color":N`, `"orbit":[r,s,p,axis]`, `"spin":s`.
+3. Both embedded viewers (live page and playground) render the new fields —
+   `TorusGeometry` for `k===8`/`kind==='ring'`, per-part `matFor(p.color)`,
+   `ang = phase + speed·t` orbit, `spin·t` rotation. Serving smoke: started
+   `pwe present atom.pweb`, fetched the page — all handlers present.
+4. Black-box: demo `cli/examples/atom.pwe` compiles and runs (entity
+   `Oxygen`); **all 118 atom modules compile**; double-compile hash stable;
+   `pwe fmt` identity on the demo and on `std/atoms/O.pwe` (ring/color/orbit
+   survive); LSP diagnostics empty for the demo, `O.pwe`, and a bare-`spin`
+   buffer; molecule demo regression ✓ (`state=[18.0150, 3.0000]`).
+5. Structure sanity: O = 6 protons + 6 neutrons (documented schematic cap
+   `MAX_NUCLEONS=12`), 2 shell rings, 6 orbiting electrons (≤4/shell cap) —
+   generator `tools/gen_atoms.py` is deterministic (fib_sphere, no RNG).
+   Error edges: invalid `color = 0xZZZZZZ` → parse error (no silent None);
+   entity named `orbit` compiles; unknown part opt → clear expected-list
+   error; `ring=(1.0,0.1,0.5)` accepted via the `vec3` branch (third number
+   silently ignored — junk-in observation).
+6. 0075 (Low) — docs/grammar-comment say `spin = s`; parser needs bare
+   `spin s` (rc 1 / LSP 60 on the documented form, rc 0 on the bare form).
+   0076 (Low) — `part <ref>` lines silently drop the new opts (grammar
+   allows them, parser branch is `_ => {}`; probe compiles rc 0 with zero
+   effect). 0077 (Low) — the pass-33 overclaim repeated: `60b5dc62` claims
+   "stdlib atom structure" tests, +1 test only, `stdlib.rs` still uncommitted.
+   0074 commented with the new count (404).
+7. Observations (not filed): `color` lexeme is `0x` + one-or-more hex digits
+   (`0x1`, `0xFF5555FF` accepted; part colours not normalized to 24-bit);
+   the `60b5dc62` message contains a broken fragment ("a `ring` (torus) part
+   kind — ;"). `main` advanced to `b12572a4` (Layer B) during this round.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
