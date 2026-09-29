@@ -14,6 +14,10 @@ world { title = "Water (H2O)"; gravity = (0, 0, 0) }
 Each module also exposes pure data functions, composed from the element modules
 it imports (`std/elements/<Symbol>`):
 
+Bonds carry options: `order` (single/double/triple → parallel sticks), `polarity`
+(`0..1`, tints the bond) and `cloud=true` (a translucent shared-electron region),
+e.g. `bond C1 O1 order=2 polarity=0.4 cloud=true`.
+
 | function | meaning |
 | --- | --- |
 | `<mol>.molar_mass()` | sum of the constituent atoms' `atomic_mass()` (g/mol) |

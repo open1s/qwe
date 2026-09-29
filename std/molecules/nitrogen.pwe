@@ -5,9 +5,9 @@ module molecules.nitrogen
 import "../elements/N"
 world {
   gravity = (0, 0, 0)
-  entity N1 { position = (0.55, 0, 0); shape = sphere; size = 0.5; color = 0x3050F8 }
-  entity N2 { position = (-0.55, 0, 0); shape = sphere; size = 0.5; color = 0x3050F8 }
-  bond N1 N2
+  entity N1 { position = (0.55, 0, 0); shape = sphere; size = 0.3; color = 0x3050F8 }
+  entity N2 { position = (-0.55, 0, 0); shape = sphere; size = 0.3; color = 0x3050F8 }
+  bond N1 N2 order=3 cloud=true
 }
 
 funcs {

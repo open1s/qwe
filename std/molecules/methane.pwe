@@ -6,15 +6,15 @@ import "../elements/C"
 import "../elements/H"
 world {
   gravity = (0, 0, 0)
-  entity C1 { position = (0, 0, 0); shape = sphere; size = 0.55; color = 0x909090 }
-  entity H1 { position = (0.629, 0.629, 0.629); shape = sphere; size = 0.3; color = 0xFFFFFF }
-  entity H2 { position = (-0.629, -0.629, 0.629); shape = sphere; size = 0.3; color = 0xFFFFFF }
-  entity H3 { position = (-0.629, 0.629, -0.629); shape = sphere; size = 0.3; color = 0xFFFFFF }
-  entity H4 { position = (0.629, -0.629, -0.629); shape = sphere; size = 0.3; color = 0xFFFFFF }
-  bond C1 H1
-  bond C1 H2
-  bond C1 H3
-  bond C1 H4
+  entity C1 { position = (0, 0, 0); shape = sphere; size = 0.34; color = 0x909090 }
+  entity H1 { position = (0.629, 0.629, 0.629); shape = sphere; size = 0.22; color = 0xFFFFFF }
+  entity H2 { position = (-0.629, -0.629, 0.629); shape = sphere; size = 0.22; color = 0xFFFFFF }
+  entity H3 { position = (-0.629, 0.629, -0.629); shape = sphere; size = 0.22; color = 0xFFFFFF }
+  entity H4 { position = (0.629, -0.629, -0.629); shape = sphere; size = 0.22; color = 0xFFFFFF }
+  bond C1 H1 polarity=0.15
+  bond C1 H2 polarity=0.15
+  bond C1 H3 polarity=0.15
+  bond C1 H4 polarity=0.15
 }
 
 funcs {

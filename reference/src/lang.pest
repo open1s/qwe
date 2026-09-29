@@ -56,7 +56,13 @@ unit_op = @{ "*" | "/" }
 chan_stmt = { "chan" ~ ident ~ "{" ~ "value" ~ "=" ~ value ~ ";"? ~ "}" }
 // A render bond between two entities (`bond H1 O`), drawn as a ball-and-stick
 // line. Presentation only (not a physics constraint); used for molecules.
-bond_stmt = { "bond" ~ ident ~ ident }
+bond_stmt = { "bond" ~ ident ~ ident ~ bond_opt* }
+// How the viewer draws a bond: order = parallel sticks (single/double/triple),
+// polarity (0..1) tints it, cloud = a translucent shared-electron region.
+bond_opt = _{ bond_order | bond_polarity | bond_cloud }
+bond_order = { "order" ~ "=" ~ value }
+bond_polarity = { "polarity" ~ "=" ~ value }
+bond_cloud = { "cloud" ~ "=" ~ boolean }
 // `struct Name { field = <default>; field = <other-struct>; … }` — a named
 // record flattened to dotted state slots (`pos.x`, `pos.y`, …).
 struct_stmt = { "struct" ~ ident ~ "{" ~ struct_field* ~ "}" }

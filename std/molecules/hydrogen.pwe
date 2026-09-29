@@ -5,8 +5,8 @@ module molecules.hydrogen
 import "../elements/H"
 world {
   gravity = (0, 0, 0)
-  entity H1 { position = (0.37, 0, 0); shape = sphere; size = 0.3; color = 0xFFFFFF }
-  entity H2 { position = (-0.37, 0, 0); shape = sphere; size = 0.3; color = 0xFFFFFF }
+  entity H1 { position = (0.37, 0, 0); shape = sphere; size = 0.22; color = 0xFFFFFF }
+  entity H2 { position = (-0.37, 0, 0); shape = sphere; size = 0.22; color = 0xFFFFFF }
   bond H1 H2
 }
 

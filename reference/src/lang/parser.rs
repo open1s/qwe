@@ -1373,7 +1373,30 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let mut inner = item.into_inner();
                             let a = next_pair(&mut inner)?.as_str().to_string();
                             let b = next_pair(&mut inner)?.as_str().to_string();
-                            model.bonds.push((a, b));
+                            let mut order = 1u8;
+                            let mut polarity = 0.0f64;
+                            let mut cloud = false;
+                            for opt in inner {
+                                let rule = opt.as_rule();
+                                let v = next_pair(&mut opt.into_inner())?;
+                                match rule {
+                                    Rule::bond_order => {
+                                        order = parse_value(v).round().clamp(1.0, 3.0) as u8;
+                                    }
+                                    Rule::bond_polarity => {
+                                        polarity = parse_value(v).clamp(0.0, 1.0);
+                                    }
+                                    Rule::bond_cloud => cloud = v.as_str() == "true",
+                                    _ => {}
+                                }
+                            }
+                            model.bonds.push(crate::dsl::BondDecl {
+                                a,
+                                b,
+                                order,
+                                polarity,
+                                cloud,
+                            });
                         }
                         Rule::shape_stmt => {
                             // `shape <name> { part <kind> = <params> [at (x,y,z)]; }`

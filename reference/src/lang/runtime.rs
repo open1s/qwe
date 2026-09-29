@@ -43,9 +43,9 @@ pub struct LangRuntime {
     /// Field names that are solver-internal (`wave`'s `prev` time-shift buffer)
     /// and are not presented as physical fields.
     hidden_fields: std::collections::BTreeSet<String>,
-    /// Render bonds (entity-id pairs): RFC-0040 soft-body edges plus declared
-    /// `bond a b` (molecules). Drawn as ball-and-stick lines.
-    bonds: Vec<(u128, u128)>,
+    /// Render bonds: RFC-0040 soft-body edges plus declared `bond a b`
+    /// (molecules). Drawn ball-and-stick, with order/polarity/cloud.
+    bonds: Vec<crate::present::Bond>,
     /// Optional peer region: when set, `send` also routes to the peer's channel.
     peer_region: Option<pwe_api::RegionId>,
     /// Execution context for `time`/`random`/`emit` (seeded → reproducible).
@@ -218,13 +218,25 @@ impl LangRuntime {
             .filter(|s| s.kind == "wave")
             .filter_map(|s| s.string_params.get("prev").cloned())
             .collect();
-        let mut bonds = compiled.parsed.model.soft_bonds();
+        let mut bonds: Vec<crate::present::Bond> = compiled
+            .parsed
+            .model
+            .soft_bonds()
+            .into_iter()
+            .map(|(a, b)| crate::present::Bond::single(a, b))
+            .collect();
         {
             let name_to_id: std::collections::BTreeMap<&String, u128> =
                 entity_names.iter().map(|(id, n)| (n, *id)).collect();
-            for (a, b) in &compiled.parsed.model.bonds {
-                if let (Some(&ia), Some(&ib)) = (name_to_id.get(a), name_to_id.get(b)) {
-                    bonds.push((ia, ib));
+            for bd in &compiled.parsed.model.bonds {
+                if let (Some(&ia), Some(&ib)) = (name_to_id.get(&bd.a), name_to_id.get(&bd.b)) {
+                    bonds.push(crate::present::Bond {
+                        a: ia,
+                        b: ib,
+                        order: bd.order,
+                        polarity: bd.polarity,
+                        cloud: bd.cloud,
+                    });
                 }
             }
         }

@@ -6,11 +6,11 @@ import "../elements/C"
 import "../elements/O"
 world {
   gravity = (0, 0, 0)
-  entity C1 { position = (0, 0, 0); shape = sphere; size = 0.55; color = 0x909090 }
-  entity O1 { position = (1.16, 0, 0); shape = sphere; size = 0.5; color = 0xFF0D0D }
-  entity O2 { position = (-1.16, 0, 0); shape = sphere; size = 0.5; color = 0xFF0D0D }
-  bond C1 O1
-  bond C1 O2
+  entity C1 { position = (0, 0, 0); shape = sphere; size = 0.34; color = 0x909090 }
+  entity O1 { position = (1.16, 0, 0); shape = sphere; size = 0.3; color = 0xFF0D0D }
+  entity O2 { position = (-1.16, 0, 0); shape = sphere; size = 0.3; color = 0xFF0D0D }
+  bond C1 O1 order=2 polarity=0.4 cloud=true
+  bond C1 O2 order=2 polarity=0.4 cloud=true
 }
 
 funcs {

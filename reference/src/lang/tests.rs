@@ -3538,10 +3538,29 @@ fn bond_declaration_attaches_render_bonds() {
     let rt = LangRuntime::compile(src).unwrap();
     let bonds = rt.present_frame(None).bonds;
     assert_eq!(bonds.len(), 2, "two bonds");
+    let pairs: Vec<(u128, u128)> = bonds.iter().map(|b| (b.a, b.b)).collect();
     assert!(
-        bonds.contains(&(2, 1)) && bonds.contains(&(3, 1)),
-        "H-O pairs: {bonds:?}"
+        pairs.contains(&(2, 1)) && pairs.contains(&(3, 1)),
+        "H-O pairs: {pairs:?}"
     );
+    assert!(bonds
+        .iter()
+        .all(|b| b.order == 1 && b.polarity == 0.0 && !b.cloud));
+}
+
+#[test]
+fn bond_options_order_polarity_cloud() {
+    // Layer B: a bond carries order (single/double/triple), polarity, and an
+    // electron-cloud hint for the viewer.
+    let src = "world { gravity=(0,0,0) \
+        entity C { position=(0,0,0) } entity O { position=(1.16,0,0) } \
+        bond C O order=2 polarity=0.6 cloud=true }";
+    let rt = LangRuntime::compile(src).unwrap();
+    let bonds = rt.present_frame(None).bonds;
+    assert_eq!(bonds.len(), 1);
+    assert_eq!(bonds[0].order, 2, "double bond");
+    assert!((bonds[0].polarity - 0.6).abs() < 1e-9, "polarity");
+    assert!(bonds[0].cloud, "shared-electron cloud");
 }
 
 #[test]

@@ -54,6 +54,30 @@ pub enum Shape {
     Point,
 }
 
+/// A render bond between two atoms (molecules): the baseline is a line/stick;
+/// `order` draws parallel sticks (single/double/triple), `polarity` tints it, and
+/// `cloud` adds a translucent shared-electron region.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Bond {
+    pub a: u128,
+    pub b: u128,
+    pub order: u8,
+    pub polarity: f64,
+    pub cloud: bool,
+}
+
+impl Bond {
+    pub fn single(a: u128, b: u128) -> Self {
+        Self {
+            a,
+            b,
+            order: 1,
+            polarity: 0.0,
+            cloud: false,
+        }
+    }
+}
+
 /// One part of a composite (`group`) shape: a primitive with a local offset and
 /// an optional per-part colour and animation.
 #[derive(Clone, Debug)]
@@ -161,9 +185,8 @@ pub struct PresentationFrame {
     pub channels: Vec<ChannelVisual>,
     pub fields: Vec<FieldVisual>,
     pub camera: Option<CameraVisual>,
-    /// Bonded entity-id pairs (for molecule rendering): drawn as lines between
-    /// the two atoms' positions.
-    pub bonds: Vec<(u128, u128)>,
+    /// Render bonds between atoms (molecules): order/polarity/cloud.
+    pub bonds: Vec<Bond>,
 }
 
 impl PresentationFrame {
@@ -434,7 +457,7 @@ pub fn snapshot_with(
 
 /// Returns a copy of `frame` with the given bonded entity-id pairs attached
 /// (for molecule rendering).
-pub fn with_bonds(frame: &PresentationFrame, bonds: &[(u128, u128)]) -> PresentationFrame {
+pub fn with_bonds(frame: &PresentationFrame, bonds: &[Bond]) -> PresentationFrame {
     let mut out = frame.clone();
     out.bonds = bonds.to_vec();
     out
@@ -737,11 +760,18 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
         out.push_str("]}");
     }
     out.push_str("],\"bonds\":[");
-    for (i, (a, b)) in frame.bonds.iter().enumerate() {
+    for (i, bd) in frame.bonds.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
-        out.push_str(&format!("[{a},{b}]"));
+        out.push_str(&format!(
+            "{{\"a\":{},\"b\":{},\"order\":{},\"polarity\":{},\"cloud\":{}}}",
+            bd.a,
+            bd.b,
+            bd.order,
+            fmt_f64(bd.polarity),
+            bd.cloud
+        ));
     }
     out.push_str("]}");
     out
@@ -889,6 +919,36 @@ function groupMesh(parts, t, matFor) {{
     g.add(ch);
   }}
   return g;
+}}
+function addBonds(frame){{
+  const up=new THREE.Vector3(0,1,0);
+  for(const bd of frame.bonds){{
+    const A=meshes.get(bd.a),B=meshes.get(bd.b); if(!A||!B) continue;
+    const p1=A.position,p2=B.position;
+    const dir=p2.clone().sub(p1); const len=dir.length(); if(len<1e-6) continue;
+    const n=dir.clone().normalize();
+    const ref=Math.abs(n.dot(up))>0.9? new THREE.Vector3(1,0,0): up;
+    const v=new THREE.Vector3().crossVectors(n,ref.clone().addScaledVector(n,-n.dot(ref)).normalize());
+    const order=Math.max(1,bd.order||1), pol=bd.polarity||0;
+    for(let i=0;i<order;i++){{
+      const off=(i-(order-1)/2)*0.11;
+      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,len,8,1,true), new THREE.MeshPhongMaterial({{color:0xcccccc,transparent:true,opacity:0.9}}));
+      m.position.copy(p1).add(p2).multiplyScalar(0.5).addScaledVector(v,off);
+      m.quaternion.setFromUnitVectors(up,n); scene.add(m);decals.push(m);
+    }}
+    if(pol>0){{
+      const ca=new THREE.Color(A.material.color), cb=new THREE.Color(B.material.color);
+      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.058,0.058,len,8,1,true), new THREE.MeshPhongMaterial({{color:ca.lerp(cb,0.5+0.5*pol),transparent:true,opacity:0.55}}));
+      m.position.copy(p1).add(p2).multiplyScalar(0.5);
+      m.quaternion.setFromUnitVectors(up,n); scene.add(m);decals.push(m);
+    }}
+    if(bd.cloud){{
+      const geo=new THREE.SphereGeometry(1,16,12); geo.scale(0.16,0.16,len*0.7);
+      const m=new THREE.Mesh(geo,new THREE.MeshPhongMaterial({{color:0x66ccff,transparent:true,opacity:0.28}}));
+      m.position.copy(p1).add(p2).multiplyScalar(0.5);
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),n); scene.add(m);decals.push(m);
+    }}
+  }}
 }}
 const decals = [];
 function addOrbit(center, r, color) {{
@@ -1529,15 +1589,33 @@ function addVel(x,y,z,vx,vy,vz,color){
   scene.add(a);decals.push(a);
 }
 function addBonds(frame){
-  for(const [a,b] of frame.bonds){
-    const A=meshes.get(a),B=meshes.get(b); if(!A||!B) continue;
+  const up=new THREE.Vector3(0,1,0);
+  for(const bd of frame.bonds){
+    const A=meshes.get(bd.a),B=meshes.get(bd.b); if(!A||!B) continue;
     const p1=A.position,p2=B.position;
     const dir=p2.clone().sub(p1); const len=dir.length(); if(len<1e-6) continue;
-    const m=new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,len,8,1,true),
-      new THREE.MeshPhongMaterial({color:0xcccccc,transparent:true,opacity:0.9}));
-    m.position.copy(p1).add(p2).multiplyScalar(0.5);
-    m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir.clone().normalize());
-    scene.add(m);decals.push(m);
+    const n=dir.clone().normalize();
+    const ref=Math.abs(n.dot(up))>0.9? new THREE.Vector3(1,0,0): up;
+    const v=new THREE.Vector3().crossVectors(n,ref.clone().addScaledVector(n,-n.dot(ref)).normalize());
+    const order=Math.max(1,bd.order||1), pol=bd.polarity||0;
+    for(let i=0;i<order;i++){
+      const off=(i-(order-1)/2)*0.11;
+      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,len,8,1,true), new THREE.MeshPhongMaterial({color:0xcccccc,transparent:true,opacity:0.9}));
+      m.position.copy(p1).add(p2).multiplyScalar(0.5).addScaledVector(v,off);
+      m.quaternion.setFromUnitVectors(up,n); scene.add(m);decals.push(m);
+    }
+    if(pol>0){
+      const ca=new THREE.Color(A.material.color), cb=new THREE.Color(B.material.color);
+      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.058,0.058,len,8,1,true), new THREE.MeshPhongMaterial({color:ca.lerp(cb,0.5+0.5*pol),transparent:true,opacity:0.55}));
+      m.position.copy(p1).add(p2).multiplyScalar(0.5);
+      m.quaternion.setFromUnitVectors(up,n); scene.add(m);decals.push(m);
+    }
+    if(bd.cloud){
+      const geo=new THREE.SphereGeometry(1,16,12); geo.scale(0.16,0.16,len*0.7);
+      const m=new THREE.Mesh(geo,new THREE.MeshPhongMaterial({color:0x66ccff,transparent:true,opacity:0.28}));
+      m.position.copy(p1).add(p2).multiplyScalar(0.5);
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),n); scene.add(m);decals.push(m);
+    }
   }
 }
 let alive=true, inflight=null;

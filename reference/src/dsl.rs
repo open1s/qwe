@@ -55,6 +55,17 @@ pub struct PoolDecl {
     pub decl: EntityDecl,
 }
 
+/// One declared render bond (`bond a b …`): the two entity names, plus how the
+/// viewer draws the stick (order = parallel bonds, polarity tint, electron cloud).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BondDecl {
+    pub a: String,
+    pub b: String,
+    pub order: u8,
+    pub polarity: f64,
+    pub cloud: bool,
+}
+
 /// One declared entity in a world model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityDecl {
@@ -175,9 +186,10 @@ pub struct WorldModel {
     pub fields: Vec<FieldDecl>,
     /// User-defined custom shapes: name -> parts (multi-primitive, local offsets).
     pub shapes: std::collections::BTreeMap<String, Vec<crate::components::ShapePart>>,
-    /// Render bonds between named entities (`bond a b`), drawn as ball-and-stick
-    /// lines (e.g. molecules). Visualization only; not a physics constraint.
-    pub bonds: Vec<(String, String)>,
+    /// Render bonds between named entities (`bond a b [order=n] [polarity=p]
+    /// [cloud=true]`), drawn ball-and-stick (e.g. molecules). Visualization
+    /// only; not a physics constraint.
+    pub bonds: Vec<BondDecl>,
 }
 
 impl WorldModel {

@@ -6,11 +6,11 @@ import "../elements/H"
 import "../elements/O"
 world {
   gravity = (0, 0, 0)
-  entity O1 { position = (0, 0, 0); shape = sphere; size = 0.5; color = 0xFF0D0D }
-  entity H1 { position = (0.757, 0.586, 0); shape = sphere; size = 0.3; color = 0xFFFFFF }
-  entity H2 { position = (-0.757, 0.586, 0); shape = sphere; size = 0.3; color = 0xFFFFFF }
-  bond O1 H1
-  bond O1 H2
+  entity O1 { position = (0, 0, 0); shape = sphere; size = 0.3; color = 0xFF0D0D }
+  entity H1 { position = (0.757, 0.586, 0); shape = sphere; size = 0.22; color = 0xFFFFFF }
+  entity H2 { position = (-0.757, 0.586, 0); shape = sphere; size = 0.22; color = 0xFFFFFF }
+  bond O1 H1 polarity=0.35
+  bond O1 H2 polarity=0.35
 }
 
 funcs {
