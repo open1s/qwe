@@ -109,7 +109,7 @@ shape_builtin = { "part" ~ shape_kind ~ "=" ~ shape_part_value ~ shape_part_opt*
 // `part <shape> [at (x,y,z)] [scale s];` includes another declared shape.
 shape_ref = { "part" ~ ident ~ shape_part_opt* ~ ";"? }
 shape_part_value = _{ string | hull_list | vec3 | pair | value }
-shape_part_opt = _{ at_opt | depth_opt | scale_opt | faces_opt | part_color_opt | orbit_opt | axis_opt | spin_opt }
+shape_part_opt = _{ at_opt | depth_opt | scale_opt | faces_opt | part_color_opt | part_opacity_opt | orbit_opt | axis_opt | spin_opt }
 faces_opt = { "faces" ~ "=" ~ faces_list }
 faces_list = { "[" ~ face ~ ("," ~ face)* ~ "]" }
 face = { "[" ~ ASCII_DIGIT+ ~ ("," ~ ASCII_DIGIT+)* ~ "]" }
@@ -120,6 +120,7 @@ scale_opt = { "scale" ~ value }
 // nuclei and orbiting electrons). `orbit (radius, speed, phase)`; `axis (x,y,z)`
 // sets the orbit-plane normal (default local +Z); `spin = s` self-rotates.
 part_color_opt = { "color" ~ "=" ~ color }
+part_opacity_opt = { "opacity" ~ "=" ~ value }
 orbit_opt = { "orbit" ~ vec3 }
 axis_opt = { "axis" ~ vec3 }
 spin_opt = { "spin" ~ value }

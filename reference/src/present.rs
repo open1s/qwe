@@ -85,6 +85,8 @@ pub struct Part {
     pub shape: Shape,
     pub offset: Vec3,
     pub color: Option<u32>,
+    /// Per-part opacity in `[0, 1]`; `None` = the entity's opacity.
+    pub opacity: Option<f64>,
     pub orbit: Option<Orbit>,
     pub spin: f64,
 }
@@ -361,6 +363,7 @@ pub fn snapshot_with(
                                     p.offset.2 * whole,
                                 ),
                                 color: p.color,
+                                opacity: p.opacity,
                                 orbit: p.orbit.map(|(radius, speed, phase)| Orbit {
                                     radius: radius * whole,
                                     speed,
@@ -633,6 +636,9 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
                     if let Some(c) = part.color {
                         let _ = write!(out, ",\"color\":{c}");
                     }
+                    if let Some(o) = part.opacity {
+                        let _ = write!(out, ",\"opacity\":{}", fmt_f64(o));
+                    }
                     if let Some(o) = &part.orbit {
                         let _ = write!(
                             out,
@@ -881,8 +887,8 @@ function capsuleGeo(r0,len,r1){{ const cs=8, pts=[];
 function makeMesh(e, t) {{
   t = t||0;
   const opacity = e.opacity==null?1:e.opacity, glow = e.glow==null?0.8:e.glow;
-  const matFor = (col)=>{{ const c = (col==null? e.color : col);
-    return new THREE.MeshStandardMaterial({{color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity}}); }};
+  const matFor = (col, op)=>{{ const c = (col==null? e.color : col), o = (op==null? opacity : op);
+    return new THREE.MeshStandardMaterial({{color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:o<1,opacity:o}}); }};
   const mat = matFor(null);
   if (e.kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(e.dims[0],e.dims[1],e.dims[2]), mat);
   if (e.kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(e.radius,20,16), mat);
@@ -898,7 +904,7 @@ function makeMesh(e, t) {{
 }}
 function groupMesh(parts, t, matFor) {{
   const g=new THREE.Group();
-  for (const p of parts) {{ const m=matFor(p.color); let ch;
+  for (const p of parts) {{ const m=matFor(p.color, p.opacity); let ch;
     if (p.k===2) {{ ch=new THREE.Mesh(new THREE.BoxGeometry(p.a,p.b,p.c), m); }}
     else if (p.k===3) {{ ch=new THREE.Mesh(capsuleGeo(p.a,p.b,p.c), m); }}
     else if (p.k===4) {{ ch=new THREE.Mesh(svgGeo(p.d, p.depth, p.scale), m); }}
@@ -1004,7 +1010,9 @@ function renderFields(fields) {{
     const W=fl.width, H=fl.height, D=fl.depth, dx=fl.dx, st=fl.stride||1;
     let lo=Infinity, hi=-Infinity;
     for (const v of fl.cells) {{ if (v<lo) lo=v; if (v>hi) hi=v; }}
-    if (!(hi>lo)) return;
+    if (hi-lo < 1e-6) {{ const old=fieldObjects.get(fl.name);
+      if (old) {{ if (old.mc) {{ scene.remove(old.mc); disposeObj(old.mc); if(old.trough&&old.trough.mc) scene.remove(old.trough.mc); }} if (old.line) scene.remove(old.line); if (old.pts) scene.remove(old.pts); fieldObjects.delete(fl.name); }}
+      return; }}
     const full=new Float32Array(W*H*D);
     if (st===1) {{ for (let i=0;i<fl.cells.length && i<full.length;i++) full[i]=fl.cells[i]; }}
     else {{ full.fill(0); for (let s=0;s<fl.cells.length;s++) {{ const lin=s*st; if (lin<full.length) full[lin]=fl.cells[s]; }} }}
@@ -1372,8 +1380,8 @@ function capsuleGeo(r0,len,r1){ const cs=8, pts=[];
 function make(e, t){
   t = t||0;
   const opacity=e.opacity==null?1:e.opacity, glow=e.glow==null?0.8:e.glow;
-  const matFor=(col)=>{ const c=(col==null? e.color : col);
-    return new THREE.MeshStandardMaterial({color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:opacity<1,opacity:opacity}); };
+  const matFor=(col,op)=>{ const c=(col==null? e.color : col), o=(op==null? opacity : op);
+    return new THREE.MeshStandardMaterial({color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:o<1,opacity:o}); };
   const mat=matFor(null);
   if(e.kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(e.dims[0],e.dims[1],e.dims[2]),mat);
   if(e.kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(e.radius,20,16),mat);
@@ -1382,7 +1390,7 @@ function make(e, t){
   if(e.kind==='capsule') return new THREE.Mesh(capsuleGeo(e.r0||0.06, e.len||0.3, e.r1||0.06), mat);
   if(e.kind==='group' && e.parts){
     const g=new THREE.Group();
-    for(const p of e.parts){ const m=matFor(p.color); let ch;
+    for(const p of e.parts){ const m=matFor(p.color, p.opacity); let ch;
       if(p.k===2){ ch=new THREE.Mesh(new THREE.BoxGeometry(p.a,p.b,p.c), m); }
       else if(p.k===3){ ch=new THREE.Mesh(capsuleGeo(p.a,p.b,p.c), m); }
       else if(p.k===4){ ch=new THREE.Mesh(svgGeo(p.d, p.depth, p.scale), m); }
@@ -1446,7 +1454,11 @@ function renderFields(fields) {
     const W=fl.width, H=fl.height, D=fl.depth, dx=fl.dx, st=fl.stride||1;
     let lo=Infinity, hi=-Infinity;
     for (const v of fl.cells) { if (v<lo) lo=v; if (v>hi) hi=v; }
-    if (!(hi>lo)) return;
+    // A uniform field has nothing to draw: remove any stale mesh from an
+    // earlier frame (otherwise the isosurface lingers after the wave decays).
+    if (hi-lo < 1e-6) { const old=fieldObjects.get(fl.name);
+      if (old) { if (old.mc) { scene.remove(old.mc); disposeObj(old.mc); if(old.trough&&old.trough.mc) scene.remove(old.trough.mc); } if (old.line) scene.remove(old.line); if (old.pts) scene.remove(old.pts); fieldObjects.delete(fl.name); }
+      return; }
     const full=new Float32Array(W*H*D);
     if (st===1) { for (let i=0;i<fl.cells.length && i<full.length;i++) full[i]=fl.cells[i]; }
     else { full.fill(0); for (let s=0;s<fl.cells.length;s++) { const lin=s*st; if (lin<full.length) full[lin]=fl.cells[s]; } }

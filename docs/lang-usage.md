@@ -597,6 +597,8 @@ Presentation-only part options (all optional; they never affect semantics):
 
 * `color = 0xRRGGBB` — overrides the entity colour for this part (multi-colour
   shapes: protons vs neutrons vs electrons);
+* `opacity = o` — overrides the entity opacity for this part (`0..1`); makes a
+  part faint/transparent (e.g. a pale electron orbit);
 * `spin s` — self-rotation speed in rad/s;
 * `orbit (radius, speed, phase)` — animates the part around the entity's local
   origin (electrons orbiting a nucleus), `speed` in rad/s; `axis (x,y,z)` sets
@@ -625,7 +627,7 @@ field name; cell writes are visible to later reads in the same step.
 | `linear` | `slots`,`dt`,`row0=(…)`,… | state | `ds/dt = A·s + c` (Euler) |
 | `nbody` (velocity-Verlet) | `G`,`dt` | state | inverse-square; `state=(px,py,pz,vx,vy,vz,m)` |
 | `send`/`recv` | `on`(req),`chan`,`value` / `on`(req),`chan`,`slot` | channel | channel send/receive (scoped to `on`) |
-| `update` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | explicit Euler |
+| `update` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | explicit Euler (rules read the *original* slot values — no intra-step chaining; give each slot one rule) |
 | `rk4` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | Runge–Kutta 4 |
 | `invariant` | `expr`,`on?` | — | per-step assertion |
 | `watch` | `expr`,`mem`,`into`,`on?` | state | zero-crossing flag |

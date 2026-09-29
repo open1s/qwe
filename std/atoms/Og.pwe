@@ -1,53 +1,67 @@
 # std/atoms/Og.pwe — Oganesson atom (Z=118), schematic (generated).
-# `shape Og_atom`: nucleus + electron shells (orbiting). Set on an
-# entity: `entity x { shape = Og_atom; size = 2.0 }`.
+# `Og_atom`: nucleus + electron shells (orbiting).
+# `Og_nucleus`: nucleus only (for laser / transition demos).
 module atoms.Og
 world {
   shape Og_atom {
-    part sphere=0.045 color=0xFF5555 at (0.0679, 0.1558, 0);
-    part sphere=0.045 color=0xFF5555 at (-0.0829, 0.1275, 0.076);
-    part sphere=0.045 color=0xFF5555 at (0.0121, 0.0992, -0.1376);
-    part sphere=0.045 color=0xFF5555 at (0.094, 0.0708, 0.1226);
-    part sphere=0.045 color=0xFF5555 at (-0.1621, 0.0425, -0.0287);
-    part sphere=0.04 color=0x9AA0A6 at (0.1429, 0.0142, -0.0909);
-    part sphere=0.04 color=0x9AA0A6 at (-0.044, -0.0142, 0.1636);
-    part sphere=0.04 color=0x9AA0A6 at (-0.0759, -0.0425, -0.1461);
-    part sphere=0.04 color=0x9AA0A6 at (0.1452, -0.0708, 0.053);
-    part sphere=0.04 color=0x9AA0A6 at (-0.1276, -0.0992, 0.0527);
-    part sphere=0.04 color=0x9AA0A6 at (0.0477, -0.1275, -0.1018);
-    part sphere=0.04 color=0x9AA0A6 at (0.0203, -0.1558, 0.0648);
-    part ring=(0.3, 0.010) color=0x7FB8FF;
-    part sphere=0.035 color=0x4EA1FF orbit (0.3, 2.6, 0.5);
-    part sphere=0.035 color=0x4EA1FF orbit (0.3, 2.6, 3.642);
-    part ring=(0.46, 0.010) color=0x7FB8FF;
-    part sphere=0.035 color=0x4EA1FF orbit (0.46, 1.3, 1);
-    part sphere=0.035 color=0x4EA1FF orbit (0.46, 1.3, 2.571);
-    part sphere=0.035 color=0x4EA1FF orbit (0.46, 1.3, 4.142);
-    part sphere=0.035 color=0x4EA1FF orbit (0.46, 1.3, 5.712);
-    part ring=(0.62, 0.010) color=0x7FB8FF;
-    part sphere=0.035 color=0x4EA1FF orbit (0.62, 0.867, 1.5);
-    part sphere=0.035 color=0x4EA1FF orbit (0.62, 0.867, 3.071);
-    part sphere=0.035 color=0x4EA1FF orbit (0.62, 0.867, 4.642);
-    part sphere=0.035 color=0x4EA1FF orbit (0.62, 0.867, 6.212);
-    part ring=(0.78, 0.010) color=0x7FB8FF;
-    part sphere=0.035 color=0x4EA1FF orbit (0.78, 0.65, 2);
-    part sphere=0.035 color=0x4EA1FF orbit (0.78, 0.65, 3.571);
-    part sphere=0.035 color=0x4EA1FF orbit (0.78, 0.65, 5.142);
-    part sphere=0.035 color=0x4EA1FF orbit (0.78, 0.65, 6.712);
-    part ring=(0.94, 0.010) color=0x7FB8FF;
-    part sphere=0.035 color=0x4EA1FF orbit (0.94, 0.52, 2.5);
-    part sphere=0.035 color=0x4EA1FF orbit (0.94, 0.52, 4.071);
-    part sphere=0.035 color=0x4EA1FF orbit (0.94, 0.52, 5.642);
-    part sphere=0.035 color=0x4EA1FF orbit (0.94, 0.52, 7.212);
-    part ring=(1.1, 0.010) color=0x7FB8FF;
-    part sphere=0.035 color=0x4EA1FF orbit (1.1, 0.433, 3);
-    part sphere=0.035 color=0x4EA1FF orbit (1.1, 0.433, 4.571);
-    part sphere=0.035 color=0x4EA1FF orbit (1.1, 0.433, 6.142);
-    part sphere=0.035 color=0x4EA1FF orbit (1.1, 0.433, 7.712);
-    part ring=(1.26, 0.010) color=0x7FB8FF;
-    part sphere=0.035 color=0x4EA1FF orbit (1.26, 0.371, 3.5);
-    part sphere=0.035 color=0x4EA1FF orbit (1.26, 0.371, 5.071);
-    part sphere=0.035 color=0x4EA1FF orbit (1.26, 0.371, 6.642);
-    part sphere=0.035 color=0x4EA1FF orbit (1.26, 0.371, 8.212);
+    part sphere=0.03 color=0xFF5555 at (0.0524, 0.1201, 0);
+    part sphere=0.03 color=0xFF5555 at (-0.0639, 0.0983, 0.0585);
+    part sphere=0.03 color=0xFF5555 at (0.0093, 0.0764, -0.106);
+    part sphere=0.03 color=0xFF5555 at (0.0725, 0.0546, 0.0945);
+    part sphere=0.03 color=0xFF5555 at (-0.1249, 0.0328, -0.0221);
+    part sphere=0.027 color=0x9AA0A6 at (0.1101, 0.0109, -0.0701);
+    part sphere=0.027 color=0x9AA0A6 at (-0.0339, -0.0109, 0.1261);
+    part sphere=0.027 color=0x9AA0A6 at (-0.0585, -0.0328, -0.1126);
+    part sphere=0.027 color=0x9AA0A6 at (0.1119, -0.0546, 0.0409);
+    part sphere=0.027 color=0x9AA0A6 at (-0.0984, -0.0764, 0.0406);
+    part sphere=0.027 color=0x9AA0A6 at (0.0367, -0.0983, -0.0785);
+    part sphere=0.027 color=0x9AA0A6 at (0.0157, -0.1201, 0.05);
+    part ring=(0.55, 0.012) color=0x7FB8FF;
+    part sphere=0.045 color=0x4EA1FF orbit (0.55, 2.6, 0.5);
+    part sphere=0.045 color=0x4EA1FF orbit (0.55, 2.6, 3.642);
+    part ring=(0.77, 0.012) color=0x7FB8FF;
+    part sphere=0.045 color=0x4EA1FF orbit (0.77, 1.3, 1);
+    part sphere=0.045 color=0x4EA1FF orbit (0.77, 1.3, 2.571);
+    part sphere=0.045 color=0x4EA1FF orbit (0.77, 1.3, 4.142);
+    part sphere=0.045 color=0x4EA1FF orbit (0.77, 1.3, 5.712);
+    part ring=(0.99, 0.012) color=0x7FB8FF;
+    part sphere=0.045 color=0x4EA1FF orbit (0.99, 0.867, 1.5);
+    part sphere=0.045 color=0x4EA1FF orbit (0.99, 0.867, 3.071);
+    part sphere=0.045 color=0x4EA1FF orbit (0.99, 0.867, 4.642);
+    part sphere=0.045 color=0x4EA1FF orbit (0.99, 0.867, 6.212);
+    part ring=(1.21, 0.012) color=0x7FB8FF;
+    part sphere=0.045 color=0x4EA1FF orbit (1.21, 0.65, 2);
+    part sphere=0.045 color=0x4EA1FF orbit (1.21, 0.65, 3.571);
+    part sphere=0.045 color=0x4EA1FF orbit (1.21, 0.65, 5.142);
+    part sphere=0.045 color=0x4EA1FF orbit (1.21, 0.65, 6.712);
+    part ring=(1.43, 0.012) color=0x7FB8FF;
+    part sphere=0.045 color=0x4EA1FF orbit (1.43, 0.52, 2.5);
+    part sphere=0.045 color=0x4EA1FF orbit (1.43, 0.52, 4.071);
+    part sphere=0.045 color=0x4EA1FF orbit (1.43, 0.52, 5.642);
+    part sphere=0.045 color=0x4EA1FF orbit (1.43, 0.52, 7.212);
+    part ring=(1.65, 0.012) color=0x7FB8FF;
+    part sphere=0.045 color=0x4EA1FF orbit (1.65, 0.433, 3);
+    part sphere=0.045 color=0x4EA1FF orbit (1.65, 0.433, 4.571);
+    part sphere=0.045 color=0x4EA1FF orbit (1.65, 0.433, 6.142);
+    part sphere=0.045 color=0x4EA1FF orbit (1.65, 0.433, 7.712);
+    part ring=(1.87, 0.012) color=0x7FB8FF;
+    part sphere=0.045 color=0x4EA1FF orbit (1.87, 0.371, 3.5);
+    part sphere=0.045 color=0x4EA1FF orbit (1.87, 0.371, 5.071);
+    part sphere=0.045 color=0x4EA1FF orbit (1.87, 0.371, 6.642);
+    part sphere=0.045 color=0x4EA1FF orbit (1.87, 0.371, 8.212);
+  }
+  shape Og_nucleus {
+    part sphere=0.03 color=0xFF5555 at (0.0524, 0.1201, 0);
+    part sphere=0.03 color=0xFF5555 at (-0.0639, 0.0983, 0.0585);
+    part sphere=0.03 color=0xFF5555 at (0.0093, 0.0764, -0.106);
+    part sphere=0.03 color=0xFF5555 at (0.0725, 0.0546, 0.0945);
+    part sphere=0.03 color=0xFF5555 at (-0.1249, 0.0328, -0.0221);
+    part sphere=0.027 color=0x9AA0A6 at (0.1101, 0.0109, -0.0701);
+    part sphere=0.027 color=0x9AA0A6 at (-0.0339, -0.0109, 0.1261);
+    part sphere=0.027 color=0x9AA0A6 at (-0.0585, -0.0328, -0.1126);
+    part sphere=0.027 color=0x9AA0A6 at (0.1119, -0.0546, 0.0409);
+    part sphere=0.027 color=0x9AA0A6 at (-0.0984, -0.0764, 0.0406);
+    part sphere=0.027 color=0x9AA0A6 at (0.0367, -0.0983, -0.0785);
+    part sphere=0.027 color=0x9AA0A6 at (0.0157, -0.1201, 0.05);
   }
 }

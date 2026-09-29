@@ -1411,6 +1411,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     let mut offset = (0.0, 0.0, 0.0);
                                     let mut scale = 1.0f64;
                                     let mut color: Option<u32> = None;
+                                    let mut opacity: Option<f64> = None;
                                     let mut orbit: Option<(f64, f64, f64)> = None;
                                     let mut orbit_axis: Option<(f64, f64, f64)> = None;
                                     let mut spin = 0.0f64;
@@ -1440,6 +1441,9 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                                 let v = parse_vec3(inner);
                                                 orbit_axis = Some((v.x, v.y, v.z));
                                             }
+                                            Rule::part_opacity_opt => {
+                                                opacity = Some(parse_value(inner))
+                                            }
                                             Rule::spin_opt => spin = parse_value(inner),
                                             _ => {}
                                         }
@@ -1456,6 +1460,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         scale,
                                         name: Some(refname),
                                         color,
+                                        opacity,
                                         orbit,
                                         orbit_axis,
                                         spin,
@@ -1505,6 +1510,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 let mut scale = 1.0f64;
                                 let mut offset = (0.0, 0.0, 0.0);
                                 let mut color: Option<u32> = None;
+                                let mut opacity: Option<f64> = None;
                                 let mut orbit: Option<(f64, f64, f64)> = None;
                                 let mut orbit_axis: Option<(f64, f64, f64)> = None;
                                 let mut spin = 0.0f64;
@@ -1534,6 +1540,9 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         Rule::axis_opt => {
                                             let v = parse_vec3(inner);
                                             orbit_axis = Some((v.x, v.y, v.z));
+                                        }
+                                        Rule::part_opacity_opt => {
+                                            opacity = Some(parse_value(inner))
                                         }
                                         Rule::spin_opt => spin = parse_value(inner),
                                         Rule::faces_opt => {
@@ -1565,6 +1574,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         scale,
                                         name: None,
                                         color,
+                                        opacity,
                                         orbit,
                                         orbit_axis,
                                         spin,

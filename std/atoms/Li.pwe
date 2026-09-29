@@ -1,20 +1,29 @@
 # std/atoms/Li.pwe — Lithium atom (Z=3), schematic (generated).
-# `shape Li_atom`: nucleus + electron shells (orbiting). Set on an
-# entity: `entity x { shape = Li_atom; size = 2.0 }`.
+# `Li_atom`: nucleus + electron shells (orbiting).
+# `Li_nucleus`: nucleus only (for laser / transition demos).
 module atoms.Li
 world {
   shape Li_atom {
-    part sphere=0.045 color=0xFF5555 at (0.0618, 0.1029, 0);
-    part sphere=0.045 color=0xFF5555 at (-0.0726, 0.0686, 0.0665);
-    part sphere=0.045 color=0xFF5555 at (0.0101, 0.0343, -0.1146);
-    part sphere=0.04 color=0x9AA0A6 at (0.073, 0, 0.0952);
-    part sphere=0.04 color=0x9AA0A6 at (-0.1132, -0.0343, -0.02);
-    part sphere=0.04 color=0x9AA0A6 at (0.0831, -0.0686, -0.0529);
-    part sphere=0.04 color=0x9AA0A6 at (-0.016, -0.1029, 0.0597);
-    part ring=(0.3, 0.010) color=0x7FB8FF;
-    part sphere=0.035 color=0x4EA1FF orbit (0.3, 2.6, 0.5);
-    part sphere=0.035 color=0x4EA1FF orbit (0.3, 2.6, 3.642);
-    part ring=(0.46, 0.010) color=0x7FB8FF;
-    part sphere=0.035 color=0x4EA1FF orbit (0.46, 1.3, 1);
+    part sphere=0.03 color=0xFF5555 at (0.0469, 0.078, 0);
+    part sphere=0.03 color=0xFF5555 at (-0.0551, 0.052, 0.0504);
+    part sphere=0.03 color=0xFF5555 at (0.0076, 0.026, -0.0869);
+    part sphere=0.027 color=0x9AA0A6 at (0.0554, 0, 0.0722);
+    part sphere=0.027 color=0x9AA0A6 at (-0.0859, -0.026, -0.0152);
+    part sphere=0.027 color=0x9AA0A6 at (0.063, -0.052, -0.0401);
+    part sphere=0.027 color=0x9AA0A6 at (-0.0122, -0.078, 0.0453);
+    part ring=(0.55, 0.012) color=0x7FB8FF;
+    part sphere=0.045 color=0x4EA1FF orbit (0.55, 2.6, 0.5);
+    part sphere=0.045 color=0x4EA1FF orbit (0.55, 2.6, 3.642);
+    part ring=(0.77, 0.012) color=0x7FB8FF;
+    part sphere=0.045 color=0x4EA1FF orbit (0.77, 1.3, 1);
+  }
+  shape Li_nucleus {
+    part sphere=0.03 color=0xFF5555 at (0.0469, 0.078, 0);
+    part sphere=0.03 color=0xFF5555 at (-0.0551, 0.052, 0.0504);
+    part sphere=0.03 color=0xFF5555 at (0.0076, 0.026, -0.0869);
+    part sphere=0.027 color=0x9AA0A6 at (0.0554, 0, 0.0722);
+    part sphere=0.027 color=0x9AA0A6 at (-0.0859, -0.026, -0.0152);
+    part sphere=0.027 color=0x9AA0A6 at (0.063, -0.052, -0.0401);
+    part sphere=0.027 color=0x9AA0A6 at (-0.0122, -0.078, 0.0453);
   }
 }

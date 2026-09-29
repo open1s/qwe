@@ -1024,6 +1024,7 @@ pub fn expand_shapes(
                             .or(s.orbit)
                             .map(|(radius, speed, phase)| (radius * p.scale, speed, phase)),
                         color: p.color.or(s.color),
+                        opacity: p.opacity.or(s.opacity),
                         orbit_axis: p.orbit_axis.or(s.orbit_axis),
                         spin: if p.spin != 0.0 { p.spin } else { s.spin },
                         ..s

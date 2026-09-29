@@ -1,15 +1,21 @@
 # std/atoms/He.pwe — Helium atom (Z=2), schematic (generated).
-# `shape He_atom`: nucleus + electron shells (orbiting). Set on an
-# entity: `entity x { shape = He_atom; size = 2.0 }`.
+# `He_atom`: nucleus + electron shells (orbiting).
+# `He_nucleus`: nucleus only (for laser / transition demos).
 module atoms.He
 world {
   shape He_atom {
-    part sphere=0.045 color=0xFF5555 at (0.0595, 0.0675, 0);
-    part sphere=0.045 color=0xFF5555 at (-0.0643, 0.0225, 0.0589);
-    part sphere=0.04 color=0x9AA0A6 at (0.0076, -0.0225, -0.0868);
-    part sphere=0.04 color=0x9AA0A6 at (0.0362, -0.0675, 0.0472);
-    part ring=(0.3, 0.010) color=0x7FB8FF;
-    part sphere=0.035 color=0x4EA1FF orbit (0.3, 2.6, 0.5);
-    part sphere=0.035 color=0x4EA1FF orbit (0.3, 2.6, 3.642);
+    part sphere=0.03 color=0xFF5555 at (0.0443, 0.0503, 0);
+    part sphere=0.03 color=0xFF5555 at (-0.0478, 0.0168, 0.0438);
+    part sphere=0.027 color=0x9AA0A6 at (0.0057, -0.0168, -0.0646);
+    part sphere=0.027 color=0x9AA0A6 at (0.027, -0.0503, 0.0352);
+    part ring=(0.55, 0.012) color=0x7FB8FF;
+    part sphere=0.045 color=0x4EA1FF orbit (0.55, 2.6, 0.5);
+    part sphere=0.045 color=0x4EA1FF orbit (0.55, 2.6, 3.642);
+  }
+  shape He_nucleus {
+    part sphere=0.03 color=0xFF5555 at (0.0443, 0.0503, 0);
+    part sphere=0.03 color=0xFF5555 at (-0.0478, 0.0168, 0.0438);
+    part sphere=0.027 color=0x9AA0A6 at (0.0057, -0.0168, -0.0646);
+    part sphere=0.027 color=0x9AA0A6 at (0.027, -0.0503, 0.0352);
   }
 }

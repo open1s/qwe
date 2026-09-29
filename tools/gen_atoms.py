@@ -47,37 +47,44 @@ def emit(e):
     nucleons = z + max(0, neutrons)
     lines = [
         f"# std/atoms/{sym}.pwe — {e['name']} atom (Z={z}), schematic (generated).",
-        f"# `shape {sym}_atom`: nucleus + electron shells (orbiting). Set on an",
-        f"# entity: `entity x {{ shape = {sym}_atom; size = 2.0 }}`.",
+        f"# `{sym}_atom`: nucleus + electron shells (orbiting).",
+        f"# `{sym}_nucleus`: nucleus only (for laser / transition demos).",
         f"module atoms.{sym}",
         "world {",
         f"  shape {sym}_atom {{",
     ]
+    nuc = []  # raw `part ...` lines for the nucleus, reused by both shapes
     # Nucleus.
     if nucleons > 0:
         draw = min(nucleons, MAX_NUCLEONS)
         p_show = max(1, round(draw * z / nucleons)) if z > 0 else 0
         n_show = draw - p_show
-        r0 = 0.05 + 0.010 * draw
+        r0 = 0.035 + 0.008 * draw
         pts = fib_sphere(draw, r0)
         for i, (x, y, zz) in enumerate(pts):
-            col, rad = (P_COLOR, 0.045) if i < p_show else (N_COLOR, 0.040)
+            col, rad = (P_COLOR, 0.030) if i < p_show else (N_COLOR, 0.027)
             lines.append(
                 f"    part sphere={f(rad)} color=0x{col:06X} at ({f(x)}, {f(y)}, {f(zz)});"
             )
     # Shells: ring + electrons.
     for k, occ in enumerate(shells, start=1):
-        radius = 0.30 + 0.16 * (k - 1)
+        radius = 0.55 + 0.22 * (k - 1)
         speed = round(2.6 / k, 3)
-        lines.append(f"    part ring=({f(radius)}, 0.010) color=0x{RING_COLOR:06X};")
+        lines.append(f"    part ring=({f(radius)}, 0.012) color=0x{RING_COLOR:06X};")
         e_show = min(occ, MAX_E_PER_SHELL)
         for i in range(e_show):
             phase = round(2 * math.pi * i / e_show + 0.5 * k, 3)
             lines.append(
-                f"    part sphere=0.035 color=0x{E_COLOR:06X} "
+                f"    part sphere=0.045 color=0x{E_COLOR:06X} "
                 f"orbit ({f(radius)}, {f(speed)}, {f(phase)});"
             )
-    lines.append("  }")
+    atom_body = lines[6:]
+    nuc_lines = ["  }", f"  shape {sym}_nucleus {{"]
+    for ln in atom_body:
+        if "part" in ln and "orbit" not in ln and "ring=" not in ln.split("part ",1)[-1][:5] and " ring=" not in ln:
+            nuc_lines.append(ln)
+    nuc_lines += ["  }"]
+    lines += nuc_lines
     lines.append("}")
     return "\n".join(lines) + "\n"
 

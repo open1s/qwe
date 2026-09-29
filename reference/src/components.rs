@@ -737,6 +737,9 @@ pub struct ShapePart {
     /// Presentation-only override colour (`0xRRGGBB`); `None` = the entity's
     /// colour. Lets one composite shape mix colours (e.g. protons vs neutrons).
     pub color: Option<u32>,
+    /// Presentation-only override opacity in `[0, 1]`; `None` = the entity's
+    /// opacity. Lets a part be faint/transparent (e.g. electron orbits).
+    pub opacity: Option<f64>,
     /// Animated circular orbit for this part about the entity's local origin:
     /// `(radius, angular_speed_rad_s, phase_rad)`. `None` = static. Used for
     /// electrons orbiting an atomic nucleus.

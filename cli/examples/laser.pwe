@@ -1,0 +1,109 @@
+# Layer C demo — a two-level hydrogen atom pumped from OUTSIDE.
+#
+#   • the electron is a *state-driven* body (position = state slots 0/1/2) and
+#     orbits the nucleus fast; its radius follows the energy level;
+#   • the two faint rings are the energy levels (the "bands");
+#   • an EXTERNAL pump injects energy into the atom over the `pump` channel; the
+#     electron absorbs it and is excited (level 1 -> 2). When the pump stops it
+#     relaxes (2 -> 1) and emits a photon — **created on demand** from a pool
+#     (RFC-0038), not pre-existing — which flies radially outward (the laser
+#     pulse). With no external pump, no photons are produced;
+#
+# Slot 6 is the mass; slots 7-9 are reserved (euler/Z-spin), so generic slots
+# start at 10. `update` rules read the original slot values (no intra-step
+# chaining), so each slot has a single rule.
+import "../../std/atoms/H"
+
+world {
+  title = "Hydrogen atom — external pump → electron transition → laser pulse"
+  gravity = (0, 0, 0)
+
+  # The external pump: energy injected into the atom from outside (a channel a
+  # controller / another region writes to). 0 = no pumping.
+  chan pump { value = 0.0 }
+
+  # Energy levels (the "bands"): two faint shell rings at r1 and r2.
+  shape levels {
+    part ring = (1.10, 0.02) color = 0x7FB8FF opacity = 0.22
+    part ring = (1.54, 0.02) color = 0x7FB8FF opacity = 0.22
+  }
+
+  entity nucleus { shape = H_nucleus; size = 2.0 }
+  entity levels  { shape = levels;   size = 1.0 }
+
+  # The external pump source (an energy beam to the left of the atom): writes
+  # pulses into the `pump` channel. In production this is driven from outside
+  # the world (a controller / another region), not by a self-timer.
+  entity pump_src {
+    position = (-3.0, 0.0, 0.0)
+    state = (p = 0.0)
+    shape = box
+    size = 0.22
+    color = 0xFF66AA
+  }
+
+  # The electron: px,py,pz,vx,vy,vz, mass, [7-9 reserved], r, th, n, pn, em, pu.
+  entity electron {
+    state = (px = 1.10, py = 0.0, pz = 0.0,
+             vx = 0.0, vy = 0.0, vz = 0.0,
+             mass = 0.05,
+             0.0, 0.0, 0.0,
+             r = 1.10, th = 0.0, n = 1.0, pn = 1.0, em = 0.0, pu = 0.0)
+    color = 0x4EA1FF
+    vector = false
+  }
+
+  # Photons are created on demand: a pool of inactive slots, activated by
+  # `spawn` (which copies the electron's state, i.e. its position).
+  pool photon[32] {
+    state = (px = 0.0, py = 0.0, pz = 0.0,
+             vx = 0.0, vy = 0.0, vz = 0.0,
+             mass = 0.06,
+             0.0, 0.0, 0.0,
+             r = 0.0, th = 0.0, n = 0.0, pn = 0.0, em = 0.0, pu = 0.0)
+    shape = sphere
+    size = 0.14
+    color = 0xFFE14D
+  }
+}
+
+systems {
+  # External pumping: a square pulse once per cycle. Being a channel, it can be
+  # driven from outside the world instead.
+  update { on = pump_src; dt = 0.01
+    p = if((t % 3.0) < 1.2, 1.0, 0.0) }
+  send { on = pump_src; chan = pump; value = p }
+
+  # The electron absorbs the pumped energy: excited while pumped, relaxes after.
+  recv { on = electron; chan = pump; slot = 15 }
+  update {
+    on = electron
+    dt = 0.01
+    n  = if(pu > 0.5, 2.0, 1.0)
+    # Spring the orbital radius toward the level's radius (r1=1.10, r2=1.54).
+    r  = r + dt * (0.0 - 6.0 * (r - (1.10 + 0.44 * (n - 1.0))))
+    # Orbit fast; speed ~ 10 / r, wrapped to [0, 2π) in the same rule.
+    th = (th + dt * (10.0 / r)) % 6.283185307179586
+    px = r * cos(th)
+    py = r * sin(th)
+    pz = 0.0
+    # Falling edge (2 -> 1) = emission.
+    em = if(n < pn, 1.0, 0.0)
+    pn = n
+  }
+
+  # Spawn one photon per pump cycle, on the falling edge (step 120 mod 300).
+  spawn { on = electron; pool = photon; every = 300; phase = 120 }
+
+  # Each active photon flies radially outward from the nucleus.
+  update {
+    on = photon
+    dt = 0.01
+    px = px + dt * 3.0 * px / sqrt(px * px + py * py)
+    py = py + dt * 3.0 * py / sqrt(px * px + py * py)
+  }
+
+  # Recycle a slot once its photon is far away.
+  despawn { on = photon; when = px * px + py * py > 16.0 }
+
+}
