@@ -45,10 +45,10 @@ world {
   # The electron: px,py,pz,vx,vy,vz, mass, [7-9 reserved], r, th, n, pn, em, pu.
   entity electron {
     state = (px = 1.10, py = 0.0, pz = 0.0,
-             vx = 0.0, vy = 0.0, vz = 0.0,
-             mass = 0.05,
-             0.0, 0.0, 0.0,
-             r = 1.10, th = 0.0, n = 1.0, pn = 1.0, em = 0.0, pu = 0.0)
+    vx = 0.0, vy = 0.0, vz = 0.0,
+    mass = 0.05,
+    0.0, 0.0, 0.0,
+    r = 1.10, th = 0.0, n = 1.0, pn = 1.0, em = 0.0, pu = 0.0)
     color = 0x4EA1FF
     vector = false
   }
@@ -57,10 +57,10 @@ world {
   # `spawn` (which copies the electron's state, i.e. its position).
   pool photon[32] {
     state = (px = 0.0, py = 0.0, pz = 0.0,
-             vx = 0.0, vy = 0.0, vz = 0.0,
-             mass = 0.06,
-             0.0, 0.0, 0.0,
-             r = 0.0, th = 0.0, n = 0.0, pn = 0.0, em = 0.0, pu = 0.0)
+    vx = 0.0, vy = 0.0, vz = 0.0,
+    mass = 0.06,
+    0.0, 0.0, 0.0,
+    r = 0.0, th = 0.0, n = 0.0, pn = 0.0, em = 0.0, pu = 0.0)
     shape = sphere
     size = 0.14
     color = 0xFFE14D

@@ -1,10 +1,16 @@
 # `std/atoms/` — schematic atomic internal structure
 
-Each module declares a `shape <Sym>_atom` you can attach to an entity:
+Each module declares two shapes you can attach to an entity:
+
+- **`shape <Sym>_atom`** — nucleus + electron shells (the full atom);
+- **`shape <Sym>_nucleus`** — the nucleus alone (protons + neutrons), for demos
+  where the electrons are driven separately (see `cli/examples/laser.pwe`).
 
 ```pwe
 import "std/atoms/O"
 world { gravity = (0, 0, 0) entity Oxygen { shape = O_atom; size = 2.5 } }
+# or, nucleus only:
+world { gravity = (0, 0, 0) entity Core { shape = O_nucleus; size = 2.5 } }
 ```
 
 The shape shows the atom's **internal form**:

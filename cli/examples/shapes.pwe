@@ -28,7 +28,7 @@ world {
   # an arbitrary polyhedron: explicit vertices + index faces (a bipyramid)
   shape gem {
     part poly = [(0,0.9,0), (0.7,0,0.7), (-0.7,0,0.7), (-0.7,0,-0.7), (0.7,0,-0.7), (0,-0.9,0)]
-      faces = [[0,1,2],[0,2,3],[0,3,4],[0,4,1],[5,1,4],[5,4,3],[5,3,2],[5,2,1]] scale 0.9;
+    faces = [[0,1,2],[0,2,3],[0,3,4],[0,4,1],[5,1,4],[5,4,3],[5,3,2],[5,2,1]] scale 0.9;
   }
 
   entity drone { state = (x = -3.0, y = 1.0, z = 0.0) shape = drone; color = 0x4AC3FF }

@@ -1442,7 +1442,11 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                                 orbit_axis = Some((v.x, v.y, v.z));
                                             }
                                             Rule::part_opacity_opt => {
-                                                opacity = Some(parse_value(inner))
+                                                let v = parse_value(inner);
+                                                if !(0.0..=1.0).contains(&v) {
+                                                    return Err(error(Status::Invalid, 105));
+                                                }
+                                                opacity = Some(v);
                                             }
                                             Rule::spin_opt => spin = parse_value(inner),
                                             _ => {}
@@ -1542,7 +1546,11 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                             orbit_axis = Some((v.x, v.y, v.z));
                                         }
                                         Rule::part_opacity_opt => {
-                                            opacity = Some(parse_value(inner))
+                                            let v = parse_value(inner);
+                                            if !(0.0..=1.0).contains(&v) {
+                                                return Err(error(Status::Invalid, 105));
+                                            }
+                                            opacity = Some(v);
                                         }
                                         Rule::spin_opt => spin = parse_value(inner),
                                         Rule::faces_opt => {

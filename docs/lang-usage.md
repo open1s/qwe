@@ -864,6 +864,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 101 | Duplicate module name (two modules declare the same `module`). |
 | 102 | Reference to a non-exported module item. |
 | 103 | A field name is not a lowercase identifier. |
+| 105 | A per-part `opacity` outside `0..1`. |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the

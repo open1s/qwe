@@ -3622,3 +3622,32 @@ fn shape_ref_overrides_part_colour_and_orbit() {
         "orbit override: {json}"
     );
 }
+
+#[test]
+fn per_part_opacity_flows_to_frame_and_ref_override() {
+    // Per-part opacity is parsed, propagates through a shape ref, and reaches
+    // the presentation frame (0..1).
+    let src = "world { gravity=(0,0,0) \
+        shape inner { part sphere=0.1 color=0xFF5555 } \
+        shape outer { part inner at (0,0,0) opacity=0.25 } \
+        entity e { shape = outer } }";
+    let rt = LangRuntime::compile(src).unwrap();
+    let json = crate::present::frame_to_json(&rt.present_frame(None));
+    assert!(
+        json.contains("\"opacity\":0.25"),
+        "per-part opacity: {json}"
+    );
+}
+
+#[test]
+fn part_opacity_out_of_range_is_rejected() {
+    for bad in ["opacity=2.0", "opacity=-1.0"] {
+        let src = format!(
+            "world {{ gravity=(0,0,0) shape s {{ part sphere=0.1 {bad} }} entity e {{ shape=s }} }}"
+        );
+        let err = LangRuntime::compile(&src)
+            .err()
+            .unwrap_or_else(|| panic!("`{bad}` must be rejected"));
+        assert_eq!(err.detail, 105, "detail for `{bad}`");
+    }
+}

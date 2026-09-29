@@ -1490,7 +1490,7 @@ function renderFields(fields) {
       }
       pos.needsUpdate = true; col.needsUpdate = true;
       fieldExtent = Math.max(fieldExtent, W*dx, scale*2);
-      txt += fl.name+' 1D sine |u|max='+hi.toFixed(3)+'<br>';
+      txt += fl.name+' 1D |u|max='+hi.toFixed(3)+'<br>';
       return;
     }
 
