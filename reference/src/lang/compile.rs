@@ -116,6 +116,27 @@ pub fn build_systems(
                     stage: 2,
                 }));
             }
+            "drift" => {
+                let tag = s.string_params.get("tag").cloned().ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        "drift requires `tag = <name>`".to_string(),
+                    )
+                })?;
+                let bodies = tag_ids.get(&tag).cloned().ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        format!("drift references unknown tag '{tag}'"),
+                    )
+                })?;
+                let dt = param(&s.params, "dt", s.byte_offset, &s.kind)?;
+                let damp = s.params.get("damp").copied().unwrap_or(0.0);
+                out.push(Box::new(DriftSystem { bodies, dt, damp }));
+            }
             "pair" => {
                 let tag = s.string_params.get("tag").cloned().ok_or_else(|| {
                     error_at(
@@ -125,7 +146,7 @@ pub fn build_systems(
                         "pair requires `tag = <name>`".to_string(),
                     )
                 })?;
-                let bodies = tag_ids.get(&tag).cloned().ok_or_else(|| {
+                let a = tag_ids.get(&tag).cloned().ok_or_else(|| {
                     error_at(
                         Status::Invalid,
                         48,
@@ -133,12 +154,23 @@ pub fn build_systems(
                         format!("pair references unknown tag '{tag}'"),
                     )
                 })?;
-                if bodies.len() < 2 {
+                let b = match s.string_params.get("other") {
+                    Some(t) => tag_ids.get(t).cloned().ok_or_else(|| {
+                        error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            format!("pair references unknown tag '{t}'"),
+                        )
+                    })?,
+                    None => a.clone(),
+                };
+                if a.len() + b.len() < 2 {
                     return Err(error_at(
                         Status::Invalid,
                         48,
                         s.byte_offset,
-                        "pair needs at least two entities sharing the tag".to_string(),
+                        "pair needs at least two entities".to_string(),
                     ));
                 }
                 let dt = param(&s.params, "dt", s.byte_offset, &s.kind)?;
@@ -156,9 +188,10 @@ pub fn build_systems(
                     })?;
                 let law = parse_expr_str(law_text)?;
                 out.push(Box::new(PairSystem {
-                    bodies: bodies.clone(),
+                    a: a.clone(),
+                    b,
                     dt,
-                    law: law.clone(),
+                    law,
                     entity_map: entity_ids.clone(),
                     state_names_by_id: state_names_by_id.clone(),
                     func_ids: func_ids.clone(),

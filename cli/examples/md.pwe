@@ -36,4 +36,6 @@ systems {
     dt = 0.002
     law = 24.0 / r * (2.0 * pow(1.0 / r, 12.0) - pow(1.0 / r, 6.0))
   }
+  # `pair` only kicks the velocity; `drift` advances the positions.
+  drift { tag = atom; dt = 0.002 }
 }

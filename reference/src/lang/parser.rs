@@ -55,6 +55,7 @@ pub(crate) fn numeric_param_keys(kind: &str) -> &'static [&'static str] {
         "linear" => &["slots", "dt"],
         "nbody" => &["G", "dt"],
         "pair" => &["dt"],
+        "drift" => &["dt", "damp"],
         "send" => &["value"],
         "recv" => &["slot"],
         "update" | "rk4" => &["dt", "every", "substeps"],
@@ -1373,6 +1374,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         }
                         Rule::bonds_stmt => {
                             let mut tag = String::new();
+                            let mut other: Option<String> = None;
                             let mut min = 0.0f64;
                             let mut max = f64::INFINITY;
                             let mut axis: Option<(f64, f64, f64)> = None;
@@ -1384,6 +1386,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 let text = val.as_str().trim().to_string();
                                 match key.as_str() {
                                     "tag" => tag = text,
+                                    "other" => other = Some(text),
                                     "min" => min = text.parse().unwrap_or(0.0),
                                     "within" | "max" => max = text.parse().unwrap_or(f64::INFINITY),
                                     "axis" => {
@@ -1396,6 +1399,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             }
                             model.bond_nets.push(crate::dsl::BondNet {
                                 tag,
+                                other,
                                 min,
                                 max,
                                 axis,

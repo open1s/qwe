@@ -2860,14 +2860,20 @@ fn nb_write(out: &mut Vec<crate::eir::Instruction>, e: u128, slot: usize, v: u32
     ));
 }
 
-/// `pair { tag = <t>; dt = h; law = <expr in r> }` — a general pairwise force
-/// between every pair of `<t>`-tagged entities (state slots `px,py,pz,vx,vy,vz,m`
-/// = 0..6). `law` is the **force magnitude on `i` from `j`** as a function of the
-/// pair distance `r` (positive = repulsive); e.g. `law = micro.lj_force(1,1,r)`.
-/// Integrated with semi-implicit (symplectic) Euler:
-/// `a = (Σ_j law(r_ij)·(p_i−p_j)/r_ij) / m`; `v += a·dt`; `p += v·dt`.
+/// `pair { tag = <a>; [other = <b>]; dt = h; law = <expr in r> }` — a general
+/// pairwise force. For every entity in `a` it sums the force from every entity
+/// in `b` (and vice-versa when `other` is set), so `a`/`b` can be two different
+/// element groups (e.g. H–Cl). `law` is the force magnitude on `i` from `j` as a
+/// function of the pair distance `r` (positive = repulsive). This system only
+/// **kicks** the velocity (`v += a·dt`); positions advance with a `drift`
+/// system, so several `pair` systems compose (one per pair type).
+///
+/// State slots: `px,py,pz,vx,vy,vz,m` = 0..6.
 pub struct PairSystem {
-    pub bodies: Vec<u128>,
+    /// Entities this system acts on (group `a`).
+    pub a: Vec<u128>,
+    /// The "other" group `b` (== `a` when `other` is omitted).
+    pub b: Vec<u128>,
     pub dt: f64,
     pub law: Expr,
     pub entity_map: std::collections::BTreeMap<String, u128>,
@@ -2894,10 +2900,16 @@ impl EirSystem for PairSystem {
                 None,
             ));
         };
-        if !self.bodies.contains(&entity) {
+        // `entity` is only processed by the group it belongs to; skip if it is in
+        // `a`/`b`'s union but neither (safety) — and pick the opposite group.
+        let others: &[u128] = if self.a.contains(&entity) {
+            &self.b
+        } else if self.b.contains(&entity) {
+            &self.a
+        } else {
             ret(out);
             return;
-        }
+        };
         let eps = 1e-12;
         let mut next_id = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
         let px = nb_read(out, &mut next_id, entity, 0);
@@ -2918,7 +2930,7 @@ impl EirSystem for PairSystem {
         let empty_refs: std::collections::BTreeMap<(u128, usize), u32> = Default::default();
         let empty_props: std::collections::BTreeMap<(u128, super::ast::PropKind), u32> =
             Default::default();
-        for &j in &self.bodies {
+        for &j in others {
             if j == entity {
                 continue;
             }
@@ -2936,7 +2948,6 @@ impl EirSystem for PairSystem {
             let epsc = nb_const(out, &mut next_id, eps);
             let r2e = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, r2, epsc);
             let r = nb_un(crate::eir::Opcode::Sqrt, out, &mut next_id, r2e);
-            // Lower the user law with `r` bound to the pair distance.
             let mut locals: std::collections::BTreeMap<String, u32> = Default::default();
             locals.insert("r".to_string(), r);
             let ctx = super::lower::LowerCtx {
@@ -2954,7 +2965,6 @@ impl EirSystem for PairSystem {
                 current_entity: entity,
             };
             let f = super::lower::lower_expr(&self.law, &ctx, &mut next_id, out);
-            // Force on i from j: f · (p_i − p_j)/r.
             let ux = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, dx, r);
             let uy = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, dy, r);
             let uz = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, dz, r);
@@ -2965,7 +2975,7 @@ impl EirSystem for PairSystem {
             let t = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, f, uz);
             fz = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, fz, t);
         }
-        // a = f / m; then semi-implicit Euler: v += a·dt; p += v·dt.
+        // Kick only: v += (f/m)·dt.
         let dtc = nb_const(out, &mut next_id, self.dt);
         let ax = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, fx, m);
         let ay = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, fy, m);
@@ -2973,12 +2983,66 @@ impl EirSystem for PairSystem {
         let nvx = nb_add_mul(out, &mut next_id, vx, ax, dtc);
         let nvy = nb_add_mul(out, &mut next_id, vy, ay, dtc);
         let nvz = nb_add_mul(out, &mut next_id, vz, az, dtc);
-        let npx = nb_add_mul(out, &mut next_id, px, nvx, dtc);
-        let npy = nb_add_mul(out, &mut next_id, py, nvy, dtc);
-        let npz = nb_add_mul(out, &mut next_id, pz, nvz, dtc);
         nb_write(out, entity, 3, nvx);
         nb_write(out, entity, 4, nvy);
         nb_write(out, entity, 5, nvz);
+        ret(out);
+    }
+}
+
+/// `drift { tag = <t>; dt = h }` — position drift `p += v·dt` for every tagged
+/// entity (state slots `px,py,pz,vx,vy,vz` = 0..5). Pairs with `pair`.
+pub struct DriftSystem {
+    pub bodies: Vec<u128>,
+    pub dt: f64,
+    /// Optional velocity damping `v *= (1 - damp·dt)` (dissipation; lets a
+    /// reactive system settle into its global minimum).
+    pub damp: f64,
+}
+
+impl EirSystem for DriftSystem {
+    fn name(&self) -> &'static str {
+        "physics.drift"
+    }
+    fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
+        let ret = |out: &mut Vec<crate::eir::Instruction>| {
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Return,
+                0,
+                None,
+                vec![],
+                None,
+                None,
+            ));
+        };
+        if !self.bodies.contains(&entity) {
+            ret(out);
+            return;
+        }
+        let mut next_id = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+        let px = nb_read(out, &mut next_id, entity, 0);
+        let py = nb_read(out, &mut next_id, entity, 1);
+        let pz = nb_read(out, &mut next_id, entity, 2);
+        let vx = nb_read(out, &mut next_id, entity, 3);
+        let vy = nb_read(out, &mut next_id, entity, 4);
+        let vz = nb_read(out, &mut next_id, entity, 5);
+        let dtc = nb_const(out, &mut next_id, self.dt);
+        // Optional damping, then drift: p += v·dt.
+        let (vx, vy, vz) = if self.damp > 0.0 {
+            let keep = nb_const(out, &mut next_id, 1.0 - self.damp * self.dt);
+            let nvx = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vx, keep);
+            let nvy = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vy, keep);
+            let nvz = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vz, keep);
+            nb_write(out, entity, 3, nvx);
+            nb_write(out, entity, 4, nvy);
+            nb_write(out, entity, 5, nvz);
+            (nvx, nvy, nvz)
+        } else {
+            (vx, vy, vz)
+        };
+        let npx = nb_add_mul(out, &mut next_id, px, vx, dtc);
+        let npy = nb_add_mul(out, &mut next_id, py, vy, dtc);
+        let npz = nb_add_mul(out, &mut next_id, pz, vz, dtc);
         nb_write(out, entity, 0, npx);
         nb_write(out, entity, 1, npy);
         nb_write(out, entity, 2, npz);

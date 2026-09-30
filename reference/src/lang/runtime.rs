@@ -17,7 +17,15 @@ struct ConservedSpec {
 /// Runs a compiled program's low-level IR across the interpreter and the CPU
 /// JIT, verifying they produce byte-identical writes (the "run cross" contract).
 /// A prepared neighbourhood bond net: (ids, min, max, axis, angle).
-type BondNetSpec = (Vec<u128>, f64, f64, Option<(f64, f64, f64)>, Option<f64>);
+type BondNetSpec = (
+    Vec<u128>,
+    Vec<u128>,
+    bool, // self-net (`other` omitted): emit each unordered pair once
+    f64,
+    f64,
+    Option<(f64, f64, f64)>,
+    Option<f64>,
+);
 
 pub struct LangRuntime {
     pub scene: Scene,
@@ -254,16 +262,21 @@ impl LangRuntime {
             .bond_nets
             .iter()
             .map(|net| {
-                let ids: Vec<u128> = compiled
-                    .parsed
-                    .model
-                    .entities
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, e)| e.tag.as_deref() == Some(net.tag.as_str()))
-                    .map(|(i, _)| (i as u128) + 1)
-                    .collect();
-                (ids, net.min, net.max, net.axis, net.angle)
+                let pick = |t: &str| -> Vec<u128> {
+                    compiled
+                        .parsed
+                        .model
+                        .entities
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, e)| e.tag.as_deref() == Some(t))
+                        .map(|(i, _)| (i as u128) + 1)
+                        .collect()
+                };
+                let a = pick(&net.tag);
+                let self_net = net.other.is_none();
+                let b = net.other.as_deref().map(pick).unwrap_or_else(|| a.clone());
+                (a, b, self_net, net.min, net.max, net.axis, net.angle)
             })
             .collect();
         let optimized = module.optimize();
@@ -429,11 +442,14 @@ impl LangRuntime {
                 .iter()
                 .map(|e| (e.id, (e.position.x, e.position.y, e.position.z)))
                 .collect();
-            for (ids, min, max, axis, angle) in &self.bond_nets {
-                for i in 0..ids.len() {
-                    for j in (i + 1)..ids.len() {
+            for (ga, gb, self_net, min, max, axis, angle) in &self.bond_nets {
+                for ia in ga {
+                    for ib in gb {
+                        if ia == ib || (*self_net && ia >= ib) {
+                            continue;
+                        }
                         if let (Some(&(ax, ay, az)), Some(&(bx, by, bz))) =
-                            (pos.get(&ids[i]), pos.get(&ids[j]))
+                            (pos.get(ia), pos.get(ib))
                         {
                             let ex = ax - bx;
                             let ey = ay - by;
@@ -454,8 +470,8 @@ impl LangRuntime {
                             };
                             if dir_ok && d >= *min && d <= *max {
                                 frame.bonds.push(crate::present::Bond {
-                                    a: ids[i],
-                                    b: ids[j],
+                                    a: *ia,
+                                    b: *ib,
                                     order: 1,
                                     polarity: 0.0,
                                     cloud: false,

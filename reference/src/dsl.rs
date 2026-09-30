@@ -60,6 +60,9 @@ pub struct PoolDecl {
 #[derive(Clone, Debug, PartialEq)]
 pub struct BondNet {
     pub tag: String,
+    /// Optional second group: bond `tag`–`other` pairs (default: `tag` with
+    /// itself). Enables element-specific nets (e.g. H–Cl).
+    pub other: Option<String>,
     pub min: f64,
     pub max: f64,
     /// Optional directional gate: draw a bond only if the bond line makes an

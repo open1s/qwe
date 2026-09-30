@@ -550,7 +550,7 @@ Precedence (high → low): unary `-`, `not`/`!` → `* / %` → `+ -` → compar
 | `pool <name>[N] { … }` | N inactive slots for dynamic entities. |
 | `soft <name> { nx; ny; nz?; spacing; origin; mass }` | a mass-spring grid. |
 | `bond <a> <b> [order=n] [polarity=p] [cloud=true] [min=d] [max=d]` | a render bond between two named entities (ball-and-stick). |
-| `bonds { tag = <t>; within = <d>; min = <d>?; axis = (x,y,z)?; angle = <rad>? }` | a **neighbourhood bond net**: auto-bond every pair of entities tagged `<t>` within `[min, within]`, recomputed each frame (bonds form/break by proximity — e.g. a reaction). `axis`+`angle` add a **bond-angle** gate: the bond line must lie within `angle` of `axis`. |
+| `bonds { tag = <t>; other = <u>?; within = <d>; min = <d>?; axis = (x,y,z)?; angle = <rad>? }` | a **neighbourhood bond net**: auto-bond every pair of entities tagged `<t>` (with `other`, the cross `t`–`u` pairs) within `[min, within]`, recomputed each frame (bonds form/break by proximity — e.g. a reaction). `axis`+`angle` add a **bond-angle** gate. |
 | `import "…"` | module import (path relative to the file). |
 
 `bond` is **presentation only** (not a physics constraint): it draws a stick
@@ -632,7 +632,8 @@ field name; cell writes are visible to later reads in the same step.
 | `ground_contact` | `restitution` | component | resolve the `y=0` plane |
 | `linear` | `slots`,`dt`,`row0=(…)`,… | state | `ds/dt = A·s + c` (Euler) |
 | `nbody` (velocity-Verlet) | `G`,`dt` | state | inverse-square; `state=(px,py,pz,vx,vy,vz,m)` |
-| `pair` | `tag`,`dt`,`law` | state | general pairwise force: sum `law(r)` (a force magnitude in the pair distance `r`, positive = repulsive) over every other `tag`-tagged body, integrated with semi-implicit Euler; `state=(px,py,pz,vx,vy,vz,m)` |
+| `pair` | `tag`,`other?`,`dt`,`law` | state | general pairwise force: for each body in `tag`, sum `law(r)` (a force magnitude in the pair distance `r`, positive = repulsive) over the `other` group (default itself); **kicks** the velocity `v += a·dt`; `state=(px,py,pz,vx,vy,vz,m)` |
+| `drift` | `tag`,`dt`,`damp?` | state | position drift `p += v·dt` for tagged bodies (optionally damped `v *= 1-damp·dt`); pairs with `pair` |
 | `send`/`recv` | `on`(req),`chan`,`value` / `on`(req),`chan`,`slot` | channel | channel send/receive (scoped to `on`) |
 | `update` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | explicit Euler (rules read the *original* slot values — no intra-step chaining; give each slot one rule) |
 | `rk4` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | Runge–Kutta 4 |

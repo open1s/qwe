@@ -1,0 +1,32 @@
+# reaction_md.pwe — a force-driven chemical reaction: H + Cl -> HCl.
+#
+# The atoms are integrated under a **real Morse potential** (`pair { law = … }`),
+# not scripted interpolation: a free H and Cl attract, form a bond, and vibrate
+# around the Morse minimum (r_e). Connectivity is **detected from the geometry**
+# by the neighbourhood bond net (the bond appears when they come within
+# `within`). `pair` kicks the velocity; `drift` advances positions (with a little
+# damping so the molecule settles).
+#
+#   cargo build --release -p pwe-cli
+#   pwe compile cli/examples/reaction_md.pwe -o reaction_md.pweb
+#   pwe present reaction_md.pweb --port 8000
+import "../../std/micro"
+
+world {
+  title = "Reaction (MD): H + Cl -> HCl"
+  gravity = (0, 0, 0)
+
+  entity H  { state = (px = -2.0, py = 0.30, pz = 0.0, vx =  0.50, vy = 0.0, vz = 0.0, m = 1.0) shape = sphere; size = 0.20; color = 0xF2F2F2; tag = H }
+  entity Cl { state = (px =  2.0, py = 0.30, pz = 0.0, vx = -0.30, vy = 0.0, vz = 0.0, m = 2.0) shape = sphere; size = 0.32; color = 0x38C64A; tag = Cl }
+
+  # The H-Cl bond appears once the atoms are within 1.25 (near r_e = 0.95).
+  bonds { tag = H; other = Cl; within = 1.25 }
+}
+
+systems {
+  # Morse force magnitude on i from j (positive = repulsive):
+  #   F(r) = -dU/dr, U = De[(1 - e^{-a(r-re)})^2 - 1].
+  pair  { tag = H; other = Cl; dt = 0.00005; law = micro.morse_force(0.90, 1.8, 0.95, r) }
+  drift { tag = H;  dt = 0.00005; damp = 0.35 }
+  drift { tag = Cl; dt = 0.00005; damp = 0.35 }
+}
