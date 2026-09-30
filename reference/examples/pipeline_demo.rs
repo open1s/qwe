@@ -38,7 +38,7 @@ fn main() -> pwe_api::Result<()> {
         color: None,
         nbody: None,
         parent: None,
-        tag: None,
+        tags: Vec::new(),
         state_units: None,
         render: None,
     });
@@ -60,7 +60,7 @@ fn main() -> pwe_api::Result<()> {
         color: None,
         nbody: None,
         parent: None,
-        tag: None,
+        tags: Vec::new(),
         state_units: None,
         render: None,
     });
