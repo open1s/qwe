@@ -3682,7 +3682,7 @@ fn neighbourhood_bond_net_forms_bonds() {
         .collect();
     assert!(pairs.contains(&(1, 2)), "a-b close: {pairs:?}");
     assert!(
-        !pairs.iter().any(|(a, b)| (*a == 1 && *b == 3)),
+        !pairs.iter().any(|(a, b)| *a == 1 && *b == 3),
         "a-c far: {pairs:?}"
     );
 }
