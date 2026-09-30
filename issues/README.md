@@ -111,6 +111,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0082](https://github.com/open1s/qwe/issues/82) | Low | per-part opacity ships with zero tests across parser/compile/ref-override/JSON/both viewers + 118 regenerated atom files; suite still 412 (tests.rs untouched in 7b6e4f4e) | reference/src/lang/tests.rs |
 | [0083](https://github.com/open1s/qwe/issues/83) | Low | 118 new `<Sym>_nucleus` shapes (7b6e4f4e) undocumented: std/README.md:54 and std/atoms/README.md still describe only `<Sym>_atom` | std/README.md:54, std/atoms/README.md |
 | [0084](https://github.com/open1s/qwe/issues/84) | Low | message drift in `6aebd95b..69ee0fb9`: `665e65f7` "Update 3 files" hides the fmt canonical 4→2 flip + poly viewer fix; `f6f5f93a` claims a viewer change that is in the previous commit; `69ee0fb9` claims #75/#74 fixed while `lang.pest:121` and README-ZH are untouched | 665e65f7/f6f5f93a/69ee0fb9 messages, lang/format.rs, lang.pest:121 |
+| [0085](https://github.com/open1s/qwe/issues/85) | Low | bond `min`/`max` (09340d5c) unvalidated: inverted range (`min=5 max=1` → bond never drawn), negative min, duplicate opts all compile rc 0 — same class as 0081's opacity gaps | lang.pest:68-69 `bond_min`/`bond_max`, dsl.rs BondDecl, tests.rs |
 
 ## Suggested order
 
@@ -1306,5 +1307,40 @@ reopened 0074, commented 0075/0080/0081, filed 0084):
     120 steps rc 0 with people/limbs simulating; `poly` parts now
     `DoubleSide` in **both** embedded viewers (`matFor(col, op, true)` at
     the k===6 branches) so ground meshes aren't back-face culled.
+
+Review pass 40 (landed `09340d5c` — "proximity-gated bonds +
+chemical-reaction demo"; filed 0085, commented 0075):
+
+1. Gates green: fmt, clippy `--all-targets`, **416 tests** (415 + the new
+   `proximity_gated_bonds_carry_min_max`), conformance **25/25**, release
+   build; `pwe fmt --check` passes on `reaction.pwe` (fmt gate in suite).
+2. Feature verified end-to-end: `bond a b [min=d] [max=d]` parses
+   (`lang.pest` bond_opt), flows `BondDecl` → runtime `Bond` →
+   `frame_to_json` (`"min"/"max"` emitted only when `Some`), and **both**
+   viewers gate inclusively on world-space distance
+   (`len>max → skip`, `len<min → skip` at present.rs:947 and :1622).
+   Serve smoke: `pwe present reaction.pweb` `/state` carries all four
+   demo bonds with `"max":1.4/1.5/1.1/1.1`. Old bonds (`min/max: None`)
+   omit the keys → unchanged behavior.
+3. Test honest but partial: `proximity_gated_bonds_carry_min_max` asserts
+   JSON carries the values; the JS gating itself (the actual
+   form/break behavior) is untested — acceptable for a viewer one-liner,
+   noted.
+4. `reaction.pwe` verified: compiles (27 EIR fns), runs 300 steps rc 0;
+   header/geometry match the message (forward sawtooth, H-H/Cl-Cl break
+   as s→1: final H1–H2 distance ≈1.72 > max 1.4; H-Cl forms at ≈0.5 <
+   max 1.1); flash entity present. **Message accurate this time** — no
+   overclaims (contrast 0084).
+5. **0085 (Low) filed**: bond min/max unvalidated — `min=5 max=1`
+   (inverted → never drawn), `min=-2`, duplicate `min` all compile rc 0;
+   same silent-wrong-output class as 0081's opacity gaps.
+6. **0075 commented (3rd flag)**: `09340d5c` edited `lang.pest` (added
+   bond rules at :62-69) yet left the stale `` `spin = s` self-rotates ``
+   comment at :125 above `spin_opt = { "spin" ~ value }` (:130) — the
+   exact line flagged in passes 37/38. The pass-39 "verified" claim on
+   that issue remains false.
+7. 0074/0080/0081/0084 untouched by this commit — all stay open as
+   previously noted (ZH 399, roadmap :105, duplicates+error-message,
+   message discipline).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
