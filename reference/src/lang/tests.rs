@@ -3826,3 +3826,93 @@ fn pair_coord_binds_rmin() {
         st.values[0]
     );
 }
+
+#[test]
+fn scratch_dimers_probe() {
+    let src = r#"import "/Users/gaosg/Projects/pwe/std/micro"
+world { gravity=(0,0,0)
+  entity a0 { state = (px = -1.8, py = 0.30, pz = -1.3, vx =  0.20, vy = 0.0, vz =  0.10, m = 1.0) tag = atom }
+  entity a1 { state = (px =  1.9, py = 0.30, pz = -1.1, vx = -0.15, vy = 0.0, vz = -0.20, m = 1.0) tag = atom }
+  entity a2 { state = (px =  0.6, py = 0.30, pz =  1.6, vx = -0.10, vy = 0.0, vz =  0.15, m = 1.0) tag = atom }
+  entity a3 { state = (px = -1.4, py = 0.30, pz =  1.9, vx =  0.25, vy = 0.0, vz = -0.15, m = 1.0) tag = atom }
+  entity a4 { state = (px =  2.3, py = 0.30, pz =  1.0, vx = -0.20, vy = 0.0, vz =  0.05, m = 1.0) tag = atom }
+  entity a5 { state = (px = -0.4, py = 0.30, pz = -2.4, vx =  0.10, vy = 0.0, vz =  0.20, m = 1.0) tag = atom }
+  bonds { tag = atom; within = 1.20 }
+}
+systems {
+  pair  { tag = atom; dt = 0.0006; coord = 2.0
+          law = micro.morse_force(0.60, 2.0, 0.90, r) * if(r < rmin + 0.08, 1.0, 0.0) }
+  drift { tag = atom; dt = 0.0006; damp = 0.25 }
+}"#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(20000).unwrap();
+    for id in 1..=6u128 {
+        let st = rt
+            .scene
+            .get(pwe_api::EntityId(id))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap();
+        println!(
+            "a{} pos=({:.3},{:.3},{:.3})",
+            id - 1,
+            st.values[0],
+            st.values[1],
+            st.values[2]
+        );
+    }
+    // pairwise distances
+    for i in 1..=6u128 {
+        for j in (i + 1)..=6u128 {
+            let si = rt
+                .scene
+                .get(pwe_api::EntityId(i))
+                .unwrap()
+                .state
+                .as_ref()
+                .unwrap();
+            let sj = rt
+                .scene
+                .get(pwe_api::EntityId(j))
+                .unwrap()
+                .state
+                .as_ref()
+                .unwrap();
+            let d = ((si.values[0] - sj.values[0]).powi(2)
+                + (si.values[1] - sj.values[1]).powi(2)
+                + (si.values[2] - sj.values[2]).powi(2))
+            .sqrt();
+            if d < 1.4 {
+                println!("BOND a{}-a{} d={:.3}", i - 1, j - 1, d);
+            }
+        }
+    }
+}
+
+#[test]
+fn pair_coord_binds_mutual_nearest() {
+    // `rminj` lets a law require mutual nearest neighbours: the close pair
+    // attracts, the far atom (not a mutual partner) does not.
+    let src = r#"world { gravity=(0,0,0)
+      entity a { state=(px=0.0,py=0.0,pz=0.0,vx=0.0,vy=0.0,vz=0.0,m=1.0) tag=A }
+      entity b { state=(px=1.2,py=0.0,pz=0.0,vx=0.0,vy=0.0,vz=0.0,m=1.0) tag=A }
+      entity c { state=(px=6.0,py=0.0,pz=0.0,vx=0.0,vy=0.0,vz=0.0,m=1.0) tag=A }
+    }
+    systems {
+      pair  { tag=A; other=A; dt=0.01; coord=3.0;
+              law = (1.0 - r) * if(r <= rmin + 0.05 and r <= rminj + 0.05, 1.0, 0.0) }
+      drift { tag=A; dt=0.01 }
+    }"#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(30).unwrap();
+    let a = rt
+        .scene
+        .get(pwe_api::EntityId(1))
+        .unwrap()
+        .state
+        .as_ref()
+        .unwrap()
+        .values[0];
+    assert!(a > 0.0, "a bonded to its mutual nearest b: {a}");
+}

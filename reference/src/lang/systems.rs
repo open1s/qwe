@@ -2999,6 +2999,12 @@ impl EirSystem for PairSystem {
             }
             extra = Some((n, rmin));
         }
+        // The group `i` belongs to (for computing a partner's own neighbours).
+        let self_grp: &[u128] = if self.a.contains(&entity) {
+            &self.a
+        } else {
+            &self.b
+        };
         let mut fx = nb_const(out, &mut next_id, 0.0);
         let mut fy = nb_const(out, &mut next_id, 0.0);
         let mut fz = nb_const(out, &mut next_id, 0.0);
@@ -3028,11 +3034,40 @@ impl EirSystem for PairSystem {
             let epsc = nb_const(out, &mut next_id, eps);
             let r2e = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, r2, epsc);
             let r = nb_un(crate::eir::Opcode::Sqrt, out, &mut next_id, r2e);
+            // `rminj` = j's own nearest-neighbour distance (for mutual bonding).
+            let rminj = if extra.is_some() {
+                let mut mj = nb_const(out, &mut next_id, f64::INFINITY);
+                for &k in self_grp {
+                    if k == j {
+                        continue;
+                    }
+                    let kx = nb_read(out, &mut next_id, k, 0);
+                    let ky = nb_read(out, &mut next_id, k, 1);
+                    let kz = nb_read(out, &mut next_id, k, 2);
+                    let ex = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, jx, kx);
+                    let ey = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, jy, ky);
+                    let ez = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, jz, kz);
+                    let ex2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, ex, ex);
+                    let ey2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, ey, ey);
+                    let ez2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, ez, ez);
+                    let exy = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, ex2, ey2);
+                    let e2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, exy, ez2);
+                    let ec = nb_const(out, &mut next_id, eps);
+                    let e2e = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, e2, ec);
+                    let rjk = nb_un(crate::eir::Opcode::Sqrt, out, &mut next_id, e2e);
+                    let closer = nb_cmp(out, &mut next_id, crate::eir::Opcode::Lt, rjk, mj);
+                    mj = nb_select(out, &mut next_id, closer, rjk, mj);
+                }
+                mj
+            } else {
+                0
+            };
             let mut locals: std::collections::BTreeMap<String, u32> = Default::default();
             locals.insert("r".to_string(), r);
             if let Some((n, rmin)) = extra {
                 locals.insert("n".to_string(), n);
                 locals.insert("rmin".to_string(), rmin);
+                locals.insert("rminj".to_string(), rminj);
             }
             let ctx = super::lower::LowerCtx {
                 slot_regs: &[],
