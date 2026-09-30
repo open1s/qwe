@@ -54,6 +54,7 @@ pub(crate) fn numeric_param_keys(kind: &str) -> &'static [&'static str] {
         "force" => &["ax", "ay", "az", "dt"],
         "linear" => &["slots", "dt"],
         "nbody" => &["G", "dt"],
+        "pair" => &["dt"],
         "send" => &["value"],
         "recv" => &["slot"],
         "update" | "rk4" => &["dt", "every", "substeps"],
@@ -418,6 +419,7 @@ pub(crate) fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Resul
                     | "other"
                     | "type"
                     | "body"
+                    | "tag"
             ) {
                 decl.string_params.insert(key, text);
             } else if let Some(v) = parse_scalar_number(&text) {

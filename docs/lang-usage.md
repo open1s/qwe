@@ -632,6 +632,7 @@ field name; cell writes are visible to later reads in the same step.
 | `ground_contact` | `restitution` | component | resolve the `y=0` plane |
 | `linear` | `slots`,`dt`,`row0=(…)`,… | state | `ds/dt = A·s + c` (Euler) |
 | `nbody` (velocity-Verlet) | `G`,`dt` | state | inverse-square; `state=(px,py,pz,vx,vy,vz,m)` |
+| `pair` | `tag`,`dt`,`law` | state | general pairwise force: sum `law(r)` (a force magnitude in the pair distance `r`, positive = repulsive) over every other `tag`-tagged body, integrated with semi-implicit Euler; `state=(px,py,pz,vx,vy,vz,m)` |
 | `send`/`recv` | `on`(req),`chan`,`value` / `on`(req),`chan`,`slot` | channel | channel send/receive (scoped to `on`) |
 | `update` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | explicit Euler (rules read the *original* slot values — no intra-step chaining; give each slot one rule) |
 | `rk4` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | Runge–Kutta 4 |

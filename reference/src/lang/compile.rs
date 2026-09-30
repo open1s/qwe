@@ -9,6 +9,7 @@ pub fn build_systems(
     systems: &[SystemDecl],
     entity_ids: &std::collections::BTreeMap<String, u128>,
     nbody_bodies: &[u128],
+    tag_ids: &std::collections::BTreeMap<String, Vec<u128>>,
     func_ids: &std::collections::BTreeMap<String, u64>,
     state_names_by_id: &std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
     field_dims: &std::collections::BTreeMap<String, (u32, u32)>,
@@ -113,6 +114,57 @@ pub fn build_systems(
                     g,
                     dt,
                     stage: 2,
+                }));
+            }
+            "pair" => {
+                let tag = s.string_params.get("tag").cloned().ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        "pair requires `tag = <name>`".to_string(),
+                    )
+                })?;
+                let bodies = tag_ids.get(&tag).cloned().ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        format!("pair references unknown tag '{tag}'"),
+                    )
+                })?;
+                if bodies.len() < 2 {
+                    return Err(error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        "pair needs at least two entities sharing the tag".to_string(),
+                    ));
+                }
+                let dt = param(&s.params, "dt", s.byte_offset, &s.kind)?;
+                let law_text = s
+                    .assigns
+                    .get("law")
+                    .or_else(|| s.update.get("law"))
+                    .ok_or_else(|| {
+                        error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            "pair requires `law = <force expr in r>`".to_string(),
+                        )
+                    })?;
+                let law = parse_expr_str(law_text)?;
+                out.push(Box::new(PairSystem {
+                    bodies: bodies.clone(),
+                    dt,
+                    law: law.clone(),
+                    entity_map: entity_ids.clone(),
+                    state_names_by_id: state_names_by_id.clone(),
+                    func_ids: func_ids.clone(),
+                    field_dims: field_dims.clone(),
+                    namespace: s.namespace.clone(),
+                    param_names: param_names.clone(),
                 }));
             }
             "send" | "recv" => {
@@ -2723,10 +2775,18 @@ they are read as a Z-spin, not euler angles",
         .iter()
         .map(|f| (f.name.clone(), (f.width as u32, f.height as u32)))
         .collect();
+    let mut tag_ids: std::collections::BTreeMap<String, Vec<u128>> =
+        std::collections::BTreeMap::new();
+    for (i, e) in parsed.model.entities.iter().enumerate() {
+        if let Some(t) = &e.tag {
+            tag_ids.entry(t.clone()).or_default().push((i as u128) + 1);
+        }
+    }
     let systems = build_systems(
         &parsed.systems,
         &entity_ids,
         &nbody_entities,
+        &tag_ids,
         &func_ids,
         &state_names_by_id,
         &field_dims,

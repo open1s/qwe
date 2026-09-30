@@ -1,0 +1,39 @@
+# md.pwe — real molecular dynamics: a Lennard-Jones cluster.
+#
+# The atoms are integrated under a real pairwise force (`pair { law = … }`, the
+# Lennard-Jones force as a function of the pair distance r), not scripted
+# interpolation. They attract into a cluster and settle near the LJ minimum
+# (r_min = 2^(1/6)·sigma). Bonds are **detected from the geometry**: the
+# neighbourhood bond net auto-bonds every pair within `within`, so the cluster's
+# connectivity appears on its own as the atoms come close.
+#
+#   cargo build --release -p pwe-cli
+#   pwe compile cli/examples/md.pwe -o md.pweb
+#   pwe present md.pweb --port 8000
+
+world {
+  title = "Lennard-Jones cluster (real MD + auto-bonds)"
+  gravity = (0, 0, 0)
+
+  # 1 central atom + a 6-atom ring — all one element (tag = atom).
+  entity c0 { state = (px = 0.0,  py = 0.0, pz = 0.0, vx = 0.0, vy = 0.0, vz = 0.0, m = 1.0) shape = sphere; size = 0.34; color = 0x4EA1FF; tag = atom }
+  entity a1 { state = (px = 1.30, py = 0.0,  pz = 0.0, vx = 0.0, vy = 0.0, vz = 0.0, m = 1.0) shape = sphere; size = 0.34; color = 0x4EA1FF; tag = atom }
+  entity a2 { state = (px = 0.65, py = 1.126, pz = 0.0, vx = 0.0, vy = 0.0, vz = 0.0, m = 1.0) shape = sphere; size = 0.34; color = 0x4EA1FF; tag = atom }
+  entity a3 { state = (px = -0.65, py = 1.126, pz = 0.0, vx = 0.0, vy = 0.0, vz = 0.0, m = 1.0) shape = sphere; size = 0.34; color = 0x4EA1FF; tag = atom }
+  entity a4 { state = (px = -1.30, py = 0.0, pz = 0.0, vx = 0.0, vy = 0.0, vz = 0.0, m = 1.0) shape = sphere; size = 0.34; color = 0x4EA1FF; tag = atom }
+  entity a5 { state = (px = -0.65, py = -1.126, pz = 0.0, vx = 0.0, vy = 0.0, vz = 0.0, m = 1.0) shape = sphere; size = 0.34; color = 0x4EA1FF; tag = atom }
+  entity a6 { state = (px = 0.65, py = -1.126, pz = 0.0, vx = 0.0, vy = 0.0, vz = 0.0, m = 1.0) shape = sphere; size = 0.34; color = 0x4EA1FF; tag = atom }
+
+  # Auto-bond every atom pair within 1.35 (near the LJ well at r_min = 1.122).
+  bonds { tag = atom; within = 1.35 }
+}
+
+systems {
+  # Lennard-Jones force magnitude on i from j (eps = 1, sigma = 1):
+  #   F(r) = 24/r · (2·(1/r)^12 − (1/r)^6)   (positive = repulsive).
+  pair {
+    tag = atom
+    dt = 0.002
+    law = 24.0 / r * (2.0 * pow(1.0 / r, 12.0) - pow(1.0 / r, 6.0))
+  }
+}

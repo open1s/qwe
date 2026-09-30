@@ -3686,3 +3686,28 @@ fn neighbourhood_bond_net_forms_bonds() {
         "a-c far: {pairs:?}"
     );
 }
+
+#[test]
+fn pair_system_integrates_lj_forces() {
+    // A general pairwise force: LJ attraction at r > r_min pulls the atoms
+    // together (real integration, not interpolation).
+    let src = r#"world { gravity=(0,0,0)
+      entity a { state=(px=0.0,py=0.0,pz=0.0,vx=0.0,vy=0.0,vz=0.0,m=1.0) tag=atom }
+      entity b { state=(px=1.5,py=0.0,pz=0.0,vx=0.0,vy=0.0,vz=0.0,m=1.0) tag=atom }
+    }
+    systems { pair { tag=atom; dt=0.01; law = 24.0/r*(2.0*pow(1.0/r,12.0) - pow(1.0/r,6.0)) } }"#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(100).unwrap();
+    let st = rt
+        .scene
+        .get(pwe_api::EntityId(1))
+        .unwrap()
+        .state
+        .as_ref()
+        .unwrap();
+    assert!(
+        st.values[0] > 0.0,
+        "a moved toward b (attraction): {}",
+        st.values[0]
+    );
+}

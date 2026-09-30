@@ -2859,3 +2859,129 @@ fn nb_write(out: &mut Vec<crate::eir::Instruction>, e: u128, slot: usize, v: u32
         )),
     ));
 }
+
+/// `pair { tag = <t>; dt = h; law = <expr in r> }` — a general pairwise force
+/// between every pair of `<t>`-tagged entities (state slots `px,py,pz,vx,vy,vz,m`
+/// = 0..6). `law` is the **force magnitude on `i` from `j`** as a function of the
+/// pair distance `r` (positive = repulsive); e.g. `law = micro.lj_force(1,1,r)`.
+/// Integrated with semi-implicit (symplectic) Euler:
+/// `a = (Σ_j law(r_ij)·(p_i−p_j)/r_ij) / m`; `v += a·dt`; `p += v·dt`.
+pub struct PairSystem {
+    pub bodies: Vec<u128>,
+    pub dt: f64,
+    pub law: Expr,
+    pub entity_map: std::collections::BTreeMap<String, u128>,
+    pub state_names_by_id:
+        std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
+    pub func_ids: std::collections::BTreeMap<String, u64>,
+    pub field_dims: std::collections::BTreeMap<String, (u32, u32)>,
+    pub namespace: String,
+    pub param_names: std::collections::BTreeSet<String>,
+}
+
+impl EirSystem for PairSystem {
+    fn name(&self) -> &'static str {
+        "physics.pair"
+    }
+    fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
+        let ret = |out: &mut Vec<crate::eir::Instruction>| {
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Return,
+                0,
+                None,
+                vec![],
+                None,
+                None,
+            ));
+        };
+        if !self.bodies.contains(&entity) {
+            ret(out);
+            return;
+        }
+        let eps = 1e-12;
+        let mut next_id = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+        let px = nb_read(out, &mut next_id, entity, 0);
+        let py = nb_read(out, &mut next_id, entity, 1);
+        let pz = nb_read(out, &mut next_id, entity, 2);
+        let vx = nb_read(out, &mut next_id, entity, 3);
+        let vy = nb_read(out, &mut next_id, entity, 4);
+        let vz = nb_read(out, &mut next_id, entity, 5);
+        let m = nb_read(out, &mut next_id, entity, 6);
+        let mut fx = nb_const(out, &mut next_id, 0.0);
+        let mut fy = nb_const(out, &mut next_id, 0.0);
+        let mut fz = nb_const(out, &mut next_id, 0.0);
+        let sn = self
+            .state_names_by_id
+            .get(&entity)
+            .cloned()
+            .unwrap_or_default();
+        let empty_refs: std::collections::BTreeMap<(u128, usize), u32> = Default::default();
+        let empty_props: std::collections::BTreeMap<(u128, super::ast::PropKind), u32> =
+            Default::default();
+        for &j in &self.bodies {
+            if j == entity {
+                continue;
+            }
+            let jx = nb_read(out, &mut next_id, j, 0);
+            let jy = nb_read(out, &mut next_id, j, 1);
+            let jz = nb_read(out, &mut next_id, j, 2);
+            let dx = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, px, jx);
+            let dy = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, py, jy);
+            let dz = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, pz, jz);
+            let dx2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, dx, dx);
+            let dy2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, dy, dy);
+            let dz2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, dz, dz);
+            let sxy = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, dx2, dy2);
+            let r2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, sxy, dz2);
+            let epsc = nb_const(out, &mut next_id, eps);
+            let r2e = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, r2, epsc);
+            let r = nb_un(crate::eir::Opcode::Sqrt, out, &mut next_id, r2e);
+            // Lower the user law with `r` bound to the pair distance.
+            let mut locals: std::collections::BTreeMap<String, u32> = Default::default();
+            locals.insert("r".to_string(), r);
+            let ctx = super::lower::LowerCtx {
+                slot_regs: &[],
+                ref_regs: &empty_refs,
+                prop_regs: &empty_props,
+                entity_map: &self.entity_map,
+                state_names: &sn,
+                state_names_by_id: &self.state_names_by_id,
+                locals: &locals,
+                func_ids: &self.func_ids,
+                field_dims: &self.field_dims,
+                namespace: &self.namespace,
+                params: &self.param_names,
+                current_entity: entity,
+            };
+            let f = super::lower::lower_expr(&self.law, &ctx, &mut next_id, out);
+            // Force on i from j: f · (p_i − p_j)/r.
+            let ux = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, dx, r);
+            let uy = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, dy, r);
+            let uz = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, dz, r);
+            let t = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, f, ux);
+            fx = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, fx, t);
+            let t = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, f, uy);
+            fy = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, fy, t);
+            let t = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, f, uz);
+            fz = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, fz, t);
+        }
+        // a = f / m; then semi-implicit Euler: v += a·dt; p += v·dt.
+        let dtc = nb_const(out, &mut next_id, self.dt);
+        let ax = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, fx, m);
+        let ay = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, fy, m);
+        let az = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, fz, m);
+        let nvx = nb_add_mul(out, &mut next_id, vx, ax, dtc);
+        let nvy = nb_add_mul(out, &mut next_id, vy, ay, dtc);
+        let nvz = nb_add_mul(out, &mut next_id, vz, az, dtc);
+        let npx = nb_add_mul(out, &mut next_id, px, nvx, dtc);
+        let npy = nb_add_mul(out, &mut next_id, py, nvy, dtc);
+        let npz = nb_add_mul(out, &mut next_id, pz, nvz, dtc);
+        nb_write(out, entity, 3, nvx);
+        nb_write(out, entity, 4, nvy);
+        nb_write(out, entity, 5, nvz);
+        nb_write(out, entity, 0, npx);
+        nb_write(out, entity, 1, npy);
+        nb_write(out, entity, 2, npz);
+        ret(out);
+    }
+}
