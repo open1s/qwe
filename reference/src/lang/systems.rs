@@ -2963,14 +2963,16 @@ impl EirSystem for PairSystem {
         let vy = nb_read(out, &mut next_id, entity, 4);
         let vz = nb_read(out, &mut next_id, entity, 5);
         let m = nb_read(out, &mut next_id, entity, 6);
-        // Coordination number (bond order): count the other group's bodies
-        // within `coord` of `i` (including the current pair).
-        let mut ncoord: Option<u32> = None;
+        // Bond order: when `coord` is set, compute the coordination number `n`
+        // (how many other-group bodies are within `rc`) and `rmin` (the nearest
+        // such distance), for use in the law.
+        let mut extra: Option<(u32, u32)> = None;
         if let Some(rc) = self.coord {
             let rcc = nb_const(out, &mut next_id, rc);
             let one = nb_const(out, &mut next_id, 1.0);
             let zero = nb_const(out, &mut next_id, 0.0);
             let mut n = nb_const(out, &mut next_id, 0.0);
+            let mut rmin = nb_const(out, &mut next_id, f64::INFINITY);
             for &k in others {
                 if k == entity {
                     continue;
@@ -2992,8 +2994,10 @@ impl EirSystem for PairSystem {
                 let lt = nb_cmp(out, &mut next_id, crate::eir::Opcode::Lt, r, rcc);
                 let inc = nb_select(out, &mut next_id, lt, one, zero);
                 n = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, n, inc);
+                let closer = nb_cmp(out, &mut next_id, crate::eir::Opcode::Lt, r, rmin);
+                rmin = nb_select(out, &mut next_id, closer, r, rmin);
             }
-            ncoord = Some(n);
+            extra = Some((n, rmin));
         }
         let mut fx = nb_const(out, &mut next_id, 0.0);
         let mut fy = nb_const(out, &mut next_id, 0.0);
@@ -3026,8 +3030,9 @@ impl EirSystem for PairSystem {
             let r = nb_un(crate::eir::Opcode::Sqrt, out, &mut next_id, r2e);
             let mut locals: std::collections::BTreeMap<String, u32> = Default::default();
             locals.insert("r".to_string(), r);
-            if let Some(n) = ncoord {
+            if let Some((n, rmin)) = extra {
                 locals.insert("n".to_string(), n);
+                locals.insert("rmin".to_string(), rmin);
             }
             let ctx = super::lower::LowerCtx {
                 slot_regs: &[],

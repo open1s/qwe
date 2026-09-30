@@ -3797,3 +3797,32 @@ fn pair_coord_law_sees_coordination_number() {
         st.values[0]
     );
 }
+
+#[test]
+fn pair_coord_binds_rmin() {
+    // `coord` also exposes `rmin` (nearest-neighbour distance); a law that keeps
+    // only the nearest partner (`if(r <= rmin + eps)`) yields a selective force.
+    let src = r#"world { gravity=(0,0,0)
+      entity a { state=(px=0.0,py=0.0,pz=0.0,vx=0.0,vy=0.0,vz=0.0,m=1.0) tag=A }
+      entity b { state=(px=1.2,py=0.0,pz=0.0,vx=0.0,vy=0.0,vz=0.0,m=1.0) tag=A }
+      entity c { state=(px=4.0,py=0.0,pz=0.0,vx=0.0,vy=0.0,vz=0.0,m=1.0) tag=A }
+    }
+    systems {
+      pair  { tag=A; other=A; dt=0.01; coord=2.0; law = (1.0 - r) * if(r <= rmin + 0.05, 1.0, 0.0) }
+      drift { tag=A; dt=0.01 }
+    }"#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(30).unwrap();
+    let st = rt
+        .scene
+        .get(pwe_api::EntityId(1))
+        .unwrap()
+        .state
+        .as_ref()
+        .unwrap();
+    assert!(
+        st.values[0] > 0.0,
+        "a bonded to its nearest b: {}",
+        st.values[0]
+    );
+}
