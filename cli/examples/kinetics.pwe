@@ -1,0 +1,69 @@
+# kinetics.pwe — exact stochastic kinetics with `gillespie` (Gillespie SSA).
+#
+# Every atom is its own reaction vessel: it carries two species in `state`
+# (`A` = still to decay, `C` = decayed) and nothing runs on it but one
+# `gillespie` system with a single channel
+#
+#     channel decay = k * A => (A = A - 1, C = C + 1, x = x + hop)
+#
+# The system draws the *exact* waiting time from the propensity `k*A`
+# (exponential with rate `k*A`), fires the reaction when it lands inside the
+# step, and stops at the step boundary — so a step is a truncation of a
+# continuous-time Markov chain, not an Euler approximation of one.
+#
+# Because each atom decays on its own random clock, the left tray drains one
+# hop at a time: a Poisson process you can watch. Averaged over the 24 atoms
+# the survivor count follows the deterministic rate law A(t) = A0*exp(-k*t),
+# which is exactly why the stochastic and ODE descriptions agree in bulk.
+#
+#   cargo build --release -p pwe-cli
+#   pwe compile cli/examples/kinetics.pwe -o kinetics.pweb
+#   pwe run     kinetics.pweb --steps 400
+#   pwe run     kinetics.pweb --steps 400 --param k=0.6    # faster decay
+#   pwe present kinetics.pweb --port 8000
+
+world {
+  title = "Kinetics: A -> C (exact stochastic, gillespie)"
+  gravity = (0, 0, 0)
+
+  params {
+    k = 0.15 [1/s]     # decay rate per atom
+    hop = 8.0 [m]      # reactant tray x -> product tray x
+  }
+
+  # 24 atoms in a 6x4 grid; all start in the reactant tray at x = -4 and hop
+  # to x = +4 the instant their one reaction fires.
+  entity a00 { state = (x = -4.0, y = -1.5, z = -0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a01 { state = (x = -4.0, y = -1.5, z = -0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a02 { state = (x = -4.0, y = -1.5, z =  0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a03 { state = (x = -4.0, y = -1.5, z =  0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a04 { state = (x = -4.0, y = -0.9, z = -0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a05 { state = (x = -4.0, y = -0.9, z = -0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a06 { state = (x = -4.0, y = -0.9, z =  0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a07 { state = (x = -4.0, y = -0.9, z =  0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a08 { state = (x = -4.0, y = -0.3, z = -0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a09 { state = (x = -4.0, y = -0.3, z = -0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a10 { state = (x = -4.0, y = -0.3, z =  0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a11 { state = (x = -4.0, y = -0.3, z =  0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a12 { state = (x = -4.0, y =  0.3, z = -0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a13 { state = (x = -4.0, y =  0.3, z = -0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a14 { state = (x = -4.0, y =  0.3, z =  0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a15 { state = (x = -4.0, y =  0.3, z =  0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a16 { state = (x = -4.0, y =  0.9, z = -0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a17 { state = (x = -4.0, y =  0.9, z = -0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a18 { state = (x = -4.0, y =  0.9, z =  0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a19 { state = (x = -4.0, y =  0.9, z =  0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a20 { state = (x = -4.0, y =  1.5, z = -0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a21 { state = (x = -4.0, y =  1.5, z = -0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a22 { state = (x = -4.0, y =  1.5, z =  0.3, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+  entity a23 { state = (x = -4.0, y =  1.5, z =  0.9, A = 1.0, C = 0.0) shape = sphere; size = 0.26; color = 0x66ccff; tag = atom; label = false }
+}
+
+systems {
+  gillespie {
+    tag = atom
+    dt = 0.1
+    events = 8
+    channel decay = k * A => (A = A - 1, C = C + 1, x = x + hop)
+  }
+}

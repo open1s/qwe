@@ -104,6 +104,15 @@ pub fn check_id() -> ComponentTypeId {
     fixed_id(&ID, "pwe.lang", "check")
 }
 
+/// Canonical `ComponentTypeId` for the hidden per-entity `gillespie` budget
+/// verdict component: each `gillespie` system writes 1 here when the step
+/// needed more reactions than its `events` budget allowed, so the host can fail
+/// the step instead of silently truncating the trajectory.
+pub fn gillespie_budget_id() -> ComponentTypeId {
+    static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
+    fixed_id(&ID, "pwe.lang", "gillespie_budget")
+}
+
 /// Canonical `ComponentTypeId` for a named model parameter
 /// (`pwe.lang.param.<name>`); rules read parameters through `read_field`.
 ///

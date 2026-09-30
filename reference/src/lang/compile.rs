@@ -42,6 +42,7 @@ pub fn build_systems(
     let mut out: Vec<Box<dyn EirSystem>> = Vec::new();
     let mut invariant_count: usize = 0;
     let mut conserved_count: usize = 0;
+    let mut gillespie_count: usize = 0;
     for s in systems {
         match s.kind.as_str() {
             "gravity" => out.push(Box::new(GravitySystem {
@@ -1038,6 +1039,202 @@ the engine has no rotational state (RFC-0039)"
                     anchor_b: (0.0, 0.0, 0.0),
                     limit,
                     iterations,
+                }));
+            }
+            "gillespie" => {
+                // Exact stochastic simulation (Gillespie SSA): each tagged
+                // entity carries integer species counts in its state slots, and
+                // every `channel` is one reaction with a propensity `a_k`.
+                warn_state_param_collisions(s, state_names_by_id, entity_ids);
+                let dt = param(&s.params, "dt", s.byte_offset, &s.kind)?;
+                if !dt.is_finite() || dt <= 0.0 {
+                    return Err(error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        format!("gillespie `dt` must be a finite positive number, got {dt}"),
+                    ));
+                }
+                // Per-step reaction budget: the step runs SSA events until the
+                // virtual clock passes `dt`, or `events` reactions have fired.
+                let events = match s.params.get("events").copied() {
+                    Some(v) => {
+                        if !(1.0..=512.0).contains(&v) || v.fract() != 0.0 {
+                            return Err(error_at(
+                                Status::Invalid,
+                                48,
+                                s.byte_offset,
+                                "gillespie `events` must be an integer in 1..=512".to_string(),
+                            ));
+                        }
+                        v as u32
+                    }
+                    None => GILLESPIE_DEFAULT_EVENTS,
+                };
+                let tag = s.string_params.get("tag").cloned().ok_or_else(|| {
+                    error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        "gillespie requires `tag = <name>` (the reacting entities)".to_string(),
+                    )
+                })?;
+                let only: std::collections::BTreeSet<u128> = tag_ids
+                    .get(&tag)
+                    .cloned()
+                    .ok_or_else(|| {
+                        error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            format!("gillespie references unknown tag '{tag}'"),
+                        )
+                    })?
+                    .into_iter()
+                    .collect();
+                if only.is_empty() {
+                    return Err(error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        format!("gillespie tag '{tag}' matches no entity"),
+                    ));
+                }
+                // Slot rules have no SSA meaning here; state changes belong to
+                // the reaction effects.
+                if let Some((key, _)) = s.update.iter().chain(s.assigns.iter()).next() {
+                    return Err(error_at(
+                        Status::Invalid,
+                        55,
+                        s.byte_offset,
+                        format!(
+                            "gillespie has no slot rules; put `{key} = …` in a reaction as \
+`channel <name> = <propensity> => ({key} = …)`"
+                        ),
+                    ));
+                }
+                if s.channels.is_empty() {
+                    return Err(error_at(
+                        Status::Invalid,
+                        55,
+                        s.byte_offset,
+                        "gillespie requires at least one reaction: \
+`channel <name> = <propensity> => (<slot> = <new value>, …)`"
+                            .to_string(),
+                    ));
+                }
+                let mut chans: Vec<ReactionChannel> = Vec::with_capacity(s.channels.len());
+                let mut seen: std::collections::BTreeSet<&str> = Default::default();
+                for c in &s.channels {
+                    if !seen.insert(c.name.as_str()) {
+                        return Err(error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            format!("duplicate gillespie channel `{}`", c.name),
+                        ));
+                    }
+                    if c.set.is_empty() {
+                        return Err(error_at(
+                            Status::Invalid,
+                            55,
+                            s.byte_offset,
+                            format!(
+                                "gillespie channel `{}` changes nothing; give it at least one \
+`<slot> = <value>`",
+                                c.name
+                            ),
+                        ));
+                    }
+                    let prop = parse_expr_str(&c.prop)?;
+                    let mut set = Vec::with_capacity(c.set.len());
+                    for (lhs, rhs) in &c.set {
+                        set.push((lhs.clone(), parse_expr_str(rhs)?));
+                    }
+                    chans.push(ReactionChannel {
+                        name: c.name.clone(),
+                        prop,
+                        set,
+                    });
+                }
+                // Strict identifier resolution: a typo in a propensity or an
+                // effect must fail to compile, not read 0.0 in production.
+                let mut allowed: std::collections::BTreeSet<String> =
+                    param_names.iter().cloned().collect();
+                allowed.insert("dt".to_string());
+                for id in &only {
+                    if let Some(m) = state_names_by_id.get(id) {
+                        allowed.extend(m.keys().cloned());
+                    }
+                }
+                collect_stmt_names(&s.update_stmts, &mut allowed);
+                for c in &chans {
+                    strict_names(
+                        &c.prop,
+                        &allowed,
+                        entity_ids,
+                        state_names_by_id,
+                        s.byte_offset,
+                    )?;
+                    for (_, e) in &c.set {
+                        strict_names(e, &allowed, entity_ids, state_names_by_id, s.byte_offset)?;
+                    }
+                }
+                // Every effect slot must resolve on at least one tagged entity
+                // (per-entity layout mismatches are reported during lowering).
+                for c in &chans {
+                    for (lhs, _) in &c.set {
+                        let idx = numeric_slot(lhs);
+                        let ok = match idx {
+                            Some(i) => i < crate::components::State::MAX_STATE_SLOTS,
+                            None => only.iter().any(|id| {
+                                state_names_by_id
+                                    .get(id)
+                                    .map(|m| m.contains_key(lhs))
+                                    .unwrap_or(false)
+                            }),
+                        };
+                        if !ok {
+                            return Err(error_at(
+                                Status::Invalid,
+                                if idx.is_some() { 52 } else { 48 },
+                                s.byte_offset,
+                                format!(
+                                    "gillespie channel `{}` writes slot `{lhs}`, which no entity \
+under tag '{tag}' has",
+                                    c.name
+                                ),
+                            ));
+                        }
+                    }
+                }
+                let lets = to_let_stmts(&s.update_stmts, s.byte_offset)?;
+                // One hidden verdict slot per gillespie system, in source order.
+                let budget_count = gillespie_count;
+                if budget_count >= 16 {
+                    return Err(error_at(
+                        Status::Invalid,
+                        48,
+                        s.byte_offset,
+                        "too many gillespie systems (at most 16 per program)".to_string(),
+                    ));
+                }
+                gillespie_count += 1;
+                let budget_offset =
+                    (budget_count as u32) * crate::physics_eir::field::STATE_SLOT_BYTES;
+                out.push(Box::new(GillespieSystem {
+                    channels: chans,
+                    lets,
+                    dt,
+                    events,
+                    only,
+                    budget_offset,
+                    entity_map: entity_ids.clone(),
+                    func_ids: func_ids.clone(),
+                    field_dims: field_dims.clone(),
+                    namespace: s.namespace.clone(),
+                    param_names: param_names.clone(),
+                    state_names_by_id: state_names_by_id.clone(),
                 }));
             }
             _ => return Err(error(Status::Invalid, 49)),
@@ -2499,6 +2696,89 @@ orientation needs slots 7/8/9"
     }
 }
 
+/// Collects every local a system's `let`/`for` statements bind, so identifier
+/// checks can allow them alongside state slots and parameters.
+fn collect_stmt_names(stmts: &[UpdateStmt], out: &mut std::collections::BTreeSet<String>) {
+    for s in stmts {
+        match s {
+            UpdateStmt::Let(name, _, _) | UpdateStmt::For(name, _, _, _) => {
+                out.insert(name.clone());
+            }
+            UpdateStmt::Repeat(_, body) => collect_stmt_names(body, out),
+            UpdateStmt::If(..) | UpdateStmt::Break(_) | UpdateStmt::Continue(_) => {}
+        }
+    }
+}
+
+/// Rejects an identifier that would resolve to nothing at lowering time
+/// (detail 48). Used by `gillespie`, where a typo in a propensity or a reaction
+/// effect must fail to compile instead of silently reading 0.0.
+fn strict_names(
+    e: &Expr,
+    allowed: &std::collections::BTreeSet<String>,
+    entity_map: &std::collections::BTreeMap<String, u128>,
+    state_names_by_id: &std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
+    sys_off: usize,
+) -> Result<()> {
+    let unknown = |what: &str| {
+        error_at(
+            Status::Invalid,
+            48,
+            sys_off,
+            format!("gillespie expression references unknown {what}"),
+        )
+    };
+    match e {
+        Expr::Const(_) | Expr::Slot(_) | Expr::Time => Ok(()),
+        Expr::SlotDyn(a) | Expr::Neg(a) | Expr::Not(a) => {
+            strict_names(a, allowed, entity_map, state_names_by_id, sys_off)
+        }
+        Expr::Add(a, b)
+        | Expr::Sub(a, b)
+        | Expr::Mul(a, b)
+        | Expr::Div(a, b)
+        | Expr::Rem(a, b)
+        | Expr::Cmp(_, a, b)
+        | Expr::And(a, b)
+        | Expr::Or(a, b) => {
+            strict_names(a, allowed, entity_map, state_names_by_id, sys_off)?;
+            strict_names(b, allowed, entity_map, state_names_by_id, sys_off)
+        }
+        Expr::Call(_, args) => {
+            for a in args {
+                strict_names(a, allowed, entity_map, state_names_by_id, sys_off)?;
+            }
+            Ok(())
+        }
+        Expr::Name(n) => {
+            if allowed.contains(n.as_str()) {
+                return Ok(());
+            }
+            if let Some((ent, rest)) = n.split_once('.') {
+                let slot = rest.strip_prefix("state.").unwrap_or(rest);
+                if let Some(id) = entity_map.get(ent) {
+                    if state_names_by_id
+                        .get(id)
+                        .map(|m| m.contains_key(slot) || m.contains_key(rest))
+                        .unwrap_or(false)
+                    {
+                        return Ok(());
+                    }
+                }
+                return Err(unknown(&format!("state slot `{n}`")));
+            }
+            Err(unknown(&format!("identifier `{n}`")))
+        }
+        Expr::Ref(name, _) | Expr::PropRef(name, _) => {
+            if entity_map.contains_key(name.as_str()) {
+                Ok(())
+            } else {
+                Err(unknown(&format!("entity `{name}`")))
+            }
+        }
+    }
+}
+
 fn warn_state_param_collisions(
     s: &SystemDecl,
     state_names_by_id: &std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
@@ -2987,7 +3267,10 @@ they are read as a Z-spin, not euler angles",
         // EIR-level validation error: surface the reason instead of the generic
         // "unspecified compile error" (its byte_offset is an instruction index,
         // not a source position).
-        let msg = format!("internal EIR validation failed (EIR detail {})", e.detail);
+        let msg = format!(
+            "internal EIR validation failed (EIR detail {} at instruction {})",
+            e.detail, e.byte_offset
+        );
         push_diag(60, 0, msg.clone());
         error_at(Status::Invalid, 60, 0, msg)
     })?;

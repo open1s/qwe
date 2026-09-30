@@ -2703,6 +2703,362 @@ impl EirSystem for NbodySystem {
     }
 }
 
+/// One reaction channel of a `gillespie` system: a propensity `a_k` and the
+/// state changes applied when it fires.
+pub struct ReactionChannel {
+    pub name: String,
+    /// Propensity of this reaction given the entity's current state.
+    pub prop: Expr,
+    /// `(slot, new value)` pairs, all evaluated against the pre-event state
+    /// (simultaneous assignment; a later pair wins on a repeated slot).
+    pub set: Vec<(String, Expr)>,
+}
+
+/// Default per-step reaction budget of a `gillespie` system (`events`).
+pub const GILLESPIE_DEFAULT_EVENTS: u32 = 64;
+
+/// Exact stochastic simulation of a reaction network (Gillespie's direct
+/// method, SSA). Each entity tagged for the system holds integer species counts
+/// in its state slots; one step draws reactions until the virtual clock passes
+/// `dt`, or `events` reactions have fired.
+///
+/// Lowering is branch-free: the step expands into `events + 1` identical
+/// straight-line event blocks (EIR has no phi nodes, so a CFG loop would not be
+/// SSA-verifiable). Block *k* draws `tau ~ Exp(a0)` with the seeded RNG, and
+/// fires only when `vt + tau <= dt` *and* the network can still react — an
+/// out-of-window draw leaves the state untouched, which is exactly memoryless
+/// rejection. The `(events + 1)`-th block is the detector: if it still fits
+/// inside `dt`, the budget ran out, and the verdict is written to the hidden
+/// budget component so the runtime fails the step (detail 106) rather than
+/// silently truncating the trajectory.
+pub struct GillespieSystem {
+    /// Reaction channels, in source order.
+    pub channels: Vec<ReactionChannel>,
+    /// `let` locals, recomputed at the start of every simulated event.
+    pub lets: Vec<LetStmt>,
+    /// Step width: the window the virtual clock must stay inside.
+    pub dt: f64,
+    /// Reactions per entity per step (the budget).
+    pub events: u32,
+    /// The reacting entities (the system's `tag`).
+    pub only: std::collections::BTreeSet<u128>,
+    /// Offset of this system's budget verdict in the hidden component.
+    pub budget_offset: u32,
+    /// Entity name -> id, for resolving `@name.sN` cross-entity references.
+    pub entity_map: std::collections::BTreeMap<String, u128>,
+    /// User-defined function name -> EIR function id (for `CALL`).
+    pub func_ids: std::collections::BTreeMap<String, u64>,
+    /// Grid field name -> width (compile-time, from the model).
+    pub field_dims: std::collections::BTreeMap<String, (u32, u32)>,
+    /// Module namespace of this system's expressions.
+    pub namespace: String,
+    /// Every declared parameter name (qualified), for namespace fallback.
+    pub param_names: std::collections::BTreeSet<String>,
+    /// Per-entity named state slot -> index (from `state = (x = 0, …)`).
+    pub state_names_by_id:
+        std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
+}
+impl EirSystem for GillespieSystem {
+    fn name(&self) -> &'static str {
+        "physics.gillespie"
+    }
+    fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
+        let ret =
+            || crate::physics_eir::instr(crate::eir::Opcode::Return, 0, None, vec![], None, None);
+        // Only the tagged entities take part in the reaction network.
+        if !self.only.contains(&entity) {
+            out.push(ret());
+            return;
+        }
+        let sn: std::collections::BTreeMap<String, usize> = self
+            .state_names_by_id
+            .get(&entity)
+            .cloned()
+            .unwrap_or_default();
+        // Resolve every effect slot against this entity's own layout. A channel
+        // that does not resolve would silently change its chemistry, so the
+        // entity sits out (with a diagnostic) rather than reacting partially.
+        struct Active<'a> {
+            prop: &'a Expr,
+            set: Vec<(usize, &'a Expr)>,
+        }
+        let mut active: Vec<Active<'_>> = Vec::with_capacity(self.channels.len());
+        for c in &self.channels {
+            let mut set = Vec::with_capacity(c.set.len());
+            for (lhs, e) in &c.set {
+                let idx = numeric_slot(lhs).or_else(|| sn.get(lhs).copied());
+                match idx {
+                    Some(i) if i < crate::components::State::MAX_STATE_SLOTS => set.push((i, e)),
+                    _ => {
+                        crate::lang::push_diag(
+                            100,
+                            0,
+                            format!(
+                                "gillespie channel `{}` writes unknown slot `{lhs}` for this \
+entity — skipped (not in its state; typo?)",
+                                c.name
+                            ),
+                        );
+                        out.push(ret());
+                        return;
+                    }
+                }
+            }
+            active.push(Active { prop: &c.prop, set });
+        }
+        if active.is_empty() {
+            out.push(ret());
+            return;
+        }
+        // Slot span: every slot any propensity, effect, or `let` reads or writes.
+        let mut slots = 0usize;
+        let mut max = 0usize;
+        let mut any = false;
+        for c in &active {
+            expr_slot_span(c.prop, &sn, &mut max, &mut any);
+            for (i, e) in &c.set {
+                slots = slots.max(i + 1);
+                expr_slot_span(e, &sn, &mut max, &mut any);
+            }
+        }
+        let_stmts_slot_span(&self.lets, &sn, &mut max, &mut any);
+        if any {
+            slots = slots.max(max + 1);
+        }
+        // Every distinct cross-entity / property / named reference.
+        let mut refs: std::collections::BTreeSet<(String, usize)> = Default::default();
+        let mut prop_refs: std::collections::BTreeSet<(String, PropKind)> = Default::default();
+        let mut named_refs: std::collections::BTreeSet<(String, usize)> = Default::default();
+        for c in &active {
+            collect_refs(
+                c.prop,
+                &mut refs,
+                &mut prop_refs,
+                &mut named_refs,
+                &self.entity_map,
+                &self.state_names_by_id,
+            );
+            for (_, e) in &c.set {
+                collect_refs(
+                    e,
+                    &mut refs,
+                    &mut prop_refs,
+                    &mut named_refs,
+                    &self.entity_map,
+                    &self.state_names_by_id,
+                );
+            }
+        }
+        collect_let_refs(
+            &self.lets,
+            &mut refs,
+            &mut prop_refs,
+            &mut named_refs,
+            &self.entity_map,
+            &self.state_names_by_id,
+        );
+        let mut ref_ids: Vec<(u128, usize)> = refs
+            .iter()
+            .chain(named_refs.iter())
+            .filter_map(|(name, slot)| self.entity_map.get(name).map(|id| (*id, *slot)))
+            .collect();
+        ref_ids.sort_unstable();
+        ref_ids.dedup();
+        let mut prop_ids: Vec<(u128, PropKind)> = prop_refs
+            .iter()
+            .filter_map(|(name, kind)| self.entity_map.get(name).map(|id| (*id, *kind)))
+            .collect();
+        prop_ids.sort_unstable();
+        prop_ids.dedup();
+        // Cross-entity reads are taken once, from the start-of-system snapshot
+        // (they stay fixed for the whole step).
+        let mut ref_regs: std::collections::BTreeMap<(u128, usize), u32> = Default::default();
+        for (rid, rslot) in ref_ids {
+            let next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::ReadCommitted,
+                next,
+                Some(crate::eir::ValueType::F64),
+                vec![],
+                None,
+                Some(crate::physics_eir::cr(
+                    rid,
+                    crate::physics_eir::state_id(),
+                    crate::physics_eir::field::state_slot(rslot),
+                )),
+            ));
+            ref_regs.insert((rid, rslot), next);
+        }
+        let mut prop_regs: std::collections::BTreeMap<(u128, PropKind), u32> = Default::default();
+        for (pid, kind) in prop_ids {
+            let (cid, off) = prop_component(kind);
+            let next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::ReadCommitted,
+                next,
+                Some(crate::eir::ValueType::F64),
+                vec![],
+                None,
+                Some(crate::physics_eir::cr(pid, cid, off)),
+            ));
+            prop_regs.insert((pid, kind), next);
+        }
+
+        let mut next_id = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+        let zero = nb_const(out, &mut next_id, 0.0);
+        let one = nb_const(out, &mut next_id, 1.0);
+        let dt_reg = nb_const(out, &mut next_id, self.dt);
+        // Virtual time inside this step, and the "still enabled" flag: `en`
+        // stays 1 only while every event so far landed inside the window.
+        let mut vt = zero;
+        let mut en = one;
+        for _ in 0..=self.events {
+            // Fresh snapshot of this entity's slots: the previous event's
+            // writes are visible here, so species counts chain across events.
+            let mut slot_regs: Vec<u32> = Vec::with_capacity(slots);
+            for i in 0..slots {
+                let next = next_id;
+                next_id += 1;
+                out.push(crate::physics_eir::instr(
+                    crate::eir::Opcode::ReadView,
+                    next,
+                    Some(crate::eir::ValueType::F64),
+                    vec![],
+                    None,
+                    Some(crate::physics_eir::cr(
+                        entity,
+                        crate::physics_eir::state_id(),
+                        crate::physics_eir::field::state_slot(i),
+                    )),
+                ));
+                slot_regs.push(next);
+            }
+            let mut locals: std::collections::BTreeMap<String, u32> = Default::default();
+            locals.insert("dt".to_string(), dt_reg);
+            let parts = LowerParts {
+                slot_regs: &slot_regs,
+                ref_regs: &ref_regs,
+                prop_regs: &prop_regs,
+                entity_map: &self.entity_map,
+                state_names: &sn,
+                state_names_by_id: &self.state_names_by_id,
+                func_ids: &self.func_ids,
+                namespace: &self.namespace,
+                params: &self.param_names,
+                field_dims: &self.field_dims,
+                current_entity: entity,
+            };
+            lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
+            let ctx = parts.ctx(&locals);
+
+            // Propensities of every channel, clamped at zero (a negative rate
+            // is not a reaction rate and would corrupt the selection).
+            let mut a: Vec<u32> = Vec::with_capacity(active.len());
+            for c in &active {
+                let r = lower_expr(c.prop, &ctx, &mut next_id, out);
+                let pos = nb_cmp(out, &mut next_id, crate::eir::Opcode::Gt, r, zero);
+                a.push(nb_select(out, &mut next_id, pos, r, zero));
+            }
+            let mut a0 = a[0];
+            for &x in &a[1..] {
+                a0 = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, a0, x);
+            }
+            // Two draws per event, always in program order: the stream is
+            // deterministic across backends and across runs.
+            let u1 = random_reg(&mut next_id, out);
+            let u2 = random_reg(&mut next_id, out);
+            let one_minus_u1 = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, one, u1);
+            let lnu = nb_un(crate::eir::Opcode::Ln, out, &mut next_id, one_minus_u1);
+            // tau = -ln(u1)/a0.
+            let pos0 = nb_cmp(out, &mut next_id, crate::eir::Opcode::Gt, a0, zero);
+            let pos_f = select_bool(pos0, &mut next_id, out);
+            let a0s = nb_select(out, &mut next_id, pos0, a0, one);
+            let tau = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, lnu, a0s);
+            let tau = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, zero, tau);
+            // gate: the event lands inside this step and the network can react.
+            let vt_tau = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, vt, tau);
+            let in_step = select_bool(
+                nb_cmp(out, &mut next_id, crate::eir::Opcode::Le, vt_tau, dt_reg),
+                &mut next_id,
+                out,
+            );
+            let gate_f = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, in_step, pos_f);
+            let gate_b = nb_cmp(out, &mut next_id, crate::eir::Opcode::Ne, gate_f, zero);
+            let fire_f = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, en, gate_f);
+            let fire_b = nb_cmp(out, &mut next_id, crate::eir::Opcode::Ne, fire_f, zero);
+            // Pick the reaction whose cumulative propensity interval contains
+            // u2·a0; the intervals partition [0, a0) because a_i >= 0.
+            let target = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, u2, a0);
+            let mut cum = zero;
+            let mut pending: Vec<(usize, u32)> = Vec::new();
+            for (c, ai) in active.iter().zip(a.iter()) {
+                let lo = cum;
+                cum = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, cum, *ai);
+                let lo_ok = select_bool(
+                    nb_cmp(out, &mut next_id, crate::eir::Opcode::Ge, target, lo),
+                    &mut next_id,
+                    out,
+                );
+                let hi_ok = select_bool(
+                    nb_cmp(out, &mut next_id, crate::eir::Opcode::Lt, target, cum),
+                    &mut next_id,
+                    out,
+                );
+                let hit = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, lo_ok, hi_ok);
+                let fired = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, fire_f, hit);
+                let fired_b = nb_cmp(out, &mut next_id, crate::eir::Opcode::Ne, fired, zero);
+                for (slot, e) in &c.set {
+                    let new = lower_expr(e, &ctx, &mut next_id, out);
+                    let base = pending
+                        .iter()
+                        .find(|(s, _)| s == slot)
+                        .map(|(_, r)| *r)
+                        .unwrap_or(slot_regs[*slot]);
+                    let v = nb_select(out, &mut next_id, fired_b, new, base);
+                    match pending.iter_mut().find(|(s, _)| s == slot) {
+                        Some(p) => p.1 = v,
+                        None => pending.push((*slot, v)),
+                    }
+                }
+            }
+            // Commit this event's writes; the next event reads them back.
+            for (slot, v) in &pending {
+                out.push(crate::physics_eir::instr(
+                    crate::eir::Opcode::WriteView,
+                    0,
+                    None,
+                    vec![*v],
+                    None,
+                    Some(crate::physics_eir::cr(
+                        entity,
+                        crate::physics_eir::state_id(),
+                        crate::physics_eir::field::state_slot(*slot),
+                    )),
+                ));
+            }
+            // The virtual clock advances only on a fired event; the budget
+            // closes as soon as one event no longer fits inside `dt`.
+            vt = nb_select(out, &mut next_id, fire_b, vt_tau, vt);
+            en = nb_select(out, &mut next_id, gate_b, en, zero);
+        }
+        // `en` still 1 ⟹ all `events + 1` reactions fit inside the step, so the
+        // budget is exactly exhausted: the runtime fails the step (detail 106).
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::WriteView,
+            0,
+            None,
+            vec![en],
+            None,
+            Some(crate::physics_eir::cr(
+                entity,
+                crate::physics_eir::gillespie_budget_id(),
+                self.budget_offset,
+            )),
+        ));
+        out.push(ret());
+    }
+}
+
 /// Accumulates the inverse-square acceleration on `entity` from every other
 /// body, using the (committed) positions passed for `entity` and read for the
 /// others. Shared by both velocity-Verlet stages.

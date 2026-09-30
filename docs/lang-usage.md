@@ -452,6 +452,52 @@ entity m { state = (x = 1.0 [m], vx = 0.0 [m/s]) }
 update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 ```
 
+## L11 — Exact stochastic kinetics (`gillespie`)
+
+Some systems are not smooth at all: a few molecules reacting one at a time. An
+ODE there describes the *mean*, not the thing itself — the discreteness is the
+whole point. `gillespie` runs the exact stochastic simulation algorithm
+(Gillespie SSA):
+
+```pwe
+world {
+  gravity = (0, 0, 0)
+  params { k = 0.15 [1/s] }
+  entity e { state = (A = 40.0, C = 0.0) tag = rx }
+}
+systems {
+  gillespie {
+    tag = rx
+    dt = 0.1
+    events = 8
+    channel decay = k * A => (A = A - 1, C = C + 1)
+  }
+}
+```
+
+* Each tagged entity carries **integer species counts** in its state slots;
+  `tag` selects the reacting entities, `dt` the step, `events` (1..=512,
+  default 64) the per-step reaction budget.
+* Every `channel <name> = <propensity> => (<slot> = <expr>, …)` is one
+  reaction. The propensity is its current rate — `k * A` here, so this is
+  first-order decay with rate `k·A`.
+* Each step draws the exact waiting time `τ ~ Exp(a)`, fires the reactions
+  that land inside `dt`, and stops at the step boundary. Nothing is Euler-ised:
+  a step is a *truncation* of a continuous-time Markov chain, not an
+  approximation of one.
+* Effects of one event are evaluated **together** — they all read the state
+  *before* the event, so `(A = A - 1, C = C + 1)` is one simultaneous move, and
+  the last writer wins if two effects name the same slot.
+* If a step would need more than `events` reactions, the run fails with
+  **detail 106** instead of silently dropping reactions: raise `events` or
+  lower `dt`. A typo in a propensity or effect is a **compile error**
+  (detail 48/52), never a silent `0.0` read.
+
+Averaged over many independent vessels the survivor count follows the
+deterministic law `A(t) = A0·e^{-kt}`: the stochastic and the ODE view agree in
+bulk and disagree one molecule at a time. See `cli/examples/kinetics.pwe` — 24
+atoms draining the reactant tray one hop at a time.
+
 ## Common mistakes (symptom → cause → fix)
 
 | Symptom | Cause | Fix |
@@ -480,6 +526,7 @@ update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 8. A 3-link pendulum with joints.
 9. A cloth sheet.
 10. Rebuild `courtyard.pwe`: mesh ground + walking, turning figures.
+11. Stochastic kinetics: tune `k`, watch `kinetics.pwe` drain one hop at a time.
 
 ---
 
@@ -637,6 +684,7 @@ field name; cell writes are visible to later reads in the same step.
 | `send`/`recv` | `on`(req),`chan`,`value` / `on`(req),`chan`,`slot` | channel | channel send/receive (scoped to `on`) |
 | `update` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | explicit Euler (rules read the *original* slot values — no intra-step chaining; give each slot one rule) |
 | `rk4` | `dt`,`on?`,`when?`,`every?`,`substeps?`,rules | state | Runge–Kutta 4 |
+| `gillespie` | `tag`(req),`dt`,`events?`,channels | state | exact stochastic kinetics (Gillespie SSA): each `channel <name> = <propensity> => (<slot> = …, …)` is one reaction; every step draws the exact waiting time from the propensity and fires at most `events` reactions (1..=512, default 64) — needing more fails with detail 106 |
 | `invariant` | `expr`,`on?` | — | per-step assertion |
 | `watch` | `expr`,`mem`,`into`,`on?` | state | zero-crossing flag |
 | `diffuse` | `field`,`rate` | field | `T += rate·∇²T` |
@@ -873,6 +921,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 102 | Reference to a non-exported module item. |
 | 103 | A field name is not a lowercase identifier. |
 | 105 | A per-part `opacity` outside `0..1`. |
+| 106 | A `gillespie` step exceeded its reaction budget (`events`) — raise `events` or lower `dt`. |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the
@@ -933,6 +982,7 @@ Compile then run/present the `.pweb`.
 | `particles.pwe` | pool + `spawn`/`despawn`. |
 | `courtyard.pwe` | mesh ground + turning/leaning walkers (`orient`). |
 | `structs.pwe` | `struct` record types (`pos.x`, `@a.pos.y`). |
+| `kinetics.pwe` | exact stochastic kinetics: `gillespie` channels + SSA. |
 
 ---
 

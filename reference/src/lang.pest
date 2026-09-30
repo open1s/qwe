@@ -161,11 +161,19 @@ vecN = { "(" ~ value ~ ("," ~ value)* ~ ")" }
 // -- systems -----------------------------------------------------------------
 systems_section = { "systems" ~ "{" ~ system* ~ "}" }
 // Channel send/recv are first-class grammar productions; any other system kind
-// is a generic `ident { param }` block.
-system = _{ send_system | recv_system | generic_system }
+// is a generic `ident { param }` block. `gillespie` is first-class too, because
+// its body also carries reaction `channel` statements.
+system = _{ send_system | recv_system | gillespie_system | generic_system }
 send_system = { "send" ~ "{" ~ param* ~ "}" }
 recv_system = { "recv" ~ "{" ~ param* ~ "}" }
+gillespie_system = { "gillespie" ~ "{" ~ (channel_stmt | param)* ~ "}" }
 generic_system = { ident ~ "{" ~ param* ~ "}" }
+// One stochastic reaction: `channel <name> = <propensity> => (<slot> = <new
+// value>, …)`. The lookahead keeps `channel_x = 1` a normal parameter.
+channel_stmt = { channel_kw ~ ident ~ "=" ~ expr ~ "=>" ~ channel_assigns ~ ";"? }
+channel_kw = @{ "channel" ~ !(ASCII_ALPHANUMERIC | "_") }
+channel_assigns = { "(" ~ channel_assign ~ ("," ~ channel_assign)* ~ ")" }
+channel_assign = { ident ~ "=" ~ expr }
 // A rule line: `let`/loops, an ODE rule (`deriv`/`integrate slot = rate` or
 // `slot += rate`), an assignment rule (`slot = expr`), a bare call, or a
 // system parameter (`ident = value|vecN|ident`).

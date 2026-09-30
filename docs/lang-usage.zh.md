@@ -428,6 +428,43 @@ entity m { state = (x = 1.0 [m], vx = 0.0 [m/s]) }
 update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 ```
 
+## L11 —— 精确随机化学动力学（`gillespie`）
+
+有些系统天生不连续：几个分子一次只反应一次。那里的 ODE 描述的是*均值*，不是
+事物本身 —— 离散性才是重点。`gillespie` 替你执行精确随机模拟算法（Gillespie SSA）：
+
+```pwe
+world {
+  gravity = (0, 0, 0)
+  params { k = 0.15 [1/s] }
+  entity e { state = (A = 40.0, C = 0.0) tag = rx }
+}
+systems {
+  gillespie {
+    tag = rx
+    dt = 0.1
+    events = 8
+    channel decay = k * A => (A = A - 1, C = C + 1)
+  }
+}
+```
+
+* 每个带标签实体在状态槽里放**整数物种计数**；`tag` 选反应实体，`dt` 是步长，
+  `events`（1..=512，默认 64）是每步反应预算。
+* 每条 `channel <名> = <倾向> => (<槽> = <表达式>, …)` 是一个反应。倾向是它当下的
+  速率 —— 这里是 `k * A`，即速率 `k·A` 的一级衰变。
+* 每步抽取精确等待时间 `τ ~ Exp(a)`，触发落在 `dt` 内的反应，然后停在步边界。
+  没有任何欧拉化：一步是对连续时间马尔可夫链的**截断**，不是对它的近似。
+* 一个事件的效果**同时**求值 —— 全都读取事件*之前*的状态，所以
+  `(A = A - 1, C = C + 1)` 是一次同步迁移；两个效果写同一槽时后者生效。
+* 一步需要超过 `events` 个反应时，运行以 **detail 106** 失败，而不是悄悄丢反应：
+  调大 `events` 或调小 `dt`。倾向或效果里的拼写错误是**编译错误**（detail 48/52），
+  绝不会静默读成 `0.0`。
+
+在许多独立容器上取平均，存活数遵循确定性定律 `A(t) = A0·e^{-kt}`：随机视角与
+ODE 视角在总量上一致，在单个分子上不一致。见 `cli/examples/kinetics.pwe` —— 24
+个原子一次一跳地排空反应物托盘。
+
 ## 常见错误（现象 → 原因 → 修法）
 
 | 现象 | 原因 | 修法 |
@@ -456,6 +493,7 @@ update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 8. 用关节做 3 连杆摆。
 9. 一块布。
 10. 复刻 `courtyard.pwe`：网格地面 + 会转身、前倾的行人。
+11. 随机动力学：调 `k`，看 `kinetics.pwe` 一次一跳地排空。
 
 ---
 
@@ -567,9 +605,12 @@ update { on = m; dt = 0.01 [s] vx = vx + dt*(accel(k, x)) }
 | `ground_contact` | `restitution` | 分量 | 解算 `y=0` 平面 |
 | `linear` | `slots`,`dt`,`row0=(…)`,… | 状态 | `ds/dt = A·s + c`（欧拉） |
 | `nbody`（velocity-Verlet） | `G`,`dt` | 状态 | 平方反比；`state=(px,py,pz,vx,vy,vz,m)` |
+| `pair` | `tag`,`other?`,`dt`,`law`,`coord?`,`cohort?` | 状态 | 通用成对力：对 `tag` 组每个物体，把 `law(r)`（成对距离 `r` 上的力，正值为斥力）对 `other` 组（默认自身）求和；**冲量** `v += a·dt`；`state=(px,py,pz,vx,vy,vz,m)`。`coord = rc` 时律还可使用 `n`（配位数）、`rmin`（最近邻距离）与 `rminj`（对方最近邻距离），于是**对称**键级可表达；`cohort = <tag>` 指定配位数的统计组（默认 `tag` ∪ `other`） |
+| `drift` | `tag`,`dt`,`damp?` | 状态 | 带标签物体的位置漂移 `p += v·dt`（可选阻尼 `v *= 1-damp·dt`）；与 `pair` 配对使用 |
 | `send`/`recv` | `on`(必需),`chan`,`value` / `on`(必需),`chan`,`slot` | 通道 | 通道收发（限定 `on`） |
 | `update` | `dt`,`on?`,`when?`,`every?`,`substeps?`,规则 | 状态 | 显式欧拉 |
 | `rk4` | `dt`,`on?`,`when?`,`every?`,`substeps?`,规则 | 状态 | 4 阶 RK |
+| `gillespie` | `tag`(必需),`dt`,`events?`,通道 | 状态 | 精确随机化学动力学（Gillespie SSA）：每条 `channel <名> = <倾向> => (<槽> = …, …)` 是一个反应；每步按倾向抽取精确等待时间，最多触发 `events` 个反应（1..=512，默认 64），不够则以 detail 106 失败 |
 | `invariant` | `expr`,`on?` | — | 每步断言 |
 | `watch` | `expr`,`mem`,`into`,`on?` | 状态 | 零穿越标志 |
 | `diffuse` | `field`,`rate` | 场 | `T += rate·∇²T` |
@@ -768,6 +809,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 100 | 赋值给未知状态槽（被忽略）—— 警告。 |
 | 101 | 模块名重复（两个模块声明了相同的 `module`）。 |
 | 102 | 引用了模块未导出的成员。 |
+| 106 | `gillespie` 一步超出反应预算（`events`）—— 调大 `events` 或调小 `dt`。 |
 
 **调试流程**：缩减到一个实体 + 一个系统；核对模型（§0.6）；核对积分/赋值陷阱；加
 `invariant`；`run … --steps N` 读打印状态。
@@ -826,6 +868,7 @@ update { on = body; dt = 0.1
 | `particles.pwe` | 池 + `spawn`/`despawn`。 |
 | `courtyard.pwe` | 网格地面 + 转身/前倾行人（`orient`）。 |
 | `structs.pwe` | `struct` 记录类型（`pos.x`、`@a.pos.y`）。 |
+| `kinetics.pwe` | 精确随机动力学：`gillespie` 通道 + SSA。 |
 
 ---
 

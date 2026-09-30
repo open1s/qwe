@@ -3885,3 +3885,254 @@ fn pair_cohort_spans_all_tags() {
         "a is attracted (n includes the Cl via cohort): {a}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `gillespie`: exact stochastic chemical kinetics (SSA)
+// ---------------------------------------------------------------------------
+
+/// A first-order decay `A -> 0` fires real reactions: the count falls, stays a
+/// non-negative integer, and the program runs through the cross-backend check.
+#[test]
+fn gillespie_smoke() {
+    let src = r#"world { gravity=(0,0,0)
+      entity e { state=(A=50.0) tag=rx }
+    }
+    systems {
+      gillespie {
+        tag = rx
+        dt = 1.0
+        events = 200
+        channel decay = 0.5 * A => (A = A - 1)
+      }
+    }"#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(5).unwrap();
+    let a = rt
+        .scene
+        .get(EntityId(1))
+        .unwrap()
+        .state
+        .as_ref()
+        .unwrap()
+        .values[0];
+    assert!(a > 0.0 && a < 50.0, "A must decay by whole reactions: {a}");
+    assert!(a.fract() == 0.0, "species counts stay integral: {a}");
+}
+
+/// Two runs of the same source take identical trajectories: the SSA draws come
+/// from the seeded RNG in program order, so the stream is reproducible.
+#[test]
+fn gillespie_is_deterministic_across_runs() {
+    let src = r#"world { gravity=(0,0,0)
+      entity a { state=(A=30.0, B=30.0, C=0.0) tag=rx }
+      entity b { state=(A=30.0, B=30.0, C=0.0) tag=rx }
+    }
+    systems {
+      gillespie {
+        tag = rx
+        dt = 1.0
+        events = 128
+        channel react = 0.05 * A * B => (A = A - 1, B = B - 1, C = C + 1)
+      }
+    }"#;
+    let mut r1 = LangRuntime::compile(src).unwrap();
+    let mut r2 = LangRuntime::compile(src).unwrap();
+    r1.step_cross_n(15).unwrap();
+    r2.step_cross_n(15).unwrap();
+    for id in [1u128, 2] {
+        let a = r1
+            .scene
+            .get(EntityId(id))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values
+            .clone();
+        let b = r2
+            .scene
+            .get(EntityId(id))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values
+            .clone();
+        assert_eq!(a, b, "entity {id} diverged between runs");
+    }
+}
+
+/// Stoichiometry: `A + B -> C` consumes one of each reactant per event, so the
+/// atom balances `A + C` and `B + C` are exact at every step of every run.
+#[test]
+fn gillespie_conserves_mass() {
+    let src = r#"world { gravity=(0,0,0)
+      entity e { state=(A=40.0, B=40.0, C=0.0) tag=rx }
+    }
+    systems {
+      gillespie {
+        tag = rx
+        dt = 1.0
+        events = 400
+        channel react = 0.02 * A * B => (A = A - 1, B = B - 1, C = C + 1)
+      }
+    }"#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    for step in 0..25 {
+        rt.step_cross().unwrap();
+        let v = &rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values;
+        assert_eq!(v[0] + v[2], 40.0, "step {step}: A + C drifted: {v:?}");
+        assert_eq!(v[1] + v[2], 40.0, "step {step}: B + C drifted: {v:?}");
+        for x in &v[..3] {
+            assert!(x.fract() == 0.0, "step {step}: counts stay integral: {v:?}");
+            assert!(*x >= 0.0, "step {step}: counts never go negative: {v:?}");
+        }
+    }
+    let v = &rt
+        .scene
+        .get(EntityId(1))
+        .unwrap()
+        .state
+        .as_ref()
+        .unwrap()
+        .values;
+    assert!(v[2] > 0.0, "the reaction must have produced C: {v:?}");
+}
+
+/// Statistics: independent entities decaying at rate `k` average to
+/// `A0 · e^{-kT}` — SSA reproduces the deterministic rate law.
+#[test]
+fn gillespie_first_order_mean_matches_exponential() {
+    const N: u128 = 32;
+    const A0: f64 = 40.0;
+    const K: f64 = 0.05;
+    const DT: f64 = 1.0;
+    const STEPS: u64 = 10;
+    let mut world = String::from("world { gravity=(0,0,0) ");
+    for i in 1..=N {
+        world.push_str(&format!("entity e{i} {{ state=(A=40.0) tag=rx }} "));
+    }
+    world.push('}');
+    let src = format!(
+        "{world} systems {{ gillespie {{ tag=rx dt={DT} events=64 \
+         channel decay = {K} * A => (A = A - 1) }} }}"
+    );
+    let mut rt = LangRuntime::compile(&src).unwrap();
+    rt.step_cross_n(STEPS).unwrap();
+    let mut sum = 0.0;
+    for i in 1..=N {
+        sum += rt
+            .scene
+            .get(EntityId(i))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[0];
+    }
+    let mean = sum / N as f64;
+    let expected = A0 * (-K * DT * STEPS as f64).exp();
+    assert!(
+        (mean - expected).abs() < 4.0,
+        "mean A = {mean}, expected about {expected} (A0·e^-kT)"
+    );
+}
+
+/// A network that cannot react leaves every count untouched — and the budget
+/// stays closed, so a zero-propensity step never reports truncation.
+#[test]
+fn gillespie_zero_propensity_leaves_state_alone() {
+    let src = r#"world { gravity=(0,0,0)
+      entity e { state=(A=10.0) tag=rx }
+    }
+    systems {
+      gillespie {
+        tag = rx
+        dt = 1.0
+        events = 64
+        channel dead = 0.0 * A => (A = A - 1)
+      }
+    }"#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(10).unwrap();
+    let v = &rt
+        .scene
+        .get(EntityId(1))
+        .unwrap()
+        .state
+        .as_ref()
+        .unwrap()
+        .values;
+    assert_eq!(v[0], 10.0, "nothing may fire: {v:?}");
+}
+
+/// Burning the whole budget inside one step fails the step (detail 106) instead
+/// of silently truncating the trajectory.
+#[test]
+fn gillespie_budget_exhaustion_fails_the_step() {
+    clear_diagnostics();
+    let src = r#"world { gravity=(0,0,0)
+      entity e { state=(A=10.0) tag=rx }
+    }
+    systems {
+      gillespie {
+        tag = rx
+        dt = 1.0
+        events = 2
+        channel fast = 1000.0 * A => (A = A - 1)
+      }
+    }"#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    let err = rt.step_cross().unwrap_err();
+    assert_eq!(err.detail, 106, "budget exhaustion is detail 106");
+    let ds = take_diagnostics();
+    assert!(
+        ds.iter()
+            .any(|d| d.detail == 106 && d.message.contains("events = 2")),
+        "diagnostic names the budget: {ds:?}"
+    );
+}
+
+/// Compile-time rejections: a gillespie program must be complete and typed
+/// before it can run, and a typo must never read 0.0 in production.
+#[test]
+fn gillespie_rejects_bad_programs() {
+    let entity = "world { gravity=(0,0,0) entity e { state=(A=10.0) tag=rx } }";
+    let cases: &[(u32, &str, &str)] = &[
+        (48, "missing dt", "systems { gillespie { tag=rx channel d = A => (A = A - 1) } }"),
+        (48, "bad events", "systems { gillespie { tag=rx dt=1.0 events=0 channel d = A => (A = A - 1) } }"),
+        (48, "unknown tag", "systems { gillespie { tag=nope dt=1.0 channel d = A => (A = A - 1) } }"),
+        (55, "no channel", "systems { gillespie { tag=rx dt=1.0 } }"),
+        (55, "slot rule", "systems { gillespie { tag=rx dt=1.0 A = 3.0 channel d = A => (A = A - 1) } }"),
+        (48, "typo in propensity", "systems { gillespie { tag=rx dt=1.0 channel d = kk * A => (A = A - 1) } }"),
+        (48, "unknown effect slot", "systems { gillespie { tag=rx dt=1.0 channel d = A => (Z = 1) } }"),
+        (48, "duplicate channel", "systems { gillespie { tag=rx dt=1.0 channel d = A => (A = A - 1) channel d = A => (A = A - 1) } }"),
+    ];
+    for (detail, what, tail) in cases {
+        clear_diagnostics();
+        let src = format!("{entity} {tail}");
+        let err = match LangRuntime::compile(&src) {
+            Ok(_) => panic!("{what} must be rejected"),
+            Err(e) => e.detail,
+        };
+        assert_eq!(err, *detail, "{what}");
+    }
+}
+
+/// The keyword guard keeps `channel_x = 1` a plain parameter of a gillespie
+/// body, not a reaction named `x`.
+#[test]
+fn gillespie_channel_keyword_does_not_shadow_identifiers() {
+    let src = "world { gravity=(0,0,0) entity e { state=(A=10.0) tag=rx } } \
+     systems { gillespie { tag=rx dt=1.0 channel_x = 1 channel d = A => (A = A - 1) } }";
+    let parsed = parse(src).unwrap();
+    assert!(parsed.systems[0].channels.len() == 1);
+    assert!(parsed.systems[0].assigns.contains_key("channel_x"));
+}

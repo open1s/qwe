@@ -26,6 +26,20 @@ pub struct SystemDecl {
     /// The module namespace this system came from ("" for the root program);
     /// unqualified function/parameter references resolve within it first.
     pub namespace: String,
+    /// Reaction channels of a `gillespie` system, in source order.
+    pub channels: Vec<ChannelDecl>,
+}
+/// One stochastic reaction channel of a `gillespie` system:
+/// `channel <name> = <propensity> => (<slot> = <new value>, …)`.
+#[derive(Clone, Debug)]
+pub struct ChannelDecl {
+    /// Channel name (`r0`, `bind`, …); unique within the system.
+    pub name: String,
+    /// Propensity `a_k` as source text (parsed at compile time).
+    pub prop: String,
+    /// State changes applied when this channel fires, as raw
+    /// `(slot name, new-value expression)` pairs in source order.
+    pub set: Vec<(String, String)>,
 }
 /// A statement in an `update` rule body. Loops keep their structure (count /
 /// range + nested body) so lowering can unroll them with per-loop

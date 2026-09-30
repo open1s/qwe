@@ -59,6 +59,7 @@ pub(crate) fn numeric_param_keys(kind: &str) -> &'static [&'static str] {
         "send" => &["value"],
         "recv" => &["slot"],
         "update" | "rk4" => &["dt", "every", "substeps"],
+        "gillespie" => &["dt", "events"],
         "watch" => &["mem", "into"],
         "conserved" => &["tolerance"],
         "diffuse" => &["rate"],
@@ -341,6 +342,42 @@ pub(crate) fn parse_let_parts(
 }
 
 pub(crate) fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
+    // A reaction channel is its own top-level alternative in a `gillespie`
+    // body (not nested inside `param`), so it arrives as the pair itself.
+    if param.as_rule() == Rule::channel_stmt {
+        // Children: the guarded `channel_kw`, then name, propensity, effects.
+        let mut name = String::new();
+        let mut prop: Option<Pair<'_, Rule>> = None;
+        let mut assigns: Option<Pair<'_, Rule>> = None;
+        for p in param.into_inner() {
+            match p.as_rule() {
+                Rule::channel_kw => {}
+                Rule::ident if name.is_empty() => name = p.as_str().trim().to_string(),
+                Rule::expr if prop.is_none() => prop = Some(p),
+                Rule::channel_assigns => assigns = Some(p),
+                _ => return Err(error(Status::Invalid, 55)),
+            }
+        }
+        let (Some(prop), Some(assigns)) = (prop, assigns) else {
+            return Err(error(Status::Invalid, 55));
+        };
+        let mut set = Vec::new();
+        for ca in assigns.into_inner() {
+            let mut ai = ca.into_inner();
+            let lhs = next_pair(&mut ai)?.as_str().trim().to_string();
+            let rhs = next_pair(&mut ai)?;
+            if rhs.as_rule() != Rule::expr {
+                return Err(error(Status::Invalid, 55));
+            }
+            set.push((lhs, rhs.as_str().trim().to_string()));
+        }
+        decl.channels.push(ChannelDecl {
+            name,
+            prop: prop.as_str().trim().to_string(),
+            set,
+        });
+        return Ok(());
+    }
     let mut inner = param.into_inner();
     let first = next_pair(&mut inner)?;
     // `let name = expr` is a local binding; otherwise `ident = rhs`.
@@ -1785,11 +1822,12 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                     let rule = sys.as_rule();
                     let sys_off = sys.as_span().start();
                     let mut inner = sys.into_inner();
-                    // send_system / recv_system imply their kind; a generic
-                    // system's kind is its leading ident.
+                    // send_system / recv_system / gillespie_system imply their
+                    // kind; a generic system's kind is its leading ident.
                     let kind = match rule {
                         Rule::send_system => "send".to_string(),
                         Rule::recv_system => "recv".to_string(),
+                        Rule::gillespie_system => "gillespie".to_string(),
                         _ => next_pair(&mut inner)?.as_str().to_string(),
                     };
                     let mut decl = SystemDecl {
@@ -1803,6 +1841,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         namespace: String::new(),
                         string_params: std::collections::BTreeMap::new(),
                         byte_offset: sys_off,
+                        channels: Vec::new(),
                     };
                     for param in inner {
                         store_param(param, &mut decl)?;

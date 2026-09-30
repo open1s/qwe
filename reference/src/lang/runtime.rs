@@ -67,6 +67,10 @@ pub struct LangRuntime {
     /// Raw invariant expressions in source order; verdict field `i` of the
     /// hidden check component belongs to `invariant_exprs[i]` (diagnostics).
     invariant_exprs: Vec<String>,
+    /// Reaction budgets (`events`) of each `gillespie` system in source order;
+    /// verdict field `i` of the hidden budget component belongs to
+    /// `gillespie_events[i]` (diagnostics).
+    gillespie_events: Vec<u32>,
     /// When set, every step asserts that no entity state became non-finite and
     /// fails with detail 88 otherwise (catches unphysical blow-ups).
     finite_check: bool,
@@ -163,12 +167,20 @@ impl LangRuntime {
         let module = compiled.eir.clone();
         let program = compiled.program;
         // The simulation clock advances by the `update` system's dt so `t`
-        // tracks integration time; fall back to 1/60.
+        // tracks integration time; a `gillespie`-only program advances by its
+        // reaction window instead. Fall back to 1/60.
         let sim_dt = compiled
             .parsed
             .systems
             .iter()
             .find(|s| s.kind == "update")
+            .or_else(|| {
+                compiled
+                    .parsed
+                    .systems
+                    .iter()
+                    .find(|s| s.kind == "gillespie")
+            })
             .and_then(|s| s.params.get("dt").copied())
             .unwrap_or(1.0 / 60.0);
 
@@ -331,6 +343,18 @@ impl LangRuntime {
                         .get("expr")
                         .or_else(|| s.update.get("expr"))
                         .cloned()
+                })
+                .collect(),
+            gillespie_events: compiled
+                .parsed
+                .systems
+                .iter()
+                .filter(|s| s.kind == "gillespie")
+                .map(|s| {
+                    s.params
+                        .get("events")
+                        .copied()
+                        .unwrap_or(GILLESPIE_DEFAULT_EVENTS as f64) as u32
                 })
                 .collect(),
         })
@@ -609,6 +633,32 @@ impl LangRuntime {
         Ok(())
     }
 
+    /// Fails the step when a `gillespie` budget verdict is 1: the entity needed
+    /// more reactions inside one step than its `events` budget allows, so the
+    /// trajectory would have been silently truncated. Verdict fields map back to
+    /// their system's budget in source order.
+    fn check_gillespie_budget(&self, writes: &[WorldWrite]) -> Result<()> {
+        for w in writes {
+            if w.component == crate::physics_eir::gillespie_budget_id()
+                && f64::from_bits(w.value) >= 0.5
+            {
+                let idx = (w.offset / crate::physics_eir::field::STATE_SLOT_BYTES) as usize;
+                let events = self.gillespie_events.get(idx).copied().unwrap_or(0);
+                return Err(error_at(
+                    Status::EirInvalid,
+                    106,
+                    0,
+                    format!(
+                        "gillespie reaction budget exhausted for entity {}: more than \
+`events = {events}` reactions were needed in one step; raise `events` or lower `dt`",
+                        w.entity
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Interpreter backend step: run the EIR, apply the ordered writes.
     pub fn step_interpreter(&mut self) -> Result<Vec<WorldWrite>> {
         #[cfg(all(feature = "gpu", target_os = "macos"))]
@@ -630,6 +680,7 @@ impl LangRuntime {
                 .execute_with_index(&mut rt, &mut self.env, &self.call_index)?
         };
         self.check_invariants(&writes)?;
+        self.check_gillespie_budget(&writes)?;
         let overlays = rt.take_overlays();
         apply_writes(&mut self.scene, &writes)?;
         crate::physics_eir::flush_overlays(&mut self.scene, &overlays);
@@ -660,6 +711,7 @@ impl LangRuntime {
             WorldVersion(0),
         )?;
         self.check_invariants(&writes)?;
+        self.check_gillespie_budget(&writes)?;
         let overlays = rt.take_overlays();
         apply_writes(&mut self.scene, &writes)?;
         crate::physics_eir::flush_overlays(&mut self.scene, &overlays);
@@ -727,6 +779,7 @@ impl LangRuntime {
         let overlays = rt_a.take_overlays();
         // An invariant violation fails the step before any write is applied.
         self.check_invariants(&int_writes)?;
+        self.check_gillespie_budget(&int_writes)?;
         // Advance the live env to match the interpreter's consumed random state,
         // so random streams accumulate deterministically across steps.
         self.env = env_a;
