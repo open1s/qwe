@@ -198,6 +198,7 @@ pub fn build_systems(
                     field_dims: field_dims.clone(),
                     namespace: s.namespace.clone(),
                     param_names: param_names.clone(),
+                    coord: s.params.get("coord").copied(),
                 }));
             }
             "send" | "recv" => {

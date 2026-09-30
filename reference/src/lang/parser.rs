@@ -54,7 +54,7 @@ pub(crate) fn numeric_param_keys(kind: &str) -> &'static [&'static str] {
         "force" => &["ax", "ay", "az", "dt"],
         "linear" => &["slots", "dt"],
         "nbody" => &["G", "dt"],
-        "pair" => &["dt"],
+        "pair" => &["dt", "coord"],
         "drift" => &["dt", "damp"],
         "send" => &["value"],
         "recv" => &["slot"],

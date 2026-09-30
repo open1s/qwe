@@ -2792,6 +2792,46 @@ fn nb_un(
     r
 }
 
+fn nb_cmp(
+    out: &mut Vec<crate::eir::Instruction>,
+    next: &mut u32,
+    op: crate::eir::Opcode,
+    a: u32,
+    b: u32,
+) -> u32 {
+    let r = *next;
+    *next += 1;
+    out.push(crate::physics_eir::instr(
+        op,
+        r,
+        Some(crate::eir::ValueType::Bool),
+        vec![a, b],
+        None,
+        None,
+    ));
+    r
+}
+
+fn nb_select(
+    out: &mut Vec<crate::eir::Instruction>,
+    next: &mut u32,
+    cond: u32,
+    a: u32,
+    b: u32,
+) -> u32 {
+    let r = *next;
+    *next += 1;
+    out.push(crate::physics_eir::instr(
+        crate::eir::Opcode::Select,
+        r,
+        Some(crate::eir::ValueType::F64),
+        vec![cond, a, b],
+        None,
+        None,
+    ));
+    r
+}
+
 fn nb_sub_mul(
     out: &mut Vec<crate::eir::Instruction>,
     next: &mut u32,
@@ -2883,6 +2923,10 @@ pub struct PairSystem {
     pub field_dims: std::collections::BTreeMap<String, (u32, u32)>,
     pub namespace: String,
     pub param_names: std::collections::BTreeSet<String>,
+    /// Optional coordination cutoff: when set, the law may reference `n` — the
+    /// number of the other group's bodies within `coord` of `i` (bond order /
+    /// coordination-aware forces).
+    pub coord: Option<f64>,
 }
 
 impl EirSystem for PairSystem {
@@ -2919,6 +2963,38 @@ impl EirSystem for PairSystem {
         let vy = nb_read(out, &mut next_id, entity, 4);
         let vz = nb_read(out, &mut next_id, entity, 5);
         let m = nb_read(out, &mut next_id, entity, 6);
+        // Coordination number (bond order): count the other group's bodies
+        // within `coord` of `i` (including the current pair).
+        let mut ncoord: Option<u32> = None;
+        if let Some(rc) = self.coord {
+            let rcc = nb_const(out, &mut next_id, rc);
+            let one = nb_const(out, &mut next_id, 1.0);
+            let zero = nb_const(out, &mut next_id, 0.0);
+            let mut n = nb_const(out, &mut next_id, 0.0);
+            for &k in others {
+                if k == entity {
+                    continue;
+                }
+                let kx = nb_read(out, &mut next_id, k, 0);
+                let ky = nb_read(out, &mut next_id, k, 1);
+                let kz = nb_read(out, &mut next_id, k, 2);
+                let dx = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, px, kx);
+                let dy = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, py, ky);
+                let dz = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, pz, kz);
+                let dx2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, dx, dx);
+                let dy2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, dy, dy);
+                let dz2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, dz, dz);
+                let sxy = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, dx2, dy2);
+                let r2 = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, sxy, dz2);
+                let epsc = nb_const(out, &mut next_id, eps);
+                let r2e = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, r2, epsc);
+                let r = nb_un(crate::eir::Opcode::Sqrt, out, &mut next_id, r2e);
+                let lt = nb_cmp(out, &mut next_id, crate::eir::Opcode::Lt, r, rcc);
+                let inc = nb_select(out, &mut next_id, lt, one, zero);
+                n = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, n, inc);
+            }
+            ncoord = Some(n);
+        }
         let mut fx = nb_const(out, &mut next_id, 0.0);
         let mut fy = nb_const(out, &mut next_id, 0.0);
         let mut fz = nb_const(out, &mut next_id, 0.0);
@@ -2950,6 +3026,9 @@ impl EirSystem for PairSystem {
             let r = nb_un(crate::eir::Opcode::Sqrt, out, &mut next_id, r2e);
             let mut locals: std::collections::BTreeMap<String, u32> = Default::default();
             locals.insert("r".to_string(), r);
+            if let Some(n) = ncoord {
+                locals.insert("n".to_string(), n);
+            }
             let ctx = super::lower::LowerCtx {
                 slot_regs: &[],
                 ref_regs: &empty_refs,
