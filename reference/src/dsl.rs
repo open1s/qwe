@@ -64,6 +64,10 @@ pub struct BondDecl {
     pub order: u8,
     pub polarity: f64,
     pub cloud: bool,
+    /// Draw the bond only when the two entities are within `[min, max]` distance
+    /// (proximity-gated bonds: form/break). `None` = always drawn.
+    pub min: Option<f64>,
+    pub max: Option<f64>,
 }
 
 /// One declared entity in a world model.

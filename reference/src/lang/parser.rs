@@ -1376,6 +1376,8 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let mut order = 1u8;
                             let mut polarity = 0.0f64;
                             let mut cloud = false;
+                            let mut min: Option<f64> = None;
+                            let mut max: Option<f64> = None;
                             for opt in inner {
                                 let rule = opt.as_rule();
                                 let v = next_pair(&mut opt.into_inner())?;
@@ -1387,6 +1389,8 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         polarity = parse_value(v).clamp(0.0, 1.0);
                                     }
                                     Rule::bond_cloud => cloud = v.as_str() == "true",
+                                    Rule::bond_min => min = Some(parse_value(v)),
+                                    Rule::bond_max => max = Some(parse_value(v)),
                                     _ => {}
                                 }
                             }
@@ -1396,6 +1400,8 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 order,
                                 polarity,
                                 cloud,
+                                min,
+                                max,
                             });
                         }
                         Rule::shape_stmt => {

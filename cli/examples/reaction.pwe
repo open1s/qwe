@@ -1,0 +1,53 @@
+# reaction.pwe — a chemical reaction, H2 + Cl2 -> 2 HCl (forward, exothermic).
+#
+# The reaction coordinate s(t) is a sawtooth: it runs 0 -> 1 (reactants ->
+# products) once, then a fresh cycle starts. H2 + Cl2 -> 2 HCl is strongly
+# exothermic (K >> 1), so it is drawn going *one way* — the reverse only happens
+# as the demo's loop reset, not as chemistry. Bonds are **proximity-gated**
+# (`max = <dist>`): a bond is drawn only while its two atoms are close, so the
+# H-H / Cl-Cl bonds break and the H-Cl bonds form as s advances — the visible
+# change of connectivity that *is* a reaction. A bright flash marks the
+# transition state (s = 0.5).
+#
+#   cargo build --release -p pwe-cli
+#   pwe compile cli/examples/reaction.pwe -o reaction.pweb
+#   pwe present reaction.pweb --port 8000
+
+world {
+  title = "Reaction: H2 + Cl2 -> 2 HCl"
+  gravity = (0, 0, 0)
+
+  # Atom positions: reactant (s=0) -> product (s=1), interpolated by s.
+  #   H1  (-4.0, 0.5) -> (-1.2,  0.7)     H2  (-4.0,-0.5) -> ( 1.2,-0.7)
+  #   Cl1 ( 4.0, 0.5) -> (-0.5,  0.7)     Cl2 ( 4.0,-0.5) -> ( 0.5,-0.7)
+  entity H1  { state = (x = -4.0, y = 0.30, z =  0.5) shape = sphere; size = 0.18; color = 0xF2F2F2 }
+  entity H2  { state = (x = -4.0, y = 0.30, z = -0.5) shape = sphere; size = 0.18; color = 0xF2F2F2 }
+  entity Cl1 { state = (x =  4.0, y = 0.30, z =  0.5) shape = sphere; size = 0.30; color = 0x38C64A }
+  entity Cl2 { state = (x =  4.0, y = 0.30, z = -0.5) shape = sphere; size = 0.30; color = 0x38C64A }
+
+  # Transition-state flash: a state-only body whose marker size is driven by its
+  # mass (slot 6), so it spikes at s = 0.5.
+  entity flash { state = (x = 0.0, y = 0.30, z = 0.0, a = 0.0, b = 0.0, c = 0.0, m = 0.0001) color = 0xFFF2A8; label = false; vector = false }
+
+  # Reactant bonds (H-H, Cl-Cl) — drawn while the atoms are close (s near 0).
+  bond H1 H2 max = 1.40
+  bond Cl1 Cl2 max = 1.50
+  # Product bonds (H-Cl, H-Cl) — drawn while the atoms are close (s near 1).
+  bond H1 Cl1 max = 1.10 polarity = 0.35
+  bond H2 Cl2 max = 1.10 polarity = 0.35
+}
+
+funcs {
+  # reaction coordinate: 0 at reactants -> 1 at products (then the next cycle).
+  s(t) { (t * 0.05) - floor(t * 0.05) }
+  # a narrow bump around s = 0.5 (the transition state).
+  flash_gain(t) { if(abs(s(t) - 0.5) < 0.10, 1.0, 0.0) }
+}
+
+systems {
+  update { on = H1;  dt = 0.02  let sv = s(t); x = -4.0 + sv * 2.8;  z = 0.5 + sv * 0.2;  y = 0.30 }
+  update { on = H2;  dt = 0.02  let sv = s(t); x = -4.0 + sv * 5.2;  z = -0.5 - sv * 0.2; y = 0.30 }
+  update { on = Cl1; dt = 0.02  let sv = s(t); x =  4.0 - sv * 4.5;  z = 0.5 + sv * 0.2;  y = 0.30 }
+  update { on = Cl2; dt = 0.02  let sv = s(t); x =  4.0 - sv * 3.5;  z = -0.5 - sv * 0.2; y = 0.30 }
+  update { on = flash; dt = 0.02  m = 0.0001 + 24.0 * flash_gain(t) }
+}

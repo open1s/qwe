@@ -549,14 +549,16 @@ Precedence (high → low): unary `-`, `not`/`!` → `* / %` → `+ -` → compar
 | `field <name> { width; height; dx; depth? }` | a scalar grid. |
 | `pool <name>[N] { … }` | N inactive slots for dynamic entities. |
 | `soft <name> { nx; ny; nz?; spacing; origin; mass }` | a mass-spring grid. |
-| `bond <a> <b> [order=n] [polarity=p] [cloud=true]` | a render bond between two named entities (ball-and-stick). |
+| `bond <a> <b> [order=n] [polarity=p] [cloud=true] [min=d] [max=d]` | a render bond between two named entities (ball-and-stick). |
 | `import "…"` | module import (path relative to the file). |
 
 `bond` is **presentation only** (not a physics constraint): it draws a stick
 between the centres of entities `<a>` and `<b>`. Options: `order` (1/2/3 =
 single/double/triple, drawn as parallel sticks), `polarity` in `[0,1]` (tints the
 bond from A's toward B's colour), `cloud=true` (a translucent shared-electron
-region). It is the basis of `std/molecules/`, where each atom is an entity and
+region), `min`/`max` distances (the bond is drawn only while the two entities are
+within that range — proximity-gated bonds that form/break, e.g. a chemical
+reaction). It is the basis of `std/molecules/`, where each atom is an entity and
 each chemical bond a `bond` — see L9 and `cli/examples/molecule.pwe`.
 
 **Entity id order**: declared entities `1..E`, then channels, then pool slots

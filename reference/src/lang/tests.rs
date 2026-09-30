@@ -3651,3 +3651,15 @@ fn part_opacity_out_of_range_is_rejected() {
         assert_eq!(err.detail, 105, "detail for `{bad}`");
     }
 }
+
+#[test]
+fn proximity_gated_bonds_carry_min_max() {
+    // `bond a b min=.. max=..` is drawn only while the entities are that close.
+    let src = "world { gravity=(0,0,0) \
+        entity a { position=(0,0,0) } entity b { position=(1,0,0) } \
+        bond a b min=0.5 max=2.0 }";
+    let rt = LangRuntime::compile(src).unwrap();
+    let json = crate::present::frame_to_json(&rt.present_frame(None));
+    assert!(json.contains("\"min\":0.5"), "{json}");
+    assert!(json.contains("\"max\":2"), "{json}");
+}

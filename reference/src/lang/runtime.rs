@@ -236,6 +236,8 @@ impl LangRuntime {
                         order: bd.order,
                         polarity: bd.polarity,
                         cloud: bd.cloud,
+                        min: bd.min,
+                        max: bd.max,
                     });
                 }
             }

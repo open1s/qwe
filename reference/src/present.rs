@@ -64,6 +64,9 @@ pub struct Bond {
     pub order: u8,
     pub polarity: f64,
     pub cloud: bool,
+    /// Draw only when the entities are within `[min, max]` distance.
+    pub min: Option<f64>,
+    pub max: Option<f64>,
 }
 
 impl Bond {
@@ -74,6 +77,8 @@ impl Bond {
             order: 1,
             polarity: 0.0,
             cloud: false,
+            min: None,
+            max: None,
         }
     }
 }
@@ -771,13 +776,20 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
             out.push(',');
         }
         out.push_str(&format!(
-            "{{\"a\":{},\"b\":{},\"order\":{},\"polarity\":{},\"cloud\":{}}}",
+            "{{\"a\":{},\"b\":{},\"order\":{},\"polarity\":{},\"cloud\":{}",
             bd.a,
             bd.b,
             bd.order,
             fmt_f64(bd.polarity),
             bd.cloud
         ));
+        if let Some(mn) = bd.min {
+            let _ = write!(out, ",\"min\":{}", fmt_f64(mn));
+        }
+        if let Some(mx) = bd.max {
+            let _ = write!(out, ",\"max\":{}", fmt_f64(mx));
+        }
+        out.push('}');
     }
     out.push_str("]}");
     out
@@ -932,6 +944,7 @@ function addBonds(frame){{
     const A=meshes.get(bd.a),B=meshes.get(bd.b); if(!A||!B) continue;
     const p1=A.position,p2=B.position;
     const dir=p2.clone().sub(p1); const len=dir.length(); if(len<1e-6) continue;
+    if(bd.max!=null && len>bd.max) continue; if(bd.min!=null && len<bd.min) continue;
     const n=dir.clone().normalize();
     const ref=Math.abs(n.dot(up))>0.9? new THREE.Vector3(1,0,0): up;
     const v=new THREE.Vector3().crossVectors(n,ref.clone().addScaledVector(n,-n.dot(ref)).normalize());
@@ -1606,6 +1619,7 @@ function addBonds(frame){
     const A=meshes.get(bd.a),B=meshes.get(bd.b); if(!A||!B) continue;
     const p1=A.position,p2=B.position;
     const dir=p2.clone().sub(p1); const len=dir.length(); if(len<1e-6) continue;
+    if(bd.max!=null && len>bd.max) continue; if(bd.min!=null && len<bd.min) continue;
     const n=dir.clone().normalize();
     const ref=Math.abs(n.dot(up))>0.9? new THREE.Vector3(1,0,0): up;
     const v=new THREE.Vector3().crossVectors(n,ref.clone().addScaledVector(n,-n.dot(ref)).normalize());

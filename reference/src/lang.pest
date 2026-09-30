@@ -59,10 +59,14 @@ chan_stmt = { "chan" ~ ident ~ "{" ~ "value" ~ "=" ~ value ~ ";"? ~ "}" }
 bond_stmt = { "bond" ~ ident ~ ident ~ bond_opt* }
 // How the viewer draws a bond: order = parallel sticks (single/double/triple),
 // polarity (0..1) tints it, cloud = a translucent shared-electron region.
-bond_opt = _{ bond_order | bond_polarity | bond_cloud }
+bond_opt = _{ bond_order | bond_polarity | bond_cloud | bond_min | bond_max }
 bond_order = { "order" ~ "=" ~ value }
 bond_polarity = { "polarity" ~ "=" ~ value }
 bond_cloud = { "cloud" ~ "=" ~ boolean }
+// A bond is drawn only when the two entities are within [min, max] distance
+// (a bond forms/breaks by proximity — e.g. a chemical reaction).
+bond_min = { "min" ~ "=" ~ value }
+bond_max = { "max" ~ "=" ~ value }
 // `struct Name { field = <default>; field = <other-struct>; … }` — a named
 // record flattened to dotted state slots (`pos.x`, `pos.y`, …).
 struct_stmt = { "struct" ~ ident ~ "{" ~ struct_field* ~ "}" }
