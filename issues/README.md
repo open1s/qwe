@@ -112,6 +112,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0083](https://github.com/open1s/qwe/issues/83) | Low | 118 new `<Sym>_nucleus` shapes (7b6e4f4e) undocumented: std/README.md:54 and std/atoms/README.md still describe only `<Sym>_atom` | std/README.md:54, std/atoms/README.md |
 | [0084](https://github.com/open1s/qwe/issues/84) | Low | message drift in `6aebd95b..69ee0fb9`: `665e65f7` "Update 3 files" hides the fmt canonical 4→2 flip + poly viewer fix; `f6f5f93a` claims a viewer change that is in the previous commit; `69ee0fb9` claims #75/#74 fixed while `lang.pest:121` and README-ZH are untouched | 665e65f7/f6f5f93a/69ee0fb9 messages, lang/format.rs, lang.pest:121 |
 | [0085](https://github.com/open1s/qwe/issues/85) | Low | bond `min`/`max` (09340d5c) unvalidated: inverted range (`min=5 max=1` → bond never drawn), negative min, duplicate opts all compile rc 0 — same class as 0081's opacity gaps | lang.pest:68-69 `bond_min`/`bond_max`, dsl.rs BondDecl, tests.rs |
+| [0086](https://github.com/open1s/qwe/issues/86) | Medium | `c665a0db` fails the CI gate (E0063 `pipeline_demo` missing `EntityDecl.tag` ×2 + clippy parens under `-D`): main/CI red ~12 min until `78e157ff`; gate-discipline recurrence noted at #78's close | .github/workflows/ci.yml, reference/examples/pipeline_demo.rs, dsl.rs EntityDecl |
+| [0087](https://github.com/open1s/qwe/issues/87) | Low | `bonds {}` swallows typos: unknown key/`within=junk` → `max=∞` default (live probe: `withn` typo bonds atoms 5 apart), missing tag/inverted range silent, undocumented `max` alias, docs show `within` required; + reaction.pwe header still describes removed per-pair `max` mechanism | lang/parser.rs `Rule::bonds_stmt`, cli/examples/reaction.pwe:6-8 |
 
 ## Suggested order
 
@@ -1342,5 +1344,49 @@ chemical-reaction demo"; filed 0085, commented 0075):
 7. 0074/0080/0081/0084 untouched by this commit — all stay open as
    previously noted (ZH 399, roadmap :105, duplicates+error-message,
    message discipline).
+
+Review pass 41 (landed `c665a0db` neighbourhood bond net + `78e157ff`
+clippy hotfix; filed 0086/0087, commented 0075):
+
+1. Gates green at the tip `78e157ff`: fmt, clippy `--all-targets`,
+   **417 tests** (416 + `neighbourhood_bond_net_forms_bonds`), conformance
+   **25/25**, release build.
+2. **0086 (Medium) filed**: `c665a0db` alone fails CI — snapshot clippy
+   exits 101 (E0063 missing `EntityDecl.tag` in `pipeline_demo` ×2,
+   `unnecessary parentheses` under `-D`); `.github/workflows/ci.yml`
+   runs exactly the four AGENTS gates; red window 11:39:46 → 11:51:41
+   (~12 min) until the self-authored `78e157ff`. Same class as #78
+   (closed with "same-commit discipline" as the outstanding ask).
+3. Feature verified: `bonds { tag; within; [min] }` + entity `tag` field
+   parse → `WorldModel.bond_nets` → merge dedup (`compile.rs`) → runtime
+   `bond_nets` (tagged ids as model-index+1, BTreeMap positions, nested
+   pair loops — **deterministic order**, O(k²) per frame) → appended to
+   `frame.bonds` as ordinary bonds (min/max `None`) → existing JSON/viewer
+   path; `present.rs` untouched. Live: `/state` on `reaction.pweb` shows
+   auto-formed `{"a":1,"b":2}` + `{"a":3,"b":4}` (reactant bonds) at t0,
+   none for the far pairs; atoms in motion. Unit test asserts (1,2)
+   bonded, (1,3) not.
+4. `reaction.pwe` reworked honestly: `tag = atom` on all four atoms,
+   single `bonds { tag = atom; within = 1.0 }`, no explicit `bond`
+   lines; coordinate `s = min(fract(t*0.05)/0.70, 1)` rises over 700
+   steps then holds 300 (matches message "rises 0→1 then holds";
+   header's "fresh cycle starts" = the fract reset — consistent).
+   Compiles, runs 240 steps rc 0.
+5. **0087 (Low) filed**: `Rule::bonds_stmt` silent fallbacks —
+   `unwrap_or(INFINITY)` on `within`, `_ => {}` unknown keys; live probe:
+   `bonds { tag = atom; withn = 1.6 }` **bonds atoms 5 units apart**
+   (max stayed ∞); `within=junk`, missing `tag`, inverted
+   `min>within`, empty `bonds {}` all rc 0 silent; `max` alias
+   undocumented; docs show `within` required vs impl default ∞. Plus the
+   demo header (lines 6-8) still describes the removed per-pair `max`
+   mechanism the commit message says was replaced.
+6. **0075 commented (4th flag)**: `c665a0db` edited lang.pest again
+   (bond-net rules) and `` `spin = s` `` is still there, now at :132
+   above `spin_opt` (:137).
+7. Observation (not filed): runtime bond-net ids assume
+   `frame entity id == model.entities index + 1` — holds in every probe
+   (reaction 1-4, laser decls-before-pool) but couples the net to id
+   assignment; worth an assert if pools/entities ever interleave.
+8. 0074/0080/0081/0084/0085 untouched — stay open as noted.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
