@@ -62,6 +62,10 @@ pub struct BondNet {
     pub tag: String,
     pub min: f64,
     pub max: f64,
+    /// Optional directional gate: draw a bond only if the bond line makes an
+    /// angle `<= angle` with `axis` (a bond-angle criterion).
+    pub axis: Option<(f64, f64, f64)>,
+    pub angle: Option<f64>,
 }
 
 /// One declared render bond (`bond a b …`): the two entity names, plus how the

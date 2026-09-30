@@ -1375,18 +1375,32 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let mut tag = String::new();
                             let mut min = 0.0f64;
                             let mut max = f64::INFINITY;
+                            let mut axis: Option<(f64, f64, f64)> = None;
+                            let mut angle: Option<f64> = None;
                             for p in item.into_inner() {
                                 let mut pi = p.into_inner();
                                 let key = next_pair(&mut pi)?.as_str().to_string();
-                                let val = next_pair(&mut pi)?.as_str().trim().to_string();
+                                let val = next_pair(&mut pi)?;
+                                let text = val.as_str().trim().to_string();
                                 match key.as_str() {
-                                    "tag" => tag = val,
-                                    "min" => min = val.parse().unwrap_or(0.0),
-                                    "within" | "max" => max = val.parse().unwrap_or(f64::INFINITY),
+                                    "tag" => tag = text,
+                                    "min" => min = text.parse().unwrap_or(0.0),
+                                    "within" | "max" => max = text.parse().unwrap_or(f64::INFINITY),
+                                    "axis" => {
+                                        let v = parse_vec3(val);
+                                        axis = Some((v.x, v.y, v.z));
+                                    }
+                                    "angle" => angle = Some(text.parse().unwrap_or(0.0)),
                                     _ => {}
                                 }
                             }
-                            model.bond_nets.push(crate::dsl::BondNet { tag, min, max });
+                            model.bond_nets.push(crate::dsl::BondNet {
+                                tag,
+                                min,
+                                max,
+                                axis,
+                                angle,
+                            });
                         }
                         Rule::bond_stmt => {
                             let mut inner = item.into_inner();

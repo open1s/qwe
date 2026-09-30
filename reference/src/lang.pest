@@ -70,7 +70,7 @@ bond_min = { "min" ~ "=" ~ value }
 // auto-bond every pair of entities tagged <tag> within [min, within], recomputed
 // every frame so bonds form/break as the entities move (e.g. molecular dynamics).
 bonds_stmt = { "bonds" ~ "{" ~ bonds_param* ~ "}" }
-bonds_param = { ident ~ "=" ~ (ident | value) ~ ";"? }
+bonds_param = { ident ~ "=" ~ (vec3 | ident | value) ~ ";"? }
 bond_max = { "max" ~ "=" ~ value }
 // `struct Name { field = <default>; field = <other-struct>; … }` — a named
 // record flattened to dotted state slots (`pos.x`, `pos.y`, …).

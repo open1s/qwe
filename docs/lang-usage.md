@@ -550,7 +550,7 @@ Precedence (high → low): unary `-`, `not`/`!` → `* / %` → `+ -` → compar
 | `pool <name>[N] { … }` | N inactive slots for dynamic entities. |
 | `soft <name> { nx; ny; nz?; spacing; origin; mass }` | a mass-spring grid. |
 | `bond <a> <b> [order=n] [polarity=p] [cloud=true] [min=d] [max=d]` | a render bond between two named entities (ball-and-stick). |
-| `bonds { tag = <t>; within = <d>; min = <d>? }` | a **neighbourhood bond net**: auto-bond every pair of entities tagged `<t>` within `[min, within]`, recomputed each frame (bonds form/break by proximity — e.g. a reaction). |
+| `bonds { tag = <t>; within = <d>; min = <d>?; axis = (x,y,z)?; angle = <rad>? }` | a **neighbourhood bond net**: auto-bond every pair of entities tagged `<t>` within `[min, within]`, recomputed each frame (bonds form/break by proximity — e.g. a reaction). `axis`+`angle` add a **bond-angle** gate: the bond line must lie within `angle` of `axis`. |
 | `import "…"` | module import (path relative to the file). |
 
 `bond` is **presentation only** (not a physics constraint): it draws a stick

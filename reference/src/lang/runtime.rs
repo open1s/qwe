@@ -16,6 +16,9 @@ struct ConservedSpec {
 
 /// Runs a compiled program's low-level IR across the interpreter and the CPU
 /// JIT, verifying they produce byte-identical writes (the "run cross" contract).
+/// A prepared neighbourhood bond net: (ids, min, max, axis, angle).
+type BondNetSpec = (Vec<u128>, f64, f64, Option<(f64, f64, f64)>, Option<f64>);
+
 pub struct LangRuntime {
     pub scene: Scene,
     pub program: PhysicsProgram,
@@ -46,9 +49,9 @@ pub struct LangRuntime {
     /// Render bonds: RFC-0040 soft-body edges plus declared `bond a b`
     /// (molecules). Drawn ball-and-stick, with order/polarity/cloud.
     bonds: Vec<crate::present::Bond>,
-    /// Neighbourhood bond nets: (tagged entity ids, min, max). Recomputed each
-    /// frame so bonds form/break by proximity.
-    bond_nets: Vec<(Vec<u128>, f64, f64)>,
+    /// Neighbourhood bond nets: (tagged entity ids, min, max, axis, angle).
+    /// Recomputed each frame so bonds form/break by proximity.
+    bond_nets: Vec<BondNetSpec>,
     /// Optional peer region: when set, `send` also routes to the peer's channel.
     peer_region: Option<pwe_api::RegionId>,
     /// Execution context for `time`/`random`/`emit` (seeded → reproducible).
@@ -245,7 +248,7 @@ impl LangRuntime {
                 }
             }
         }
-        let bond_nets: Vec<(Vec<u128>, f64, f64)> = compiled
+        let bond_nets: Vec<BondNetSpec> = compiled
             .parsed
             .model
             .bond_nets
@@ -260,7 +263,7 @@ impl LangRuntime {
                     .filter(|(_, e)| e.tag.as_deref() == Some(net.tag.as_str()))
                     .map(|(i, _)| (i as u128) + 1)
                     .collect();
-                (ids, net.min, net.max)
+                (ids, net.min, net.max, net.axis, net.angle)
             })
             .collect();
         let optimized = module.optimize();
@@ -426,15 +429,30 @@ impl LangRuntime {
                 .iter()
                 .map(|e| (e.id, (e.position.x, e.position.y, e.position.z)))
                 .collect();
-            for (ids, min, max) in &self.bond_nets {
+            for (ids, min, max, axis, angle) in &self.bond_nets {
                 for i in 0..ids.len() {
                     for j in (i + 1)..ids.len() {
                         if let (Some(&(ax, ay, az)), Some(&(bx, by, bz))) =
                             (pos.get(&ids[i]), pos.get(&ids[j]))
                         {
-                            let d =
-                                ((ax - bx).powi(2) + (ay - by).powi(2) + (az - bz).powi(2)).sqrt();
-                            if d >= *min && d <= *max {
+                            let ex = ax - bx;
+                            let ey = ay - by;
+                            let ez = az - bz;
+                            let d = (ex * ex + ey * ey + ez * ez).sqrt();
+                            // Bond-angle gate: the bond line must lie within
+                            // `angle` of `axis` (|cos| >= cos(angle)).
+                            let dir_ok = match (axis, angle) {
+                                (Some((cx, cy, cz)), Some(a)) if d >= 1e-9 => {
+                                    let al = (cx * cx + cy * cy + cz * cz).sqrt();
+                                    if al < 1e-9 {
+                                        true
+                                    } else {
+                                        ((ex * cx + ey * cy + ez * cz) / (d * al)).abs() >= a.cos()
+                                    }
+                                }
+                                _ => true,
+                            };
+                            if dir_ok && d >= *min && d <= *max {
                                 frame.bonds.push(crate::present::Bond {
                                     a: ids[i],
                                     b: ids[j],

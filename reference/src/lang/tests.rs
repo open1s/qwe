@@ -3711,3 +3711,30 @@ fn pair_system_integrates_lj_forces() {
         st.values[0]
     );
 }
+
+#[test]
+fn bond_net_angle_gate_filters_direction() {
+    // `axis`+`angle` gate the bond line: only bonds within `angle` of `axis`.
+    let src = r#"world { gravity=(0,0,0)
+      entity a { state=(x=0.0,y=0.0,z=0.0) tag=atom }
+      entity b { state=(x=1.0,y=0.0,z=0.0) tag=atom }
+      entity c { state=(x=0.0,y=1.0,z=0.0) tag=atom }
+      bonds { tag=atom; within=1.5; axis=(1.0,0.0,0.0); angle=0.30 }
+    }"#;
+    let rt = LangRuntime::compile(src).unwrap();
+    let pairs: Vec<(u128, u128)> = rt
+        .present_frame(None)
+        .bonds
+        .iter()
+        .map(|b| (b.a, b.b))
+        .collect();
+    assert!(pairs.contains(&(1, 2)), "a-b is X-aligned: {pairs:?}");
+    assert!(
+        !pairs.iter().any(|(a, b)| *a == 1 && *b == 3),
+        "a-c (Y) filtered: {pairs:?}"
+    );
+    assert!(
+        !pairs.iter().any(|(a, b)| *a == 2 && *b == 3),
+        "b-c (45deg) filtered: {pairs:?}"
+    );
+}
