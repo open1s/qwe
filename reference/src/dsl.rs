@@ -55,6 +55,15 @@ pub struct PoolDecl {
     pub decl: EntityDecl,
 }
 
+/// A neighbourhood bond net: auto-bond every pair of entities tagged `tag` that
+/// are within `[min, max]` distance (recomputed per frame).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BondNet {
+    pub tag: String,
+    pub min: f64,
+    pub max: f64,
+}
+
 /// One declared render bond (`bond a b …`): the two entity names, plus how the
 /// viewer draws the stick (order = parallel bonds, polarity tint, electron cloud).
 #[derive(Clone, Debug, PartialEq)]
@@ -100,6 +109,8 @@ pub struct EntityDecl {
     pub nbody: Option<bool>,
     /// Optional parent body name (`parent = earth`), for satellites.
     pub parent: Option<String>,
+    /// Optional group tag (`tag = atom`), targeted by `bonds { tag = … }`.
+    pub tag: Option<String>,
     /// Optional per-slot dimensions (`state = (x = 0 m, vx = 0 m/s)`), aligned
     /// with `state` by index; `None` marks an unannotated slot. Compile-time
     /// only (gradual dimensional analysis).
@@ -133,6 +144,7 @@ impl EntityDecl {
             color: None,
             nbody: None,
             parent: None,
+            tag: None,
             state_units: None,
             render: None,
         }
@@ -194,6 +206,9 @@ pub struct WorldModel {
     /// [cloud=true]`), drawn ball-and-stick (e.g. molecules). Visualization
     /// only; not a physics constraint.
     pub bonds: Vec<BondDecl>,
+    /// Neighbourhood bond nets (`bonds { tag = …; within = d }`): auto-bond every
+    /// pair of tagged entities within a distance, recomputed each frame.
+    pub bond_nets: Vec<BondNet>,
 }
 
 impl WorldModel {
@@ -214,6 +229,7 @@ impl WorldModel {
             fields: Vec::new(),
             shapes: std::collections::BTreeMap::new(),
             bonds: Vec::new(),
+            bond_nets: Vec::new(),
         }
     }
 

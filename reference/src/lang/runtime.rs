@@ -46,6 +46,9 @@ pub struct LangRuntime {
     /// Render bonds: RFC-0040 soft-body edges plus declared `bond a b`
     /// (molecules). Drawn ball-and-stick, with order/polarity/cloud.
     bonds: Vec<crate::present::Bond>,
+    /// Neighbourhood bond nets: (tagged entity ids, min, max). Recomputed each
+    /// frame so bonds form/break by proximity.
+    bond_nets: Vec<(Vec<u128>, f64, f64)>,
     /// Optional peer region: when set, `send` also routes to the peer's channel.
     peer_region: Option<pwe_api::RegionId>,
     /// Execution context for `time`/`random`/`emit` (seeded → reproducible).
@@ -242,6 +245,24 @@ impl LangRuntime {
                 }
             }
         }
+        let bond_nets: Vec<(Vec<u128>, f64, f64)> = compiled
+            .parsed
+            .model
+            .bond_nets
+            .iter()
+            .map(|net| {
+                let ids: Vec<u128> = compiled
+                    .parsed
+                    .model
+                    .entities
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| e.tag.as_deref() == Some(net.tag.as_str()))
+                    .map(|(i, _)| (i as u128) + 1)
+                    .collect();
+                (ids, net.min, net.max)
+            })
+            .collect();
         let optimized = module.optimize();
         let call_index = optimized.prepare_index();
         Ok(Self {
@@ -254,6 +275,7 @@ impl LangRuntime {
             sim_dt,
             hidden_fields,
             bonds,
+            bond_nets,
             region,
             jit,
             jit_key,
@@ -397,6 +419,36 @@ impl LangRuntime {
         }
         if !self.bonds.is_empty() {
             frame.bonds = self.bonds.clone();
+        }
+        if !self.bond_nets.is_empty() {
+            let pos: std::collections::BTreeMap<u128, (f64, f64, f64)> = frame
+                .entities
+                .iter()
+                .map(|e| (e.id, (e.position.x, e.position.y, e.position.z)))
+                .collect();
+            for (ids, min, max) in &self.bond_nets {
+                for i in 0..ids.len() {
+                    for j in (i + 1)..ids.len() {
+                        if let (Some(&(ax, ay, az)), Some(&(bx, by, bz))) =
+                            (pos.get(&ids[i]), pos.get(&ids[j]))
+                        {
+                            let d =
+                                ((ax - bx).powi(2) + (ay - by).powi(2) + (az - bz).powi(2)).sqrt();
+                            if d >= *min && d <= *max {
+                                frame.bonds.push(crate::present::Bond {
+                                    a: ids[i],
+                                    b: ids[j],
+                                    order: 1,
+                                    polarity: 0.0,
+                                    cloud: false,
+                                    min: None,
+                                    max: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
         frame
     }

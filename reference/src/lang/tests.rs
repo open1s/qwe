@@ -3663,3 +3663,26 @@ fn proximity_gated_bonds_carry_min_max() {
     assert!(json.contains("\"min\":0.5"), "{json}");
     assert!(json.contains("\"max\":2"), "{json}");
 }
+
+#[test]
+fn neighbourhood_bond_net_forms_bonds() {
+    let rt = LangRuntime::compile(
+        "world { gravity=(0,0,0) \
+         entity a { state=(x=0.0,y=0.0,z=0.0) tag=atom } \
+         entity b { state=(x=1.0,y=0.0,z=0.0) tag=atom } \
+         entity c { state=(x=5.0,y=0.0,z=0.0) tag=atom } \
+         bonds { tag=atom; within=1.6 } }",
+    )
+    .unwrap();
+    let pairs: Vec<(u128, u128)> = rt
+        .present_frame(None)
+        .bonds
+        .iter()
+        .map(|b| (b.a, b.b))
+        .collect();
+    assert!(pairs.contains(&(1, 2)), "a-b close: {pairs:?}");
+    assert!(
+        !pairs.iter().any(|(a, b)| (*a == 1 && *b == 3)),
+        "a-c far: {pairs:?}"
+    );
+}

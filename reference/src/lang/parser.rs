@@ -1369,6 +1369,23 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let value = inner.next().map(parse_value).unwrap_or(0.0);
                             model.channels.push(crate::dsl::ChanDecl { name, value });
                         }
+                        Rule::bonds_stmt => {
+                            let mut tag = String::new();
+                            let mut min = 0.0f64;
+                            let mut max = f64::INFINITY;
+                            for p in item.into_inner() {
+                                let mut pi = p.into_inner();
+                                let key = next_pair(&mut pi)?.as_str().to_string();
+                                let val = next_pair(&mut pi)?.as_str().trim().to_string();
+                                match key.as_str() {
+                                    "tag" => tag = val,
+                                    "min" => min = val.parse().unwrap_or(0.0),
+                                    "within" | "max" => max = val.parse().unwrap_or(f64::INFINITY),
+                                    _ => {}
+                                }
+                            }
+                            model.bond_nets.push(crate::dsl::BondNet { tag, min, max });
+                        }
                         Rule::bond_stmt => {
                             let mut inner = item.into_inner();
                             let a = next_pair(&mut inner)?.as_str().to_string();

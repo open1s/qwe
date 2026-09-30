@@ -18,36 +18,36 @@ world {
   gravity = (0, 0, 0)
 
   # Atom positions: reactant (s=0) -> product (s=1), interpolated by s.
-  #   H1  (-4.0, 0.5) -> (-1.2,  0.7)     H2  (-4.0,-0.5) -> ( 1.2,-0.7)
-  #   Cl1 ( 4.0, 0.5) -> (-0.5,  0.7)     Cl2 ( 4.0,-0.5) -> ( 0.5,-0.7)
-  entity H1  { state = (x = -4.0, y = 0.30, z =  0.5) shape = sphere; size = 0.18; color = 0xF2F2F2 }
-  entity H2  { state = (x = -4.0, y = 0.30, z = -0.5) shape = sphere; size = 0.18; color = 0xF2F2F2 }
-  entity Cl1 { state = (x =  4.0, y = 0.30, z =  0.5) shape = sphere; size = 0.30; color = 0x38C64A }
-  entity Cl2 { state = (x =  4.0, y = 0.30, z = -0.5) shape = sphere; size = 0.30; color = 0x38C64A }
+  #   H1  (-4.0, 0.35) -> (-0.5,  0.75)   H2  (-4.0,-0.35) -> (-0.5,-0.75)
+  #   Cl1 ( 4.0, 0.35) -> ( 0.2,  0.75)   Cl2 ( 4.0,-0.35) -> ( 0.2,-0.75)
+  #   (the two H-Cl pairs move identically, so both bonds form together)
+  entity H1  { state = (x = -4.0, y = 0.30, z =  0.35) shape = sphere; size = 0.18; color = 0xF2F2F2; tag = atom }
+  entity H2  { state = (x = -4.0, y = 0.30, z = -0.35) shape = sphere; size = 0.18; color = 0xF2F2F2; tag = atom }
+  entity Cl1 { state = (x =  4.0, y = 0.30, z =  0.35) shape = sphere; size = 0.30; color = 0x38C64A; tag = atom }
+  entity Cl2 { state = (x =  4.0, y = 0.30, z = -0.35) shape = sphere; size = 0.30; color = 0x38C64A; tag = atom }
 
   # Transition-state flash: a state-only body whose marker size is driven by its
   # mass (slot 6), so it spikes at s = 0.5.
   entity flash { state = (x = 0.0, y = 0.30, z = 0.0, a = 0.0, b = 0.0, c = 0.0, m = 0.0001) color = 0xFFF2A8; label = false; vector = false }
 
-  # Reactant bonds (H-H, Cl-Cl) — drawn while the atoms are close (s near 0).
-  bond H1 H2 max = 1.40
-  bond Cl1 Cl2 max = 1.50
-  # Product bonds (H-Cl, H-Cl) — drawn while the atoms are close (s near 1).
-  bond H1 Cl1 max = 1.10 polarity = 0.35
-  bond H2 Cl2 max = 1.10 polarity = 0.35
+  # Neighbourhood bond net: auto-bond every pair of `atom`-tagged entities
+  # within 1.0 — the H-H / Cl-Cl bonds and then the H-Cl bonds appear on their
+  # own as the atoms come close.
+  bonds { tag = atom; within = 1.0 }
 }
 
 funcs {
-  # reaction coordinate: 0 at reactants -> 1 at products (then the next cycle).
-  s(t) { (t * 0.05) - floor(t * 0.05) }
+  # reaction coordinate: rises 0 -> 1 over 70% of the cycle, then holds at 1
+  # (the products) until the cycle restarts.
+  s(t) { let ph = t * 0.05; let f = ph - floor(ph); return min(f / 0.70, 1.0) }
   # a narrow bump around s = 0.5 (the transition state).
   flash_gain(t) { if(abs(s(t) - 0.5) < 0.10, 1.0, 0.0) }
 }
 
 systems {
-  update { on = H1;  dt = 0.02  let sv = s(t); x = -4.0 + sv * 2.8;  z = 0.5 + sv * 0.2;  y = 0.30 }
-  update { on = H2;  dt = 0.02  let sv = s(t); x = -4.0 + sv * 5.2;  z = -0.5 - sv * 0.2; y = 0.30 }
-  update { on = Cl1; dt = 0.02  let sv = s(t); x =  4.0 - sv * 4.5;  z = 0.5 + sv * 0.2;  y = 0.30 }
-  update { on = Cl2; dt = 0.02  let sv = s(t); x =  4.0 - sv * 3.5;  z = -0.5 - sv * 0.2; y = 0.30 }
+  update { on = H1;  dt = 0.02  let sv = s(t); x = -4.0 + sv * 3.5;  z = 0.35 + sv * 0.40; y = 0.30 }
+  update { on = H2;  dt = 0.02  let sv = s(t); x = -4.0 + sv * 3.5;  z = -0.35 - sv * 0.40; y = 0.30 }
+  update { on = Cl1; dt = 0.02  let sv = s(t); x =  4.0 - sv * 3.8;  z = 0.35 + sv * 0.40; y = 0.30 }
+  update { on = Cl2; dt = 0.02  let sv = s(t); x =  4.0 - sv * 3.8;  z = -0.35 - sv * 0.40; y = 0.30 }
   update { on = flash; dt = 0.02  m = 0.0001 + 24.0 * flash_gain(t) }
 }

@@ -550,6 +550,7 @@ Precedence (high → low): unary `-`, `not`/`!` → `* / %` → `+ -` → compar
 | `pool <name>[N] { … }` | N inactive slots for dynamic entities. |
 | `soft <name> { nx; ny; nz?; spacing; origin; mass }` | a mass-spring grid. |
 | `bond <a> <b> [order=n] [polarity=p] [cloud=true] [min=d] [max=d]` | a render bond between two named entities (ball-and-stick). |
+| `bonds { tag = <t>; within = <d>; min = <d>? }` | a **neighbourhood bond net**: auto-bond every pair of entities tagged `<t>` within `[min, within]`, recomputed each frame (bonds form/break by proximity — e.g. a reaction). |
 | `import "…"` | module import (path relative to the file). |
 
 `bond` is **presentation only** (not a physics constraint): it draws a stick
@@ -578,6 +579,9 @@ each chemical bond a `bond` — see L9 and `cli/examples/molecule.pwe`.
 | `box` / `sphere` / `hull` | collider. |
 | `rotation = (rx,ry,rz)` | static euler rotation (radians). |
 | `camera = true` | viewer camera. |
+
+A neighbourhood bond net needs entities grouped by `tag = <name>` (an entity
+field): `entity H { state=(…) tag = atom }` + `bonds { tag = atom; within = 1.0 }`.
 
 Presentation-only: `color`, `shape = point\|sphere\|box\|capsule\|<custom>`,
 `size = v|(dx,dy,dz)`, `opacity`, `glow`, `label = false`,

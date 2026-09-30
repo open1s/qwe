@@ -1757,6 +1757,11 @@ pub(crate) fn merge_modules(
                 model.bonds.push(b.clone());
             }
         }
+        for n in &m.parsed.model.bond_nets {
+            if !model.bond_nets.contains(n) {
+                model.bond_nets.push(n.clone());
+            }
+        }
         for (name, def) in &m.parsed.model.structs {
             model.structs.insert(name.clone(), def.clone());
         }

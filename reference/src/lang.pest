@@ -34,7 +34,7 @@ param_decl = { ident ~ (":" ~ unit_expr)? }
 
 // -- world model -------------------------------------------------------------
 world_section = { "world" ~ "{" ~ world_item* ~ "}" }
-world_item = _{ gravity_stmt | chan_stmt | struct_stmt | entity_stmt | pool_stmt | soft_stmt | field_stmt | params_stmt | title_stmt | lang_version_stmt | units_stmt | shape_stmt | bond_stmt }
+world_item = _{ gravity_stmt | chan_stmt | struct_stmt | entity_stmt | pool_stmt | soft_stmt | field_stmt | params_stmt | title_stmt | lang_version_stmt | units_stmt | shape_stmt | bonds_stmt | bond_stmt }
 gravity_stmt = { "gravity" ~ "=" ~ vec3 }
 // A human-readable title for the run (shown by `pwe present`).
 title_stmt = { "title" ~ "=" ~ string }
@@ -66,6 +66,11 @@ bond_cloud = { "cloud" ~ "=" ~ boolean }
 // A bond is drawn only when the two entities are within [min, max] distance
 // (a bond forms/breaks by proximity — e.g. a chemical reaction).
 bond_min = { "min" ~ "=" ~ value }
+// `bonds { tag = <tag>; within = <d>; [min = <d>] }` — a neighbourhood bond net:
+// auto-bond every pair of entities tagged <tag> within [min, within], recomputed
+// every frame so bonds form/break as the entities move (e.g. molecular dynamics).
+bonds_stmt = { "bonds" ~ "{" ~ bonds_param* ~ "}" }
+bonds_param = { ident ~ "=" ~ (ident | value) ~ ";"? }
 bond_max = { "max" ~ "=" ~ value }
 // `struct Name { field = <default>; field = <other-struct>; … }` — a named
 // record flattened to dotted state slots (`pos.x`, `pos.y`, …).
@@ -94,6 +99,8 @@ dynamic_field = { "dynamic" ~ "=" ~ boolean ~ ";"? }
 nbody_field = { "nbody" ~ "=" ~ boolean ~ ";"? }
 // `parent = <name>` marks a satellite (shown as a relative distance in `pwe present`).
 parent_field = { "parent" ~ "=" ~ ident ~ ";"? }
+// `tag = <name>` groups entities for a `bonds { tag = … }` neighbourhood net.
+tag_field = { "tag" ~ "=" ~ ident ~ ";"? }
 restitution_field = { "restitution" ~ "=" ~ value ~ ";"? }
 friction_field = { "friction" ~ "=" ~ value ~ ";"? }
 box_field = { "box" ~ "=" ~ vec3 ~ ";"? }
@@ -142,7 +149,7 @@ entity_field = _{ position_field | velocity_field | state_field | mass_field | d
                  | rotation_field
                  | sphere_field | hull_field | camera_field | color_field
                  | shape_field | size_field | opacity_field | glow_field | label_field
-                 | orient_field | vector_field }
+                 | orient_field | vector_field | tag_field }
 
 hull_list = { "[" ~ vec3 ~ ("," ~ vec3)* ~ "]" }
 vec3 = { "(" ~ value ~ "," ~ value ~ "," ~ value ~ ")" }
