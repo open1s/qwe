@@ -21,6 +21,12 @@ implementation**. If the RFC is wrong, update it deliberately.
 - Rust (see `rust-toolchain.toml`). MSRV is declared per crate (`rust-version`).
 - Version control is **jj** (Jujutsu) on top of git; commit with a focused
   pathspec, e.g. `jj commit -m "…" reference/src`.
+- **After a `jj` operation, force a rebuild.** A `jj` checkout can leave source
+  files with an mtime older than a previously built binary, so Cargo's
+  incremental check reports `Finished` and runs a **stale** binary (symptoms:
+  a just-added feature "doesn't exist"/"unknown identifier"). After switching
+  revisions, run `cargo clean -p pwe-cli && cargo build -p pwe-cli` (or
+  `touch reference/src/lang/*.rs`) before trusting a run.
 
 ## Build & test
 
