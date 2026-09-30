@@ -110,6 +110,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0081](https://github.com/open1s/qwe/issues/81) | Low | per-part `opacity` (7b6e4f4e) accepts out-of-range values (`opacity=2`/`-1` compile rc 0) and duplicate opts despite docs promising `0..1`; raw value flows into `frame_to_json` and `material.opacity` | lang.pest `part_opacity_opt`, lang/parser.rs, lang/compile.rs `p.opacity.or(s.opacity)`, docs/lang-usage.md:600 |
 | [0082](https://github.com/open1s/qwe/issues/82) | Low | per-part opacity ships with zero tests across parser/compile/ref-override/JSON/both viewers + 118 regenerated atom files; suite still 412 (tests.rs untouched in 7b6e4f4e) | reference/src/lang/tests.rs |
 | [0083](https://github.com/open1s/qwe/issues/83) | Low | 118 new `<Sym>_nucleus` shapes (7b6e4f4e) undocumented: std/README.md:54 and std/atoms/README.md still describe only `<Sym>_atom` | std/README.md:54, std/atoms/README.md |
+| [0084](https://github.com/open1s/qwe/issues/84) | Low | message drift in `6aebd95b..69ee0fb9`: `665e65f7` "Update 3 files" hides the fmt canonical 4→2 flip + poly viewer fix; `f6f5f93a` claims a viewer change that is in the previous commit; `69ee0fb9` claims #75/#74 fixed while `lang.pest:121` and README-ZH are untouched | 665e65f7/f6f5f93a/69ee0fb9 messages, lang/format.rs, lang.pest:121 |
 
 ## Suggested order
 
@@ -1256,5 +1257,54 @@ laser demo"; reopened 0074, filed 0080/0081/0082/0083, commented 0075/0079):
    stale isosurfaces (good — fixes the 1e-5-residue ghost) but also makes
    any genuinely low-amplitude field (<1e-6 range) invisible with no
     rescale fallback; acceptable tradeoff, worth a future opt-in scale.
+
+Review pass 39 (landed `665e65f7` "Update 3 files" + `f6f5f93a` courtyard +
+`69ee0fb9` "fix #74 #75 #79 #80 #81 #82 #83"; closed 0079/0082/0083,
+reopened 0074, commented 0075/0080/0081, filed 0084):
+
+1. Gates green at `69ee0fb9`: fmt, clippy `--all-targets`, **415 tests**,
+   conformance **25/25**, release build. README table decomposition
+   verified against real suite lines: 357 unit + 21 laws + 4 prop +
+   6 stdlib + 2 fuzz + 25 integration = 415 ✓ (unit +2 = opacity tests,
+   integration +1 = the new fmt gate).
+2. **0080 core verified fixed**: canonical flip 4→2 in `lang/format.rs`
+   (+ formatter tests updated in the same `665e65f7`), `pwe fmt --check`
+   passes on **all 283 committed `.pwe` (0 failures)**, new gate
+   `reference/tests/fmt.rs::committed_programs_are_formatted` scans
+   `std/**` + `cli/examples/**` inside the normal suite. LSP normalizes
+   to the same canonical (still ignores `tabSize`, but canonical == repo
+   style → gofmt-like, accepted). **Stays open**: `docs/review-and-roadmap.md:105`
+   still says "4 空格缩进" (the line the issue quoted) — commented.
+3. **0081 partial**: `opacity=2`/`-1` → rc 1, detail 105, documented at
+   `docs/lang-usage.md:867`, bounds covered by
+   `part_opacity_out_of_range_is_rejected`. **Stays open**: duplicates
+   (`opacity=0.3 opacity=0.8`) still compile rc 0, and the emitted
+   diagnostic is context-free — literally `error 105: unspecified compile
+   error`, no `--> line:col`, no mention of opacity (compare error 60's
+   located parse error) — commented with probes.
+4. **0082 closed**: `per_part_opacity_flows_to_frame_and_ref_override`
+   (JSON + ref override) + out-of-range test land; suite 415 as claimed.
+5. **0083 closed**: both std READMEs document `<Sym>_nucleus` with an
+   example; matches the 118 generated modules verified in pass 38.
+6. **0079 closed**: `rg '1D sine' reference/src` → none (`present.rs`
+   replay label was the straggler; `69ee0fb9` fixed it); proportions and
+   nucleus shapes verified earlier; camera clarification (CLI
+   `auto_frame_camera`, no viewer-side extents) accepted as resolution of
+   the overclaim.
+7. **0074 reopened (second time)**: dev manually closed it at 15:17 with
+   a "Fixed in 69ee0fb9" comment while **README-ZH.md is still 399**
+   (badge :8, comment :210, 合计 :232; ZH untouched since `faf08619`).
+   EN is correct at 415. Reopened with the exact ZH sync checklist.
+8. **0075 stays open**: dev's claim checks only `docs/lang-usage.md`;
+   `lang.pest:121` still reads `` `spin = s` self-rotates `` above
+   `spin_opt = { "spin" ~ value }`, untouched by the fix commit —
+   commented with the line.
+9. **0084 (Low) filed** for the message pattern: "Update 3 files" hiding
+   the fmt flip + viewer fix, `f6f5f93a` claiming `665e65f7`'s change, and
+   "fix #75/#74" claims made without re-reading issue threads.
+10. Courtyard (`f6f5f93a` + `665e65f7`): compiles (229 EIR fns), runs
+    120 steps rc 0 with people/limbs simulating; `poly` parts now
+    `DoubleSide` in **both** embedded viewers (`matFor(col, op, true)` at
+    the k===6 branches) so ground meshes aren't back-face culled.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
