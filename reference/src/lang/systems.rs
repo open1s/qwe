@@ -2927,6 +2927,10 @@ pub struct PairSystem {
     /// number of the other group's bodies within `coord` of `i` (bond order /
     /// coordination-aware forces).
     pub coord: Option<f64>,
+    /// The group the coordination (`n`/`rmin`/`rminj`) is measured over
+    /// (a `cohort` tag, or the union of `a`/`b`). Lets the environment span all
+    /// elements even for an element-specific force.
+    pub cohort: Vec<u128>,
 }
 
 impl EirSystem for PairSystem {
@@ -2973,7 +2977,7 @@ impl EirSystem for PairSystem {
             let zero = nb_const(out, &mut next_id, 0.0);
             let mut n = nb_const(out, &mut next_id, 0.0);
             let mut rmin = nb_const(out, &mut next_id, f64::INFINITY);
-            for &k in others {
+            for &k in &self.cohort {
                 if k == entity {
                     continue;
                 }
@@ -2999,12 +3003,6 @@ impl EirSystem for PairSystem {
             }
             extra = Some((n, rmin));
         }
-        // The group `i` belongs to (for computing a partner's own neighbours).
-        let self_grp: &[u128] = if self.a.contains(&entity) {
-            &self.a
-        } else {
-            &self.b
-        };
         let mut fx = nb_const(out, &mut next_id, 0.0);
         let mut fy = nb_const(out, &mut next_id, 0.0);
         let mut fz = nb_const(out, &mut next_id, 0.0);
@@ -3037,7 +3035,7 @@ impl EirSystem for PairSystem {
             // `rminj` = j's own nearest-neighbour distance (for mutual bonding).
             let rminj = if extra.is_some() {
                 let mut mj = nb_const(out, &mut next_id, f64::INFINITY);
-                for &k in self_grp {
+                for &k in &self.cohort {
                     if k == j {
                         continue;
                     }

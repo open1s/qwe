@@ -306,7 +306,9 @@ fn apply_entity_field(
             decl.parent = Some(next_pair(&mut field.into_inner())?.as_str().to_string())
         }
         Rule::tag_field => {
-            decl.tag = Some(next_pair(&mut field.into_inner())?.as_str().to_string())
+            for p in field.into_inner() {
+                decl.tags.push(p.as_str().to_string());
+            }
         }
         Rule::restitution_field => {
             decl.restitution = Some(parse_value(next_pair(&mut field.into_inner())?))

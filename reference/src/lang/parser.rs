@@ -421,6 +421,7 @@ pub(crate) fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Resul
                     | "type"
                     | "body"
                     | "tag"
+                    | "cohort"
             ) {
                 decl.string_params.insert(key, text);
             } else if let Some(v) = parse_scalar_number(&text) {

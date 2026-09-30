@@ -100,7 +100,8 @@ nbody_field = { "nbody" ~ "=" ~ boolean ~ ";"? }
 // `parent = <name>` marks a satellite (shown as a relative distance in `pwe present`).
 parent_field = { "parent" ~ "=" ~ ident ~ ";"? }
 // `tag = <name>` groups entities for a `bonds { tag = … }` neighbourhood net.
-tag_field = { "tag" ~ "=" ~ ident ~ ";"? }
+// `tag = a, b` — one or more group tags (e.g. `tag = H, atom`).
+tag_field = { "tag" ~ "=" ~ ident ~ ("," ~ ident)* ~ ";"? }
 restitution_field = { "restitution" ~ "=" ~ value ~ ";"? }
 friction_field = { "friction" ~ "=" ~ value ~ ";"? }
 box_field = { "box" ~ "=" ~ vec3 ~ ";"? }

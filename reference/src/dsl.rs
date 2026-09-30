@@ -116,8 +116,9 @@ pub struct EntityDecl {
     pub nbody: Option<bool>,
     /// Optional parent body name (`parent = earth`), for satellites.
     pub parent: Option<String>,
-    /// Optional group tag (`tag = atom`), targeted by `bonds { tag = … }`.
-    pub tag: Option<String>,
+    /// Group tags (`tag = H, atom`), targeted by `bonds { tag = … }` and
+    /// `pair { tag = …; cohort = … }`.
+    pub tags: Vec<String>,
     /// Optional per-slot dimensions (`state = (x = 0 m, vx = 0 m/s)`), aligned
     /// with `state` by index; `None` marks an unannotated slot. Compile-time
     /// only (gradual dimensional analysis).
@@ -151,7 +152,7 @@ impl EntityDecl {
             color: None,
             nbody: None,
             parent: None,
-            tag: None,
+            tags: Vec::new(),
             state_units: None,
             render: None,
         }

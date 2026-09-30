@@ -269,7 +269,7 @@ impl LangRuntime {
                         .entities
                         .iter()
                         .enumerate()
-                        .filter(|(_, e)| e.tag.as_deref() == Some(t))
+                        .filter(|(_, e)| e.tags.iter().any(|x| x == t))
                         .map(|(i, _)| (i as u128) + 1)
                         .collect()
                 };

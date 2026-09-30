@@ -173,6 +173,27 @@ pub fn build_systems(
                         "pair needs at least two entities".to_string(),
                     ));
                 }
+                // The group the coordination is measured over: a `cohort` tag,
+                // else the union of `tag` and `other`.
+                let cohort = match s.string_params.get("cohort") {
+                    Some(t) => tag_ids.get(t).cloned().ok_or_else(|| {
+                        error_at(
+                            Status::Invalid,
+                            48,
+                            s.byte_offset,
+                            format!("pair references unknown cohort '{t}'"),
+                        )
+                    })?,
+                    None => {
+                        let mut u = a.clone();
+                        for x in &b {
+                            if !u.contains(x) {
+                                u.push(*x);
+                            }
+                        }
+                        u
+                    }
+                };
                 let dt = param(&s.params, "dt", s.byte_offset, &s.kind)?;
                 let law_text = s
                     .assigns
@@ -199,6 +220,7 @@ pub fn build_systems(
                     namespace: s.namespace.clone(),
                     param_names: param_names.clone(),
                     coord: s.params.get("coord").copied(),
+                    cohort,
                 }));
             }
             "send" | "recv" => {
@@ -2812,7 +2834,7 @@ they are read as a Z-spin, not euler angles",
     let mut tag_ids: std::collections::BTreeMap<String, Vec<u128>> =
         std::collections::BTreeMap::new();
     for (i, e) in parsed.model.entities.iter().enumerate() {
-        if let Some(t) = &e.tag {
+        for t in &e.tags {
             tag_ids.entry(t.clone()).or_default().push((i as u128) + 1);
         }
     }

@@ -3853,3 +3853,35 @@ fn pair_coord_binds_mutual_nearest() {
         .values[0];
     assert!(a > 0.0, "a bonded to its mutual nearest b: {a}");
 }
+
+#[test]
+fn pair_cohort_spans_all_tags() {
+    // Multi-tag (`tag = H, atom`) + `cohort = atom`: an H-H force whose law
+    // measures the coordination over all atoms (including the Cl), via `n`.
+    let src = r#"world { gravity=(0,0,0)
+      entity a { state=(px=0.0,py=0.0,pz=0.0,vx=0.0,vy=0.0,vz=0.0,m=1.0) tag=H, atom }
+      entity b { state=(px=1.0,py=0.0,pz=0.0,vx=0.0,vy=0.0,vz=0.0,m=1.0) tag=H, atom }
+      entity c { state=(px=0.5,py=0.9,pz=0.0,vx=0.0,vy=0.0,vz=0.0,m=1.0) tag=Cl, atom }
+    }
+    systems {
+      pair  { tag=H; other=H; dt=0.01; coord=2.0; cohort=atom; law = 1.5 - n }
+      drift { tag=H;  dt=0.01 }
+      drift { tag=Cl; dt=0.01 }
+    }"#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(20).unwrap();
+    let a = rt
+        .scene
+        .get(pwe_api::EntityId(1))
+        .unwrap()
+        .state
+        .as_ref()
+        .unwrap()
+        .values[0];
+    // cohort = all atoms -> n = 2 (b + the Cl) -> law = 1.5 - 2 = -0.5 (attract);
+    // an H-only cohort would give n = 1 (repel).
+    assert!(
+        a > 0.0,
+        "a is attracted (n includes the Cl via cohort): {a}"
+    );
+}
