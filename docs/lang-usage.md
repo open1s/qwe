@@ -658,7 +658,8 @@ Presentation-only part options (all optional; they never affect semantics):
   shapes: protons vs neutrons vs electrons);
 * `opacity = o` — overrides the entity opacity for this part (`0..1`); makes a
   part faint/transparent (e.g. a pale electron orbit);
-* `spin s` — self-rotation speed in rad/s;
+* `spin s` — self-rotation speed in rad/s (the value follows the keyword
+  directly; `spin = s` is accepted too);
 * `orbit (radius, speed, phase)` — animates the part around the entity's local
   origin (electrons orbiting a nucleus), `speed` in rad/s; `axis (x,y,z)` sets
   the orbit-plane normal (default local `+Z`).

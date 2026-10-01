@@ -3590,6 +3590,22 @@ fn micro_shape_parts_carry_ring_colour_and_orbit() {
     );
 }
 
+/// #75: `spin` is documented bare (`spin s`) but the older documented form
+/// `spin = s` must also parse — both spellings describe the same part.
+#[test]
+fn spin_option_accepts_bare_and_equals_forms() {
+    let bare =
+        "world { gravity=(0,0,0) shape s { part sphere=0.2 spin 1.5 } entity e { shape=s } }";
+    let with_eq =
+        "world { gravity=(0,0,0) shape s { part sphere=0.2 spin = 1.5 } entity e { shape=s } }";
+    let a = LangRuntime::compile(bare).expect("bare `spin 1.5` must compile");
+    let b = LangRuntime::compile(with_eq).expect("`spin = 1.5` must compile");
+    let ja = crate::present::frame_to_json(&a.present_frame(None));
+    let jb = crate::present::frame_to_json(&b.present_frame(None));
+    assert_eq!(ja, jb, "both spellings describe the same part");
+    assert!(ja.contains("\"spin\":1.5"), "spin encoded: {ja}");
+}
+
 #[test]
 fn non_lowercase_field_name_is_rejected() {
     // Component identities require lowercase names; the compiler reports it

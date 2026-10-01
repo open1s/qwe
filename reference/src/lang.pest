@@ -129,13 +129,14 @@ at_opt = { "at" ~ vec3 }
 depth_opt = { "depth" ~ value }
 scale_opt = { "scale" ~ value }
 // Presentation-only per-part colour and animation (micro-scale visuals: atomic
-// nuclei and orbiting electrons). `orbit (radius, speed, phase)`; `axis (x,y,z)`
-// sets the orbit-plane normal (default local +Z); `spin = s` self-rotates.
+// nuclei and orbiting electrons). `color = 0xRRGGBB`, `opacity = 0..1`;
+// `orbit (radius, speed, phase)`; `axis (x,y,z)` sets the orbit-plane normal
+// (default local +Z); `spin <rad/s>` self-rotates (an optional `=` is accepted).
 part_color_opt = { "color" ~ "=" ~ color }
 part_opacity_opt = { "opacity" ~ "=" ~ value }
 orbit_opt = { "orbit" ~ vec3 }
 axis_opt = { "axis" ~ vec3 }
-spin_opt = { "spin" ~ value }
+spin_opt = { "spin" ~ "="? ~ value }
 shape_kind = @{ "point" | "sphere" | "box" | "capsule" | "svg" | "hull" | "poly" | "ring" }
 size_field = { "size" ~ "=" ~ (vec3 | value) ~ ";"? }
 opacity_field = { "opacity" ~ "=" ~ value ~ ";"? }
