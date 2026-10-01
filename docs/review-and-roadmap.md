@@ -7,7 +7,9 @@
 
 PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确定性优先 + 冻结 ABI + 能力模型**，
 已能表达 4D 物理/化学/生物仿真，并有可用的实时 3D 查看器。当前处于“**广度高、深度浅**”阶段：
-语义仍在演进；核心模块膨胀；JIT/AOT 无原生代码；缺性能度量与 CI；非测试路径存在 `unwrap`。
+模块已拆分、原生 JIT/AOT 与 CI/基准门禁已交付、非测试 `unwrap` 归零；**深度缺口**集中在
+**类型系统（仍仅 f64）**、**GPU 尚非加速器**、**分布式仅进程内回环**、**插件宿主未实现**，
+语义带 v0.3 pragma 但尚未冻结。
 
 定位：**优秀的“可编程物理世界”确定性与原型平台，尚未成为生产级通用科学计算语言。**
 
@@ -15,54 +17,61 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 
 | 指标 | 值 |
 | --- | --- |
-| Rust 总 LOC | ~37.8k（reference 31k） |
-| 最大文件 | `reference/src/lang.rs` 10.8k 行；`eir.rs` 3.4k；`physics_eir.rs` 2.2k |
-| 外部依赖 | 仅 `pest`（+ 宏传递依赖）/ 无 `no_std` 之外的重依赖 |
-| `pwe-api` | `#![no_std]`、零依赖、39 公开项、`include/pwe_abi.h` |
-| RFC | 40 份；conformance 仅 17 用例 |
-| 测试 | 306 个（含 laws 17） |
-| 非测试 `unwrap()` | 132（lang.rs 66、snapshot.rs 13…） |
-| `unsafe` | 9 |
-| JIT/AOT | 无原生代码（“validated cache / frozen program”） |
-| CI/基准 | 无（本次新增） |
+| Rust 总 LOC | ~49.4k（reference 生产 41.0k、reference 测试/示例/基准 4.6k、cli 1.6k、conformance 1.2k、`pwe-api` 1.0k） |
+| 最大文件 | `lang/tests.rs` 4.3k；`eir.rs` 4.3k；`lang/systems.rs` 3.5k（原 `lang.rs` 10.8k 已拆分为 8 个模块） |
+| 外部依赖 | 运行时仅 `pest`（+ macOS 可选 `metal`）；dev 依赖仅 `naga`；无其它重依赖 |
+| `pwe-api` | `#![no_std]`、零依赖、82 个 `pub` 项、`include/pwe_abi.h`（布局被测试锁定） |
+| RFC | 46 份（RFC-0001…0046，其中 0043/0044/0045/0046 为扩展集）；conformance 25 用例 |
+| 测试 | 439 个（单元 381 + laws 21 + property 4 + stdlib 6 + fmt 1 + fuzz 2 + `pwe-api` 15 + cli 9） |
+| 非测试 `unwrap()` | 0（`clippy.toml` + `#![cfg_attr(not(test), deny(clippy::unwrap_used))]` 防回归） |
+| `unsafe` | 31 处，集中在 `src/ffi.rs`(10)/`native.rs`(19)/`gpu.rs`(2) |
+| JIT/AOT | **原生码已交付**：C 代码生成 + 系统 `cc` + `dlopen`，与解释器逐位差分；nbody-64 步进 1323µs vs 解释器 2355µs |
+| CI/基准 | `gate.sh`（fmt/clippy/test/conformance/examples）+ CI（gate/supply-chain/commit-lint）+ 基准回归门禁 `tools/bench-check.sh` |
 
 ## 2. 分维度评估
 
 ### 2.1 代码实现与架构
 - 优点：依赖极简、契约分层清晰、`step_cross` 逐字节差分、ordinal 稳定。
-- 问题：`lang.rs` 单体化；**EIR 指令元数据在 5 处手工同步**（enum/`from_u16`/`result_type`/`validate`/`execute`）；
-  132 处非测试 `unwrap`；无 CI/工具链固定/`cargo-deny`。
+- 现状：`lang.rs` 单体已拆（8 模块）；**EIR 指令元数据已单源**（`declare_opcodes!` 生成
+  enum/`from_u16`/`result_type`，全 opcode round-trip 测试）；非测试 `unwrap=0`；CI/工具链
+  固定/`cargo-deny` 已就位。残留：`eir.rs`(4.3k)、`lang/systems.rs`(3.5k) 仍偏大。
 
 ### 2.2 语法与语言设计
 - 优点：领域关键词清晰；单位词法无歧义；`1/60` 分数；`vecN`/`struct` 铺平；`=`/`inte`/`deriv(E)` 语义已自洽。
-- 问题：`funcs` **位置式 `s0..` 形参**；表达式靠 PEG 顺序消歧、脆弱；**仅 f64 用户可见**（无 int/bool/数组/字符串）；
-  `import` 仅相对路径、无命名空间；语义尚未冻结（无版本 pragma）。
+- 问题：`funcs` **位置式 `s0..` 形参**；表达式靠 PEG 顺序消歧、脆弱；**仅 f64 用户可见**
+  （`let` 标注与 `i64/f64/bool(…)` 转换已交付，但 int/bool 直达寄存器与数组为 RFC-0043/0044，
+  Proposed）；`import` 仅相对路径、无命名空间；语义带 v0.3 pragma + 迁移器但**尚未冻结**。
 
 ### 2.3 科学正确性
-- 优点：`tests/laws.rs` 17 项解析解校验；std 覆盖 12 域。
-- 问题：**引擎缺少通用的“系统内同步屏障”**（曾导致 nbody 破坏牛顿第三定律）；
-  物理合理性无自动诊断（守恒/CFL）；单位检查是渐进式、强度低。
+- 优点：`tests/laws.rs` 21 项解析解校验；std 覆盖 12 域；系统内同步屏障已交付。
+- 问题：`invariant`/`conserved{tolerance}` 运行时断言已实现但**示例与 CI 未接入**；
+  CFL 已计算（`velocity*dt/dx`）却无编译期检查；diffuse `rate ≤ 1/4` 稳定性只写在注释里。
 
 ### 2.4 功能完备性
-- 已具备：解释器、跨后端、EIR 二进制/快照、分布式所有权、能力、池化、关节、软体、结构体、PDE 场、通道、插件 ABI 草案、查看器。
-- 缺口：真实 JIT/AOT；数组/记录外类型；模块系统；LSP/fmt/REPL；GPU 计算；形式化 SSA CFG。
+- 已具备：解释器/原生 JIT/AOT/线程化、跨后端差分、EIR 二进制/快照、分布式所有权（进程内）、能力、
+  池化、关节、软体、结构体、PDE 场、通道、模块系统（RFC-0045）、SSA CFG 表示（RFC-0046）、
+  fmt/REPL/LSP/playground/doctest、查看器。
+- 缺口：类型系统（int/bool/数组 → RFC-0043/0044）；GPU 加速（#41 设备常驻）；QUIC 传输与插件宿主
+  （P4）；`funcs` 具名形参。
 
 ### 2.5 易用性
-- 三命令 CLI、双语教程文档、带定位诊断。
-- 缺：REPL/fmt/LSP；`funcs` 位置参数；相对导入；文档片段无自动校验。
+- 三命令 CLI、双语教程文档、带定位诊断、`pwe fmt`/`repl`/`lsp`/`doctest`/`playground`。
+- 缺：`funcs` 位置参数；相对导入/命名空间；物理示例无运行时断言。
 
 ### 2.6 稳定性与安全
-- 132 非测试 `unwrap` + 9 `unsafe`；无 fuzz/Miri/proptest；浮点确定性策略未成文未测试。
+- 非测试 `unwrap=0`（clippy 防回归）；`unsafe` 31 处集中在 `ffi`/`native`/`gpu` 且有安全契约注释；
+  fuzz + Miri 用法已入 CONTRIBUTING；确定性策略成文（RFC-0013）且有 conformance 覆盖。
 
-### 2.7 性能（本次新增基准，已量测）
-- 既有优化：批量场 opcode、稠密覆盖层、`step_cross_batched`。
-- **实测问题**：`compile(nbody 64) ≈ 0.7 s`，且 **O(n²)**。定位到 `EirModule::validate`：
-  每函数 `validate_function` ~4.3 ms/1605 指令，主导编译时间；根因是
-  `Call` 的 **O(函数数) 线性查找** 与 `BTreeMap` SSA 表的高常数。（`build_with_guards`/clone 亦为 O(指令数)=O(n²)，nbody 固有。）
-- 无真实优化后端；无回归门禁。
+### 2.7 性能（已量测，含回归门禁）
+- 既有优化：批量场 opcode、稠密覆盖层、`step_cross_batched`、读路径缓存、常量折叠 + `Fma` 融合。
+- 曾定位并修复：`compile(nbody 64)` 的 `validate_function` O(F) 查找与 `BTreeMap` SSA 表常数
+  （96→38ms）。
+- 基准回归门禁：`tools/bench-check.sh`（本地对 `reference/benches/baseline.txt` 5% 阈值；
+  CI 走硬顶），接入 `gate.sh` 与 `ci.yml`。
 
 ### 2.8 可扩展性
-- IR 为扁平 opcode（非显式 SSA CFG，虽宣称 SSA-like）；opcode 元数据分散；RFC↔conformance 覆盖不均。
+- EIR 已有显式 SSA CFG 表示与 wire 形式（RFC-0046）；opcode 元数据单源；RFC↔conformance 25/0。
+- 残留：块参数 SSA 与跨块优化（DCE/GVN）；RFC-0043/0044 覆盖待补。
 
 ## 3. 路线图
 
@@ -70,19 +79,20 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - [x] CI（fmt/clippy `-D warnings`/test/conformance/examples/bench）+ `rust-toolchain.toml` + `deny.toml` + `.cargo/config.toml`
 - [x] 手写基准 `reference/benches/throughput.rs`（无重依赖）
 - [x] 消除非测试 `unwrap()`（134→0；固定长转换用 `.expect("proven")`，解析用 `next_pair` 传播，锁用 `unwrap_or_else(into_inner)`）；以 `clippy.toml` + `#![cfg_attr(not(test), deny(clippy::unwrap_used))]` 防回归；FFI 类型别名补安全契约说明
-- [ ] **系统内同步屏障（引擎通用语义）**：见 Phase 2 第 10 项（本次已提前完成核心）
+- [x] **系统内同步屏障（引擎通用语义）**：核心已交付（见 Phase 2「系统内同步屏障」）
 - [x] 编译期性能：`validate_function` 去 O(F) 查找、SSA 表改稠密数组（compile(nbody 64) 96→38ms）
 
 ### Phase 1 — 语言与运行时定型/拆解
 - [x] 拆分 `lang.rs`（11077→mod.rs 387）：`systems.rs`/`tests.rs`/`compile.rs`/`lower.rs`/`parser.rs`/`runtime.rs`/`ast.rs`/`diagnostics.rs`
-- [ ] opcode 元数据单一事实源 + 全 opcode round-trip 测试
+- [x] opcode 元数据单一事实源 + 全 opcode round-trip 测试（`declare_opcodes!` 单源生成
+  enum/`from_u16`/`result_type`；`from_u16(op as u16) == Some(op)` 全表断言）
 - [x] 语言版本 pragma（`world { lang_version = "0.3" }`，detail 83）**+ 迁移器**：`pwe migrate` / `lang::migrate_v02_to_v03`（旧隐式 `=` 积分与旧 `deriv` → `inte`）
 - [ ] `funcs` 具名形参
 
 ### Phase 2 — 类型系统与科学正确性
 - [x] 系统内同步屏障（`Barrier` = 系统边界；committed = start-of-system）
 - [~] 值类型：`let` 类型标注（89）、整型常量语义、显式转换 `i64/f64/bool(…)` 已交付；**int/bool 直达 EIR 寄存器**见 RFC-0043（Proposed）
-- [ ] 物理合理性运行时（守恒/CFL 诊断、内建已验证积分器）
+- [~] 物理合理性运行时：`invariant`/`conserved{tolerance}` 运行时断言与守恒/有界回归测试已交付；**CFL 与 diffuse 稳定性仍是「算出但不检查」，示例未接入**（见 2.3）
 - [ ] 物理 demo 断言纳入 CI
 
 ### Phase 3 — 高性能与多后端
@@ -93,26 +103,25 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - [x] 世界访问型原生内核：`ReadView`/`ReadCommitted`/`WriteView` 经 `#[repr(C)]` 函数指针表（`PweCtx`）回调进 `NativeCtx{rt,writes}`；`execute_entries` 复刻解释器的系统屏障/顺序语义。差分测试 `native_world_kernel_matches_interpreter_writes` 通过（nbody 写入逐位一致）。基准：nbody-64 步进 1323µs vs 解释器 2355µs（~1.8×）。
 - [x] GPU/NPU 计算后端（WGSL，`wgsl.rs` + `WGSL_TARGET`）：把数据并行的 map 核（无世界访问/无调用/无分支的直线函数）下降为 WGSL 计算着色器（`@compute` / `@workgroup_size` / storage buffers）。**设备语义为 f32**（WebGPU 无 f64），故为**近似**设备后端、非逐位等价。验证：依赖无关的结构校验器 + f32 CPU oracle 与解释器在 f32 容差内一致（`wgsl::tests`）。
 - [x] WGSL **离线校验**：`naga`（dev-dependency）对每个产出的着色器做 parse+validate；`sign`/`round`/`hypot`/`Rem`/`Select` 以显式 helper 复刻 CPU 语义（#37/#38），oracle 与之镜像，边界矩阵覆盖 ±0/±inf/NaN/subnormal/半值/大值。RFC-0021 trap（除零/NaN 比较）以 `atomic<u32>` **trap 标志 + 提前返回**在设备上复现（#39），宿主读标志并以 detail 18 失败该步。
-- [~] **GPU f32 卸载（Metal on Mac，`--features gpu`，实验性）**：`gpu.rs` 用 Metal 计算着色器（MSL）在 GPU 上跑**场 stencil（diffuse）**；`pwe run --gpu` 启用（`SceneRuntime::field_diffuse` 走 GPU，其余回落 CPU）；`metal` 按 `target_os="macos"` 门控，非 macOS/CI 不构建。**f32 近似**（CPU f64 为基准）。**实测慢于 CPU**（#41：256² 上 CPU 129µs vs GPU 244µs；各尺寸 1.34×–2.55× 慢）——原因是每步 `f64↔f32` 主机转换 + 上传/回读 + 同步，而非算法。**属于正确性已验证的卸载路径，非加速器**；要真正提速需设备常驻场状态（fix #1，未实现）。基准记录见 `benches/throughput.rs::bench_gpu`。
+- [~] **GPU f32 卸载（Metal on Mac，`--features gpu`，实验性）**：`gpu.rs` 用 Metal 计算着色器（MSL）在 GPU 上跑**场 stencil（diffuse）**；`pwe run --gpu` 启用（`SceneRuntime::field_diffuse` 走 GPU，其余回落 CPU）；`metal` 按 `target_os="macos"` 门控，非 macOS/CI 不构建。**f32 近似**（CPU f64 为基准）。**实测慢于 CPU**（#41：256² 上 CPU 129µs vs GPU 244µs；各尺寸 1.34×–2.55× 慢）——原因是每步 `f64↔f32` 主机转换 + 上传/回读 + 同步，而非算法。**属于正确性已验证的卸载路径，非加速器**；要真正提速需设备常驻场状态（修 #41，未实现）。基准记录见 `benches/throughput.rs::bench_gpu`。
 - [x] WGSL **执行验证（Metal on Mac）**：`gpu-verify/`（独立 crate，自带 `[workspace]`，CI 不受影响）用 `wgpu` 的 **Metal** 后端在真实 GPU（Apple M2 Max）上执行产出的 WGSL，与 CPU oracle/解释器在 f32 容差内一致（64 lane），并验证除零 **trap 标志**置位。运行：`cargo run --release --manifest-path gpu-verify/Cargo.toml`。
 - [x] 真 JIT（hotness→原生→deopt）：`CpuJit` 在模组达 `NATIVE_PROMOTE`(=64) 次调用后把单元提升为**原生代码**执行（`native_for` 懒编译并缓存失败以 deopt 回解释器）；提升发生在 JIT 生命周期门（Validate/CapabilityCheck/Publish，`ready()`）**之后**，故合规。`LangRuntime::enable_native_jit` / `pwe run --native-jit` 启用；差分测试 `native_jit_promotes_and_matches_interpreter` 断言提升后确有原生执行（`native_executions>0`）且 `step_cross` 逐步字节一致。
 - [x] 线程化分派（threaded dispatch）：**已作为 opt-in 后端采纳**（`--threaded` / `LangRuntime::enable_threaded_dispatch`）：`eir.rs` 新增静态函数指针表（按 opcode 索引）的线程化解释器，覆盖纯算术/比较/数学/`ReadView`/`WriteView`/调用/分支等子集，整模块不支持则回退跳表；差分测试 `threaded_dispatch_matches_jump_table` 通过（与跳表逐位一致，且经 `step_cross` 对 JIT 验证）。**默认仍为跳表**（线程化端到端 nbody-64 3086µs vs 跳表 2264µs，慢 ~36%；微基准 8%）。基准记录见 `benches/throughput.rs::step_threaded`。
 - [x] SIMD：**评测后不采用**——场 stencil 内点循环为无分支单位步长，LLVM 已自动向量化；显式 2-lane（SSE2/NEON）实测**更慢**（256 宽行 0.128µs vs 标量 0.096µs），故保留标量（由 LLVM 向量化）并记录测量。
 
 ### Phase 4 — 普适性与生态
-- [~] 语义化模块系统；fmt/REPL/LSP；doctest
+- [x] 语义化模块系统；fmt/REPL/LSP；doctest
   - [x] **playground**：`pwe playground [--port P]` —— 本地浏览器编辑器 + 实时 3D 视图（`present.rs::serve_playground`；驱动线程独占 runtime，经通道接收源码，复用 `present` 的 `/view` viewer 与 `/state`）。`POST /api/source` 编译并返回诊断，成功则实时步进渲染。含 `playground_page_has_editor_and_viewer` 测试；端到端手工验证（编译样例 + `/state` 帧 + 错误诊断）。
   - [x] **`pwe fmt`**：token-preserving 重格式化（2 空格缩进 —— 与仓库一致，`reference/tests/fmt.rs` 逐个校验已提交 `.pwe` 可过 `--check`；去尾空白、折叠空行；`--check`/`-w`）。保证**语义不变**：仅改前导空白/行尾/空行，EIR 逐字节一致（测试 `format_is_idempotent`/`format_preserves_tokens`/`formatting_preserves_compiled_artifact`）。
   - [x] **`pwe repl`**：交互式输入源码并 `:run [N]`/`:step [N]`/`:reset`/`:show`/`:clear`/`:load`/`:quit`；核心 `run_repl<R:BufRead,W:Write>` 可脚本化并单测（`repl_script_compiles_runs_and_steps`、`repl_reports_diagnostics`）。
   - [x] **doctest**：`pwe doctest [FILES...]` 编译 Markdown 中可运行的 ```` ```pwe ```` 完整程序块（以 `world` 开头；`pwe ignore` 标记示例片段跳过）；`doctest.rs` 含抽取/选择/文档回归测试（`shipped_docs_compile` 校验 README/lang-usage en+zh）。
   - [x] **LSP**：`pwe lsp`（stdio，无依赖）——全文档同步、`publishDiagnostics`（开/改/关，`lang::compile`+`diagnose`）、`textDocument/formatting`（`format_source`）；自带 JSON 解析/序列化（`json.rs`）与单测。
-  - [ ] 语义化模块系统 —— 见 **RFC-0045（Proposed）**（稳定模块名、显式 export/私有、确定性合并与冲突报错、模块集纳入 artifact 身份）
-  - [ ] 语义化模块系统
+  - [x] 语义化模块系统（**RFC-0045**：稳定模块名、显式 export/私有、确定性合并与冲突报错、模块集纳入 artifact 身份）——conformance "RFC-0045 semantic modules (import + export, cross-backend)"、"RFC-0045 module export surface enforced (detail 102)"，`lang::tests::module_*`、`from_import_respects_export_surface`
 - [~] 分布式/插件沙箱、fuzz/Miri
   - [x] **fuzz（依赖无关、CI 可跑）**：`reference/tests/fuzz.rs` 用确定性 PRNG 向所有公开解码边界（EIR/extension/channel）与 parser/compiler/formatter 灌入随机字节/源码，断言**不 panic**、解析返回 `Result`、`format_source` **幂等**。Miri 用法记于 CONTRIBUTING（`cargo +nightly miri test --test fuzz`；`cfg!(miri)` 下自动减迭代）。
-  - [ ] 分布式/插件沙箱（更大）
+  - [ ] 分布式/插件沙箱（更大）——**已排期 P4**：RFC-0006 QUIC 传输 + RFC-0016 同进程能力级插件宿主
 - [~] EIR 升级为显式 SSA CFG；RFC↔conformance ≥80%
-  - [x] RFC↔conformance：冻结集 RFC-0019–0036 全覆盖；**扩展 RFC-0037–0042 新增 6 个 `pwe-conformance` 用例**（场扫描/池/关节/软体/struct，cross-backend），报告 **total=23 failed=0**；`docs/rfc-alignment.md` 增补扩展 RFC 表（0043/0044 为 Proposed）。
+  - [x] RFC↔conformance：冻结集 RFC-0019–0036 全覆盖；**扩展 RFC-0037–0042 各有 conformance 用例**（场扫描/池/关节/软体/struct，cross-backend），**RFC-0045 再增 2 例**，报告 **total=25 failed=0**；`docs/rfc-alignment.md` 增补扩展 RFC 表（0043/0044 为 Proposed）。
   - [x] EIR 显式 SSA CFG（RFC-0046，已实现表示层+wire）：`EirModule::blocks`/`verify_cfg`；`verify_linear_dominance` 改用具实块；FUNCTIONS 段对含分支函数编码显式块（`block_count>1`，兼容旧单块），解码确定性拼接、重编码逐字节一致（`eir_cfg_blocks_round_trip`）。残留：块参数 SSA 与跨块优化（DCE/GVN）。
 - [x] ADR/贡献指南/架构文档：`docs/architecture.md`（流水线/边界/执行层）、`CONTRIBUTING.md`（工具链/门禁/特性/流程）、`docs/adr/`（0001–0005：原生 cc 后端、进程内豁免、opt-in 线程化、SIMD 不采用、GPU 实验性）。
 
@@ -128,11 +137,16 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 ## 4b. Phase 3 进展（本次迭代）
 - 解释器读路径 + 调用索引优化；优化层的常量折叠与 FMA 融合（`Fma` opcode）。
 - 真原生后端（纯函数）：C 代码生成 + `cc` + `dlopen`，与解释器逐位一致（差分测试）。
-- 基准（release，本机）：`step_interpreter(nbody 64)` ≈ 2.21 ms（优化前 2.28），`step_cross` ≈ 4.5 ms，`compile(nbody 64)` ≈ 93 ms（优化在编译期，代价 +~24%）。
+- 基准（release，本机，权威记录见 `reference/benches/baseline.txt`，由
+  `tools/bench-check.sh --update` 生成）：`compile(nbody 64)` ≈ 93.9 ms、
+  `step_interpreter(nbody 64)` ≈ 2.36 ms、`step_cross` ≈ 5.09 ms、
+  `step_native(nbody 64)` ≈ 1.36 ms、`step_threaded(nbody 64)` ≈ 3.24 ms、
+  `step_interpreter(wave 32x32)` ≈ 8.6 µs、`present_frame(nbody 64)` ≈ 7.1 µs。
 - 差分验证：全部 `step_cross`/conformance 用例通过（优化模块 ≡ 通用模块，字节一致）。
 
 ## 5. 验收标准（关键项）
-- 运行路径 `unwrap=0`；CI 全绿；基准回归 >5% 报警。
+- 运行路径 `unwrap=0`；CI 全绿；**基准回归 >5% 报警已接入**（`tools/bench-check.sh`，本地对
+  `reference/benches/baseline.txt` 比对、CI 走硬顶；`gate.sh` 与 `ci.yml` 均调用）。
 - 多体/群集任意系统由构造保证同步（conformance）。
 - `compile(nbody 64)` 显著下降（目标 <100 ms）。
 - 解释器 ≥3×；真实 JIT 热点 ≥10×；GPU 场结果与 CPU 容差内一致。

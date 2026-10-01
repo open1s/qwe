@@ -5,7 +5,7 @@
 [English](README.md)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.81%2B-orange.svg)](https://www.rust-lang.org)
-[![tests](https://img.shields.io/badge/tests-438%20passing-brightgreen.svg)](#测试与符合性)
+[![tests](https://img.shields.io/badge/tests-439%20passing-brightgreen.svg)](#测试与符合性)
 [![conformance](https://img.shields.io/badge/conformance-25%2F25%20%C2%B7%200%20skips-brightgreen.svg)](#测试与符合性)
 [![RFCs](https://img.shields.io/badge/frozen%20contract-37%20RFCs-purple.svg)](#冻结契约)
 [![repo](https://img.shields.io/badge/github-open1s%2Fqwe-181717.svg)](https://github.com/open1s/qwe)
@@ -207,7 +207,7 @@ application  →  world  →  IR  →  compiler  →  runtime  →  kernel  → 
 git clone git@github.com:open1s/qwe.git && cd qwe
 
 cargo build --workspace
-cargo test  --workspace          # 438 个测试
+cargo test  --workspace          # 439 个测试
 cargo run -p pwe-conformance     # RFC-0029：全部 PASS，无跳过
 
 # 语言端到端：
@@ -223,13 +223,13 @@ cargo run -p pwe-reference --example language_demo
 
 | 套件 | 数量 |
 | --- | --- |
-| 运行时 / 语言单元测试 | 380 |
+| 运行时 / 语言单元测试 | 381 |
 | 解析解符合性 | 21 |
 | 属性测试 | 4 |
 | 标准库测试 | 6 |
 | 模糊测试（确定性） | 2 |
 | 集成 / 其它 | 25 |
-| **合计** | **438** |
+| **合计** | **439** |
 
 外加 `pwe-conformance`：**25 / 25，零跳过**。`no_std` 检查：
 `cargo check -p pwe-api --no-default-features`。
@@ -250,12 +250,21 @@ cargo run -p pwe-reference --example language_demo
 
 内核边界之后有界、刻意的缺口——**不是**缺失的契约：
 
-* **后端**：参考实现提供解释器（基准）、解释器支持的 JIT 与 AOT 路径——全部做过
-  差分验证。GPU / NPU / SIMD 在 `AotProgram.target` 边界接入，**在路线图上**。
-  参考"JIT"锁定的是 JIT *契约*，尚未生成原生机器码。
-* **刚体**：AABB、球、凸包（精确 SAT）、复合与高度场碰撞体，冲量、摩擦、距离关节、
-  地面。尚无软体或完整关节族。
-* **动态实体集合在编译期固定**（对象池激活已列入计划）。
+* **后端**：参考实现提供解释器（语义基准）、原生 JIT（热度提升——`pwe run`
+  默认启用，`--no-native-jit` 关闭）与 AOT（C 代码生成 + 系统 `cc` + `dlopen`），
+  全部与解释器差分验证，另有可选的线程化分派。GPU（WGSL / Metal，f32）**正确性
+  已验证但还不是加速器**：每步上传/回读使其今天慢于 CPU（见 #41，修法是设备常驻
+  场状态）。NPU 在路线图上；SIMD 评测后不采用（LLVM 已自动向量化 stencil 循环）。
+* **刚体**：AABB、球、凸包（精确 SAT）、复合与高度场碰撞体，冲量、摩擦，距离/
+  弹簧/焊接/铰接/球铰/移动关节，外加软体（布料/果冻，RFC-0040）与地面。更广的
+  关节族（cone/universal/gear）仍在推进——它们需要引擎尚未建模的转动状态。
+* **求值时统一为 `f64`**：前端已支持 `let` 类型标注、整型常量折叠（`: i64` 下
+  `7 / 2`）与显式 `i64(…)` / `f64(…)` / `bool(…)` 转换（detail 89），但下降后的
+  寄存器与状态槽都是 double；`int`/`bool` 直达 EIR 寄存器为 RFC-0043、类型化数组
+  为 RFC-0044（均为 Proposed）。
+* **分布式与插件目前都在进程内**：所有权、epoch、split-brain 拒绝与线格式已实现
+  并经回环通道测试；RFC-0006 的 QUIC 传输与 RFC-0016 的能力作用域插件宿主（函数
+  表已冻结、尚无人填充）是剩余工作。
 
 实时清单见 [`tasks/todo.md`](tasks/todo.md)。
 

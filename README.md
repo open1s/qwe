@@ -6,7 +6,7 @@ of a 4D world — 3D space, plus time.**
 [中文](README-ZH.md)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.81%2B-orange.svg)](https://www.rust-lang.org)
-[![tests](https://img.shields.io/badge/tests-438%20passing-brightgreen.svg)](#tests--conformance)
+[![tests](https://img.shields.io/badge/tests-439%20passing-brightgreen.svg)](#tests--conformance)
 [![conformance](https://img.shields.io/badge/conformance-25%2F25%20%C2%B7%200%20skips-brightgreen.svg)](#tests--conformance)
 [![RFCs](https://img.shields.io/badge/frozen%20contract-37%20RFCs-purple.svg)](#the-frozen-contract)
 [![repo](https://img.shields.io/badge/github-open1s%2Fqwe-181717.svg)](https://github.com/open1s/qwe)
@@ -220,7 +220,7 @@ Inside `pwe-reference`:
 git clone git@github.com:open1s/qwe.git && cd qwe
 
 cargo build --workspace
-cargo test  --workspace          # 438 tests
+cargo test  --workspace          # 439 tests
 cargo run -p pwe-conformance     # RFC-0029: all PASS, no skips
 
 # the language, end to end:
@@ -236,13 +236,13 @@ cargo run -p pwe-reference --example language_demo
 
 | Suite | Count |
 | --- | --- |
-| Runtime / language unit tests | 380 |
+| Runtime / language unit tests | 381 |
 | Analytic law-conformance | 21 |
 | Property tests | 4 |
 | Standard-library tests | 6 |
 | Fuzzing (deterministic) | 2 |
 | Integration / other | 25 |
-| **Total** | **438** |
+| **Total** | **439** |
 
 Plus `pwe-conformance`: **25 / 25, zero skips**. The `no_std` check:
 `cargo check -p pwe-api --no-default-features`.
@@ -264,16 +264,29 @@ envelope. See [`rfc/`](rfc/README-v0.2.md) and [`docs/rfc-alignment.md`](docs/rf
 
 Bounded, deliberate gaps behind the kernel boundary — **not** missing contracts:
 
-* **Backends**: the reference implements the interpreter (the oracle), the
-  interpreter-backed JIT, and the AOT path — all differential-verified. GPU /
-  NPU / SIMD plug in at `AotProgram.target` and are **on the roadmap**. The
-  reference "JIT" locks the JIT *contract* rather than emitting native code.
+* **Backends**: the reference implements the interpreter (the semantic oracle),
+  the native JIT (hotness promotion — on by default in `pwe run`, `--no-native-jit`
+  opts out), and AOT (C code generation + the system `cc` + `dlopen`), all
+  differentially verified against the interpreter, plus an opt-in threaded
+  dispatcher. GPU (WGSL / Metal, f32) is *correctness*-verified but **not yet an
+  accelerator**: per-step upload and read-back make it slower than CPU today
+  (see #41 — the fix is device-resident field state). NPU is on the roadmap;
+  SIMD was measured and rejected (LLVM already vectorizes the stencil loop).
 * **Rigid bodies**: AABB, sphere, convex-hull (exact SAT), compound and
   heightfield colliders, impulses, friction, and distance/spring/weld/hinge/ball/
   prismatic joints, plus soft bodies (cloth/jelly, RFC-0040) and a ground plane.
-  A broader joint family (cone/universal/gear) is still growing.
-* **Dynamic entity sets are fixed at compile time** (object-pool activation is
-  planned).
+  A broader joint family (cone/universal/gear) is still growing — those need
+  rotational state the engine does not model yet.
+* **Values are `f64`-only at lowering.** `let` type annotations, integer
+  constant folding (`7 / 2` under `: i64`), and explicit `i64(…)` / `f64(…)` /
+  `bool(…)` casts are in the front end (detail 89), but every lowered register
+  and state slot is a double; `int`/`bool` reaching EIR registers is RFC-0043
+  and typed arrays are RFC-0044 (both Proposed).
+* **Distribution and plugins are in-process.** Ownership, epochs, split-brain
+  rejection, and the wire format are implemented and tested over a loopback
+  channel; the RFC-0006 QUIC transport and the RFC-0016 capability-scoped plugin
+  host (function tables are frozen, nobody fills them yet) are the remaining
+  work.
 
 See [`tasks/todo.md`](tasks/todo.md) for the live list.
 
