@@ -117,6 +117,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0088](https://github.com/open1s/qwe/issues/88) | Low | entity-level `opacity_field` still raw after #81's fix: docs promise `[0,1]` (lang-usage:383) but `opacity = 2.5` and duplicates compile rc 0 (functional path — laser.pwe uses entity-level opacity, `/state` carries it); part-level got 105/107 in e1534259 | lang/parser.rs `opacity_field` (:142), entity_field (:153) |
 | [0089](https://github.com/open1s/qwe/issues/89) | Low | README/README-ZH counts stale at tip: badge/table/prose say 439 tests + 25 conformance, actual **450/26** (ebbee9df refreshed correctly, 84cd89bb/8388c3d7 drifted them; third #74-class occurrence, no count gate) | README.md:9/:10/:22/:186, README-ZH.md:8/:9/:210/:232 |
 | [0090](https://github.com/open1s/qwe/issues/90) | Low | required `Commit message` check RED on main tip: `8388c3d7 lang:` and `84cd89bb present:` aren't valid types; 3 tips pushed-then-force-rewritten (933b06ef ✗ → 2d02ca6a ✗ → fab7a30f ✓ → 24a3a314 ✗) in 50 min; no pre-push subject check | .github/workflows/commit-lint.yml, CONTRIBUTING § Commit messages |
+| [0091](https://github.com/open1s/qwe/issues/91) | Medium | `pwe present robot.pweb` fails at step 1376: `step_cross` writes-branch `EirInvalid(50)` — interp vs **promoted/native JIT** differ by 1 ULP (link1 state[1]: 0.6024473171726811 vs …812, bits 0x3fe…33/34); every-step cross catches it at step 79; `--no-native-jit` passes everything; run (phase ≡15 mod16) and present (phase ≡0) disagree; pre-existing ≥3805fed3 | reference/src/lang/runtime.rs:766, cli/src/main.rs CROSS_BATCH, native JIT codegen |
 
 ## Suggested order
 
@@ -1520,5 +1521,37 @@ Review pass 44 (6 commits `e7966104`…`24a3a314`; filed 0089/0090):
    chasing the lint; suggest rewriting the two subjects + a pre-push
    local subject check (gate.sh step or commit-msg hook).
 9. Open after pass 44: **#89, #90**.
+
+Review pass 45 (user-reported bug: `pwe present robot.pweb` → `step
+1376 failed: PWE EirInvalid (50) at 0`; filed 0091):
+
+1. **Reproduced** exactly on tip `24a3a314` (debug and release, with and
+   without `--native-jit` — the flag defaults on, so both user runs had
+   native JIT enabled).
+2. **Diagnosed** by instrumenting the three detail-50 sites in a local
+   snapshot (never committed): divergence is the *writes* branch of
+   `step_cross` — `w[2]` entity 3 (`link1`), state offset 8,
+   interpreter `0.6024473171726811` (bits …a33) vs JIT
+   `0.6024473171726812` (bits …a34) — **1 ULP**.
+3. **Isolated to the native/hotness-promoted JIT**: matrix over cross
+   cadence × `--no-native-jit` — every-step cross + native = FAIL@79;
+   every-step + `--no-native-jit` = pass; default batch-16 + native =
+   `run` passes 1400 / `present` fails 1376; batch-16 + no-native = pass.
+   Promotion timing (JIT executions per checked step) explains the
+   different first-failure steps; unoptimized EIR JIT ≡ interpreter.
+4. **Cross-phase knock-on**: `run` checks steps ≡15 (mod 16),
+   `present` ≡0 — the two CLIs disagree on the same artifact's validity.
+5. **Pre-existing**: fails on `3805fed3` and `e7966104` with their own
+   robot.pwe (same step, same bits) — origin older than this week;
+   laser present (≥2500 steps) and other demos unaffected. The dev was
+   observed mid-debug (uncommitted PWE_CROSS_DEBUG instrumentation in
+   the working copy, which only covers the writes branch — where this
+   indeed fires).
+6. **0091 (Medium) filed** with repro, exact bits, the execution matrix,
+   phase analysis and fix suggestions (native codegen FP semantics,
+   promotion-crossing regression test, aligned phases + `--strict`).
+7. Gates note: tip was green before this investigation (450 tests,
+   26/26); my pushes this round remain issues-only. Open after pass 45:
+   **#89, #90, #91**.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
