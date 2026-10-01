@@ -31,7 +31,7 @@ implementation**. If the RFC is wrong, update it deliberately.
 ## Build & test
 
 ```bash
-# One command, same list as CI — run this before every commit:
+# One command, same list as CI — mandatory before every commit AND every push:
 ./tools/gate.sh
 
 cargo fmt --all -- --check
@@ -48,6 +48,11 @@ cargo deny check                         # supply chain (licenses/advisories)
 ```
 
 All of the above must pass before a change lands. CI runs them on Linux.
+`main` also *requires* the `gate`, `supply-chain` and `subject` checks (branch
+protection), so a red push cannot be merged and its `subject` lint fails inside
+seconds. Note the gap GitHub cannot close for a direct push: the check only
+exists after the push, so `./tools/gate.sh` first is the guard that keeps the
+window at zero — that window is exactly what #86 measured (19 min and 30 min).
 
 ### Optional features
 
@@ -84,6 +89,10 @@ title (#84).
   documented as an approximate opt-in (with a differential or oracle test).
 - **ABI/schema/protocol changes** require checking the corresponding RFC first
   (`AGENTS.md` §16).
+- **Renaming a struct field** (e.g. `EntityDecl.tag` → `tags`) breaks every
+  initializer: `gate.sh`'s `clippy --all-targets` compiles `examples/` and
+  `tests/`, so running it is the fix — CI caught `E0560` twice in one day
+  (#86).
 - **Dependencies** are reviewed for license, maintenance, size, and compile cost
   (`AGENTS.md` §12); prefer small, mature crates, and gate heavy ones behind
   optional, target- or feature-specific deps.
