@@ -1,0 +1,9 @@
+# tools/bench-check.sh --update — label<TAB>baseline_us<TAB>ceiling_us
+compile(nbody 64)	93740.483	562442.898
+compile(field 32x32)	48.084	288.504
+step_interpreter(nbody 64)	2293.532	13761.192
+step_threaded(nbody 64)	3214.459	19286.754
+step_cross(nbody 64)	4914.471	29486.826
+present_frame(nbody 64)	6.971	41.826
+step_native(nbody 64)	1333.168	7999.008
+step_interpreter(wave 32x32)	8.393	50.358

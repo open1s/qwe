@@ -43,16 +43,20 @@ cargo run -q -p pwe-cli -- doctest       # compile runnable code blocks in docs
 # Deeper UB checks (needs nightly + miri): cargo +nightly miri test -p pwe-reference --test fuzz
 # Editor integration: `pwe lsp` (stdio LSP: diagnostics + formatting)
 cargo build --examples -p pwe-reference
-cargo bench -p pwe-reference             # throughput record
+./tools/bench-check.sh                   # benchmark gate: >5% warns, >15% fails
+./tools/bench-check.sh --update          # re-record reference/benches/baseline.txt
+cargo bench -p pwe-reference             # raw throughput record
 cargo deny check                         # supply chain (licenses/advisories)
 ```
 
 All of the above must pass before a change lands. CI runs them on Linux.
 `main` also *requires* the `gate`, `supply-chain` and `subject` checks (branch
 protection), so a red push cannot be merged and its `subject` lint fails inside
-seconds. Note the gap GitHub cannot close for a direct push: the check only
-exists after the push, so `./tools/gate.sh` first is the guard that keeps the
-window at zero — that window is exactly what #86 measured (19 min and 30 min).
+seconds; the separate `bench` CI job re-runs the benchmark against
+cross-machine ceilings (`tools/bench-check.sh --ci`). Note the gap GitHub
+cannot close for a direct push: the check only exists after the push, so
+`./tools/gate.sh` first is the guard that keeps the window at zero — that
+window is exactly what #86 measured (19 min and 30 min).
 
 ### Optional features
 

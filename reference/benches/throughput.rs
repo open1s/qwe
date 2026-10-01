@@ -1,6 +1,8 @@
 //! Hand-rolled throughput benchmarks (no external deps). Run:
 //! `cargo bench -p pwe-reference`. Each line is a stable, comparable number so
-//! performance regressions are visible in CI.
+//! performance regressions are visible in CI; compare with
+//! `tools/bench-check.sh` (local thresholds) or `tools/bench-check.sh --ci`
+//! (cross-machine ceilings against `benches/baseline.txt`).
 use pwe_reference::lang::LangRuntime;
 use pwe_reference::native::NativeProgram;
 use pwe_reference::physics_eir::SceneRuntime;
@@ -32,8 +34,22 @@ systems {
 }
 "#;
 
+/// Iteration scale for wall-clock-short runs (pre-commit / CI). The per-op
+/// number is unaffected: warm-up happens before the timer starts, so scaling
+/// only changes how many timed iterations are averaged.
+fn bench_scale() -> u64 {
+    std::env::var("PWE_BENCH_SCALE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
+}
+
 fn timed<F: FnMut()>(label: &str, iters: u64, mut f: F) {
-    for _ in 0..(iters / 10).max(1) {
+    let iters = (iters / bench_scale()).max(10);
+    // Warm-up is outside the timed region; keep it substantial even at a high
+    // scale so one-off first-call costs cannot skew a short run.
+    for _ in 0..(iters / 10).max(5) {
         f();
     }
     let t = Instant::now();
@@ -50,7 +66,9 @@ fn main() {
     timed("compile(nbody 64)", 50, || {
         let _ = LangRuntime::compile(&nbody).unwrap();
     });
-    timed("compile(field 32x32)", 50, || {
+    // Sub-millisecond: take many iterations so the per-op average averages out
+    // host noise (the timed window would otherwise be only a few ms).
+    timed("compile(field 32x32)", 2_000, || {
         let _ = LangRuntime::compile(FIELD_SRC).unwrap();
     });
 
