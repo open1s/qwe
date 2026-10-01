@@ -1,0 +1,52 @@
+name: Commit message
+
+# One concern per commit, with a descriptive conventional subject: `git log`
+# is the archaeology for ABI/formatter/protocol changes, and GitHub's web
+# editor defaults to an opaque `Update N files` (#84). This job lints the
+# subjects of exactly the commits a push carries.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  subject:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lint pushed commit subjects
+        env:
+          COMMITS: ${{ toJSON(github.event.commits) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+
+          TYPE = re.compile(
+              r"^(feat|fix|docs|test|chore|refactor|perf|build|ci|revert|style)"
+              r"(\([a-z0-9][a-z0-9/-]*\))?: \S.*$"
+          )
+          DEFAULT = re.compile(r"^Update \d+ files?$")
+
+          commits = json.loads(os.environ.get("COMMITS") or "[]")
+          bad = []
+          for c in commits:
+              message = c.get("message") or ""
+              subject = message.splitlines()[0].strip() if message.strip() else ""
+              sha = (c.get("id") or "?")[:8]
+              if not subject:
+                  bad.append(f"{sha}: empty subject")
+              elif DEFAULT.match(subject):
+                  bad.append(f"{sha}: GitHub default subject {subject!r} — describe the change")
+              elif len(subject) > 100:
+                  bad.append(f"{sha}: subject is {len(subject)} chars (max 100): {subject!r}")
+              elif not TYPE.match(subject):
+                  bad.append(
+                      f"{sha}: {subject!r} — use `<type>(<scope>): <what>`; "
+                      f"see CONTRIBUTING.md § Commit messages"
+                  )
+
+          if bad:
+              print("::error::commit message lint failed")
+              for m in bad:
+                  print(f"  - {m}")
+              sys.exit(1)
+          print(f"OK: {len(commits)} commit subject(s) linted")
+          PY

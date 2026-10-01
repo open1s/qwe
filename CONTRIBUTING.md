@@ -57,6 +57,23 @@ All of the above must pass before a change lands. CI runs them on Linux.
 - **GPU execution verification** (host-only, not in CI):
   `cargo run --release --manifest-path gpu-verify/Cargo.toml`.
 
+## Commit messages
+
+**One concern per commit**, with a subject that says what actually changed —
+`git log` is the archaeology, and an opaque `Update 3 files` on a formatter or
+ABI change defeats it. The `commit-lint` CI job rejects the GitHub web default
+and requires a conventional subject:
+
+```text
+feat(lang): gillespie system (exact stochastic chemical kinetics)
+fix(examples): pipeline_demo EntityDecl tag → tags
+docs(issues): review pass 41 — filed #86 #87
+```
+
+Before writing `fixed in <sha>` / `fix #N` on an issue, **re-read the issue's
+latest comment**: the still-open remainder is usually tracked there, not in the
+title (#84).
+
 ## Rules that bite
 
 - **No `unwrap()` outside tests** (clippy denies it). Use `Result`, or
