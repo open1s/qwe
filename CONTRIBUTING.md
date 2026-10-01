@@ -31,6 +31,9 @@ implementation**. If the RFC is wrong, update it deliberately.
 ## Build & test
 
 ```bash
+# One command, same list as CI — run this before every commit:
+./tools/gate.sh
+
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace

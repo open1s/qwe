@@ -291,6 +291,11 @@ cargo test --workspace
 cargo clippy --workspace --all-targets --all-features
 ```
 
+`./tools/gate.sh` runs CI's exact list in one command (fmt, clippy `-D
+warnings`, test, conformance, examples) — run it **before every commit**, plus
+`cargo run -q -p pwe-cli -- doctest` and `pwe fmt <file> --check` when those
+areas change.
+
 For relevant changes also run:
 
 ```text
