@@ -102,7 +102,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 ### Phase 4 — 普适性与生态
 - [~] 语义化模块系统；fmt/REPL/LSP；doctest
   - [x] **playground**：`pwe playground [--port P]` —— 本地浏览器编辑器 + 实时 3D 视图（`present.rs::serve_playground`；驱动线程独占 runtime，经通道接收源码，复用 `present` 的 `/view` viewer 与 `/state`）。`POST /api/source` 编译并返回诊断，成功则实时步进渲染。含 `playground_page_has_editor_and_viewer` 测试；端到端手工验证（编译样例 + `/state` 帧 + 错误诊断）。
-  - [x] **`pwe fmt`**：token-preserving 重格式化（4 空格缩进、去尾空白、折叠空行；`--check`/`-w`）。保证**语义不变**：仅改前导空白/行尾/空行，EIR 逐字节一致（测试 `format_is_idempotent`/`format_preserves_tokens`/`formatting_preserves_compiled_artifact`）。
+  - [x] **`pwe fmt`**：token-preserving 重格式化（2 空格缩进 —— 与仓库一致，`reference/tests/fmt.rs` 逐个校验已提交 `.pwe` 可过 `--check`；去尾空白、折叠空行；`--check`/`-w`）。保证**语义不变**：仅改前导空白/行尾/空行，EIR 逐字节一致（测试 `format_is_idempotent`/`format_preserves_tokens`/`formatting_preserves_compiled_artifact`）。
   - [x] **`pwe repl`**：交互式输入源码并 `:run [N]`/`:step [N]`/`:reset`/`:show`/`:clear`/`:load`/`:quit`；核心 `run_repl<R:BufRead,W:Write>` 可脚本化并单测（`repl_script_compiles_runs_and_steps`、`repl_reports_diagnostics`）。
   - [x] **doctest**：`pwe doctest [FILES...]` 编译 Markdown 中可运行的 ```` ```pwe ```` 完整程序块（以 `world` 开头；`pwe ignore` 标记示例片段跳过）；`doctest.rs` 含抽取/选择/文档回归测试（`shipped_docs_compile` 校验 README/lang-usage en+zh）。
   - [x] **LSP**：`pwe lsp`（stdio，无依赖）——全文档同步、`publishDiagnostics`（开/改/关，`lang::compile`+`diagnose`）、`textDocument/formatting`（`format_source`）；自带 JSON 解析/序列化（`json.rs`）与单测。
