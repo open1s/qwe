@@ -118,6 +118,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0089](https://github.com/open1s/qwe/issues/89) | Low | README/README-ZH counts stale at tip: badge/table/prose say 439 tests + 25 conformance, actual **450/26** (ebbee9df refreshed correctly, 84cd89bb/8388c3d7 drifted them; third #74-class occurrence, no count gate) | README.md:9/:10/:22/:186, README-ZH.md:8/:9/:210/:232 |
 | [0090](https://github.com/open1s/qwe/issues/90) | Low | required `Commit message` check RED on main tip: `8388c3d7 lang:` and `84cd89bb present:` aren't valid types; 3 tips pushed-then-force-rewritten (933b06ef ✗ → 2d02ca6a ✗ → fab7a30f ✓ → 24a3a314 ✗) in 50 min; no pre-push subject check | .github/workflows/commit-lint.yml, CONTRIBUTING § Commit messages |
 | [0091](https://github.com/open1s/qwe/issues/91) | Medium | `pwe present robot.pweb` fails at step 1376: `step_cross` writes-branch `EirInvalid(50)` — interp vs **promoted/native JIT** differ by 1 ULP (link1 state[1]: 0.6024473171726811 vs …812, bits 0x3fe…33/34); every-step cross catches it at step 79; `--no-native-jit` passes everything; run (phase ≡15 mod16) and present (phase ≡0) disagree; pre-existing ≥3805fed3 | reference/src/lang/runtime.rs:766, cli/src/main.rs CROSS_BATCH, native JIT codegen |
+| [0092](https://github.com/open1s/qwe/issues/92) | Medium | text-path `compile()` (`compile.rs:2774`) strips `import` lines and drops them un-resolved: `pwe doctest` false-fails valid std examples (same text compiles via `pwe compile`), REPL `:run` rejects any import program with bogus error 59; LSP/file paths unaffected | reference/src/lang/compile.rs:2774, cli/src/main.rs:540 (REPL), doctest |
+| [0093](https://github.com/open1s/qwe/issues/93) | Low | std doc examples that do not parse: `std/atoms/README.md` fence holds two `world` programs (error 60), `std/molecules/README.md` uses `;` after `title` at world level (error 60); doctest default set = lang-usage.md only and CI runs no doctest → std/** docs unguarded | std/*/README.md, cli cmd_doctest default set, gate.sh |
 
 ## Suggested order
 
@@ -1553,5 +1555,37 @@ Review pass 45 (user-reported bug: `pwe present robot.pweb` → `step
 7. Gates note: tip was green before this investigation (450 tests,
    26/26); my pushes this round remain issues-only. Open after pass 45:
    **#89, #90, #91**.
+
+Review pass 46 (tip unchanged at `312542e6` since pass 45; probe of
+untested surfaces — `pwe doctest`, std/** doc examples, `pwe repl`; filed
+0092 and 0093):
+
+1. **No new dev commits** — everything at tip was reviewed in passes
+   44–45; my pass-45 push's checks finished green (CI + Commit message).
+2. **`pwe doctest`** (AGENTS §15 tool CI never runs): default scan set =
+   `docs/lang-usage.md` only; 15 runnable blocks compile ✓. Explicit
+   runs: `docs/lang-usage.zh.md` 15 ✓, README/README-ZH 2 ✓, but the
+   `std/**` docs fail.
+3. **0092 (Medium) filed** — the std/README + std/elements/README
+   failures are FALSE POSITIVES: verbatim block text compiles via
+   `pwe compile` yet fails `pwe doctest`. Root cause: text-path
+   `compile()` strips `import` lines and discards the collected imports
+   (never merges modules) → every qualified std call misses the arity
+   map → misleading error 59. REPL shares the path (`cli/main.rs:540`):
+   a valid `import "std/thermal"` + `thermal.celsius` program is
+   rejected identically. LSP unaffected (`load_program_sources_with_root`).
+   Minimal probes (single/multi-import, both orders, Fe/periodic/
+   thermal/forces) all compile via the file path.
+4. **0093 (Low) filed** — two REAL parse failures survive in std docs:
+   atoms README packs two `world` programs into one fence; molecules
+   README uses `;` after `title` at world level. Both repro under the
+   file path (error 60). Plus the coverage gap: doctest default set
+   covers 1 of ~10 doc files with pwe blocks, CI runs no doctest, and
+   even the `shipped_docs_compile` unit test omits `std/**`.
+5. Also probed `pwe repl` (parse errors with line:col, `:help`,
+   unknown-command handling — healthy apart from 0092) and checked
+   `issues/**` fenced repros are intentionally-failing (must be
+   excluded from any doctest glob).
+6. Open after pass 46: **#89, #90, #91, #92, #93**.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
