@@ -1943,8 +1943,9 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let mut inner = item.into_inner();
                             let name = next_pair(&mut inner)?.as_str().to_string();
                             let mut decl = EntityDecl::named(&name);
+                            let mut seen_fields = Vec::new();
                             for field in inner {
-                                apply_entity_field(field, &mut decl, &structs)?;
+                                apply_entity_field(field, &mut decl, &structs, &mut seen_fields)?;
                             }
                             model.entities.push(decl);
                         }
@@ -2010,8 +2011,9 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 .map(|n| n.as_str().parse::<u32>().unwrap_or(0))
                                 .unwrap_or(0);
                             let mut decl = EntityDecl::named(&name);
+                            let mut seen_fields = Vec::new();
                             for field in inner {
-                                apply_entity_field(field, &mut decl, &structs)?;
+                                apply_entity_field(field, &mut decl, &structs, &mut seen_fields)?;
                             }
                             model.pools.push(crate::dsl::PoolDecl { name, count, decl });
                         }

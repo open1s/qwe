@@ -361,7 +361,9 @@ entity ball { position = (0, 5, 0) sphere = 0.3; color = 0xFF6B4A; opacity = 1.0
 ```
 
 * `color = 0xRRGGBB`（恰好 6 位十六进制）、`opacity` `[0,1]`、`glow`（自发光）、`label = false` 隐藏名称、
-  `size = v | (dx,dy,dz)` 设定标记/盒尺寸。
+  `size = v | (dx,dy,dz)` 设定标记/盒尺寸。这些都会校验：`opacity` 超出 `[0,1]` 报 detail 105，
+  颜色格式错误报 64；同一个 `entity` / `pool` 体内每个字段**最多出现一次**（重复报 107 ——
+  `tag` 例外，可累加 —— 且每个实体最多一个碰撞体 `box` / `sphere` / `hull`）。
 * `shape = point | sphere | box | capsule | <自定义>` 覆盖碰撞体形状。
 * **自定义形状**可组合基本体、`hull`/`poly` 多面体、SVG，乃至彼此：
 
@@ -833,9 +835,9 @@ error 48: system 'update' is missing required parameter 'dt'
 | 101 | 模块名重复（两个模块声明了相同的 `module`）。 |
 | 102 | 引用了模块未导出的成员。 |
 | 103 | 字段名不是小写标识符。 |
-| 105 | 部件 `opacity` 超出 `0..1`。 |
+| 105 | `opacity` 超出 `0..1`（部件级或 entity 级）。 |
 | 106 | `gillespie` 一步超出反应预算（`events`）—— 调大 `events` 或调小 `dt`。 |
-| 107 | 选项重复：部件 / `bond` / `bonds` 的每个选项最多只能出现一次。 |
+| 107 | 重复的选项或字段：部件 / `bond` / `bonds` 的每个选项，以及 `entity` / `pool` 体内除 `tag` 外的每个字段，最多只能出现一次。 |
 | 108 | `bond` / `bonds` 选项未知或非法（键拼错、数值不合法、缺 `tag`/`within`、范围颠倒）。 |
 
 **调试流程**：缩减到一个实体 + 一个系统；核对模型（§0.6）；核对积分/赋值陷阱；加

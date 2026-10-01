@@ -3746,6 +3746,49 @@ fn malformed_part_color_is_rejected() {
     }
 }
 
+/// #88: the *entity-level* `opacity` and repeated entity fields are validated
+/// the same way the per-part options are (#81) — no silent last-write-wins.
+#[test]
+fn entity_opacity_range_and_duplicate_fields_are_rejected() {
+    clear_diagnostics();
+    let src = "world { gravity=(0,0,0) entity a { state=(x=0.0) color=0xFF0000; opacity = 2.5 } }";
+    let err = LangRuntime::compile(src)
+        .err()
+        .expect("`opacity = 2.5` must be rejected");
+    assert_eq!(err.detail, 105);
+    let text = diagnose(src, &err);
+    assert!(
+        text.contains("opacity 2.5"),
+        "message names the value: {text}"
+    );
+    assert!(text.contains('^'), "diagnostic carries a caret: {text}");
+
+    let cases: [(&str, u32); 6] = [
+        ("opacity = -0.5", 105),
+        // A repeat would silently keep the last write.
+        ("opacity = 0.5; opacity = 0.9", 107),
+        ("color = 0xFF0000; color = 0x00FF00", 107),
+        ("position = (0,0,0); position = (1,1,1)", 107),
+        ("state = (x=0.0); state = (y=1.0)", 107),
+        // `box`/`sphere`/`hull` share the one collider slot.
+        ("sphere = 0.3; box = (1,1,1)", 107),
+    ];
+    for (bad, detail) in cases {
+        let src = format!("world {{ gravity=(0,0,0) entity a {{ {bad} }} }}");
+        let err = LangRuntime::compile(&src)
+            .err()
+            .unwrap_or_else(|| panic!("`{bad}` must be rejected"));
+        assert_eq!(err.detail, detail, "detail for `{bad}`");
+    }
+
+    // Legal forms keep compiling: `tag` accumulates (multi-tag), values stay
+    // in range, and a `pool` body runs the same field rules.
+    let ok = "world { gravity=(0,0,0) \
+               entity a { state=(x=0.0) tag=a, b; tag=c; opacity = 1.0; glow = 0.3 } \
+               pool p[4] { state=(x=0.0); opacity = 0.25 } }";
+    LangRuntime::compile(ok).expect("in-range values and accumulating `tag` stay valid");
+}
+
 /// #85: `bond` rejects an inverted or negative range and any repeated option.
 #[test]
 fn bond_opts_are_validated() {

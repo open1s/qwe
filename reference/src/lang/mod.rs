@@ -278,12 +278,53 @@ fn expand_state_item(
     Ok(())
 }
 
+/// Apply one `entity_field` to its declaration.
+///
+/// `seen` accumulates the field rules already applied to *this* entity, so a
+/// repeated single-valued field reports detail 107 instead of silently keeping
+/// the last write (`tag` is exempt: it accumulates by design). Every rule is
+/// single-valued here except `tag_field`; `box`/`sphere`/`hull` additionally
+/// share the one `collider` slot.
 fn apply_entity_field(
     field: pest::iterators::Pair<'_, Rule>,
     decl: &mut EntityDecl,
     structs: &std::collections::BTreeMap<String, crate::dsl::StructDef>,
+    seen: &mut Vec<Rule>,
 ) -> Result<()> {
-    match field.as_rule() {
+    let rule = field.as_rule();
+    let start = field.as_span().start();
+    // `position=(0,0,0)` → `position`, for the diagnostic text.
+    let name = field
+        .as_str()
+        .split(|c: char| c == '=' || c.is_whitespace() || c == '(')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    if rule != Rule::tag_field {
+        if seen.contains(&rule) {
+            return Err(error_at(
+                Status::Invalid,
+                107,
+                start,
+                format!("duplicate `{name}` entity field (each field may appear at most once)"),
+            ));
+        }
+        let collider_field =
+            rule == Rule::box_field || rule == Rule::sphere_field || rule == Rule::hull_field;
+        if collider_field && decl.collider.is_some() {
+            return Err(error_at(
+                Status::Invalid,
+                107,
+                start,
+                format!(
+                    "duplicate collider `{name}` (an entity may declare only one \
+                     of box / sphere / hull)"
+                ),
+            ));
+        }
+        seen.push(rule);
+    }
+    match rule {
         Rule::position_field => {
             decl.position = Some(parse_vec3(next_pair(&mut field.into_inner())?))
         }
@@ -381,6 +422,17 @@ fn apply_entity_field(
         }
         Rule::opacity_field => {
             let v = parse_value(next_pair(&mut field.into_inner())?);
+            // Documented `opacity` is `[0,1]` (docs §L9) and the viewer feeds
+            // it straight into blending, so out-of-range is detail 105 — the
+            // same code the per-part path reports.
+            if !(0.0..=1.0).contains(&v) {
+                return Err(error_at(
+                    Status::Invalid,
+                    105,
+                    start,
+                    format!("entity opacity {v} is outside 0..1"),
+                ));
+            }
             decl.render.get_or_insert_with(Default::default).opacity = Some(v);
         }
         Rule::glow_field => {

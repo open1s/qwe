@@ -381,7 +381,10 @@ entity ball { position = (0, 5, 0) sphere = 0.3; color = 0xFF6B4A; opacity = 1.0
 ```
 
 * `color = 0xRRGGBB` (exactly 6 hex digits), `opacity` `[0,1]`, `glow` (emissive), `label = false` hides
-  the name, `size = v | (dx,dy,dz)` sets marker/box size.
+  the name, `size = v | (dx,dy,dz)` sets marker/box size. These are checked:
+  an `opacity` outside `[0,1]` is detail 105, a malformed colour detail 64, and every field of one
+  `entity` / `pool` body may appear **at most once** (a repeat is detail 107 — `tag` is the
+  exception, it accumulates — and an entity has at most one collider, `box` / `sphere` / `hull`).
 * `shape = point | sphere | box | capsule | <custom>` overrides the collider shape.
 * **Custom shapes** compose primitives, `hull`/`poly` polyhedra, SVG, and each
   other:
@@ -931,9 +934,9 @@ error 48: system 'update' is missing required parameter 'dt'
 | 101 | Duplicate module name (two modules declare the same `module`). |
 | 102 | Reference to a non-exported module item. |
 | 103 | A field name is not a lowercase identifier. |
-| 105 | A per-part `opacity` outside `0..1`. |
+| 105 | An `opacity` outside `0..1` (per-part or entity-level). |
 | 106 | A `gillespie` step exceeded its reaction budget (`events`) — raise `events` or lower `dt`. |
-| 107 | A duplicate option: each option of a part, `bond` or `bonds` may appear at most once. |
+| 107 | A duplicate option or field: each option of a part, `bond` or `bonds`, and each non-`tag` field of an `entity` / `pool` body, may appear at most once. |
 | 108 | An unknown or invalid `bond` / `bonds` option (bad key, non-numeric value, missing `tag`/`within`, inverted range). |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
