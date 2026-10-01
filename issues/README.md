@@ -114,6 +114,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0085](https://github.com/open1s/qwe/issues/85) | Low | bond `min`/`max` (09340d5c) unvalidated: inverted range (`min=5 max=1` → bond never drawn), negative min, duplicate opts all compile rc 0 — same class as 0081's opacity gaps | lang.pest:68-69 `bond_min`/`bond_max`, dsl.rs BondDecl, tests.rs |
 | [0086](https://github.com/open1s/qwe/issues/86) | Medium | `c665a0db` fails the CI gate (E0063 `pipeline_demo` missing `EntityDecl.tag` ×2 + clippy parens under `-D`): main/CI red ~12 min until `78e157ff`; gate-discipline recurrence noted at #78's close | .github/workflows/ci.yml, reference/examples/pipeline_demo.rs, dsl.rs EntityDecl |
 | [0087](https://github.com/open1s/qwe/issues/87) | Low | `bonds {}` swallows typos: unknown key/`within=junk` → `max=∞` default (live probe: `withn` typo bonds atoms 5 apart), missing tag/inverted range silent, undocumented `max` alias, docs show `within` required; + reaction.pwe header still describes removed per-pair `max` mechanism | lang/parser.rs `Rule::bonds_stmt`, cli/examples/reaction.pwe:6-8 |
+| [0088](https://github.com/open1s/qwe/issues/88) | Low | entity-level `opacity_field` still raw after #81's fix: docs promise `[0,1]` (lang-usage:383) but `opacity = 2.5` and duplicates compile rc 0 (functional path — laser.pwe uses entity-level opacity, `/state` carries it); part-level got 105/107 in e1534259 | lang/parser.rs `opacity_field` (:142), entity_field (:153) |
 
 ## Suggested order
 
@@ -1388,5 +1389,65 @@ clippy hotfix; filed 0086/0087, commented 0075):
    (reaction 1-4, laser decls-before-pool) but couples the net to id
    assignment; worth an assert if pools/entities ever interleave.
 8. 0074/0080/0081/0084/0085 untouched — stay open as noted.
+
+Review pass 42 (17 commits `f6bfced1`…`3805fed3`, the fix batch for
+0074/0075/0080/0081/0084/0085/0086/0087 plus six features; closed
+0074/0075/0080/0081/0084/0085/0087, commented 0086, filed 0088):
+
+1. Gates green at tip `3805fed3`: fmt, clippy, **438 tests** (+21 from
+   417), conformance **25/25**, release build; `tools/gate.sh` (new)
+   itself exits `gate: OK` running the 5 CI commands.
+2. **Fix verification (all probed, all previously-rc-0/absent):**
+   - 0075 → `fdcf4bec`: `spin 2.0` **and** `spin = 2.0` both rc 0
+     (`"spin" ~ "="? ~ value`), comment at lang.pest:134 corrected,
+     docs 661-662 document both spellings.
+   - 0074 → `fd0dc359`: README + README-ZH both **438** (badge, line
+     comment, totals), matching actual TOTAL 438; no 399/415 anywhere.
+   - 0080 → `71730a1a`: roadmap:105 "2 空格缩进" + fmt.rs pointer; no
+     4-space claims left.
+   - 0081 → `e1534259` (exact body probes): `opacity=2`/`-1` →
+     **error 105** naming the value with `--> line:col` caret; dup →
+     **107**; docs table rows 105/107/108 in EN+ZH; +119 lines tests.
+   - 0085 → same commit: `min=5 max=1` → 108 inverted, `min=-2` → 108
+     "≥ 0", dup `min` → 107.
+   - 0087 → same commit: `withn` → 108 unknown-key (expected-list),
+     `within=junk` → 108 finite, missing/empty tag → 108, inverted →
+     108, **`max` alias dropped** (now rejected; docs match), and
+     reaction.pwe header rewritten to the bond-net mechanism.
+   - 0084 → `3805fed3`: `commit-lint.yml` on push rejects `Update N
+     files` (cites #84 in the workflow comment), >100-char and
+     non-conventional subjects; CONTRIBUTING § Commit messages.
+   - 0086 → `4b03847e` adds `tools/gate.sh` — but issue **stays open**:
+     two red-main windows landed *after* it was filed (evidence in the
+     new comment): `8f9839e4` CI failure = `scratch_dimers_probe ...
+     FAILED` (leftover absolute-path debug test, red ~19 min until
+     1f80f98b) and `dd98ff39` CI failure = **E0560 pipeline_demo
+     `EntityDecl has no field named tag`** (red ~30 min until
+     2be17fd1) — the identical struct-rename breakage #86 documents.
+     Comment adds: run gate.sh before push, make CI a required check,
+     grep for struct initializers on field renames.
+3. **0088 (Low) filed** — residual of 0081's fix: entity-level
+   `opacity_field` (lang.pest:142, entity_field:153) is still raw —
+   `opacity = 2.5` and duplicates compile rc 0 while docs:383 promise
+   `[0,1]`; the field is functional (laser.pwe entity-level 0.22 shows
+   in `/state`), so same garbage-blender path #81 covered for parts.
+   (Title initially written as "89" by mistake; renumbered to the
+   assigned #88.)
+4. Feature batch reviewed at tip: `pair` general pairwise forces +
+   cross-group/drift/damping (`02f3395c`), bond-angle gate on the net
+   (`6b3b0bfa`), coordination number `n`/`rmin`/`rminj` with `coord` +
+   `cohort` (`2585b3da`/`736b8785`/`8f9839e4`), multi-tag entities
+   `tags: Vec<String>` (`dd98ff39`, docs updated), `gillespie` exact
+   stochastic kinetics (`8decf5fe`, L11 docs section). Four new
+   examples `kinetics/md/dimers/reaction_md.pwe` all compile and run
+   200 steps rc 0 with plausible states (md/dimers show velocity
+   integration; kinetics shows stoichiometric state transitions).
+   Messages spot-checked against diffs — accurate this batch.
+5. Note: commit subjects in the feature batch all use the conventional
+   form (lint added only at the very end); CI history now shows 2
+   failures + 1 (c665a0db, pass 41) = **three red pushes in one day**,
+   all the same class.
+6. Open after pass 42: **#86** (gate discipline — evidence comment),
+   **#88** (entity-level opacity).
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
