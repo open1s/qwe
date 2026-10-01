@@ -137,7 +137,7 @@ part_opacity_opt = { "opacity" ~ "=" ~ value }
 orbit_opt = { "orbit" ~ vec3 }
 axis_opt = { "axis" ~ vec3 }
 spin_opt = { "spin" ~ "="? ~ value }
-shape_kind = @{ "point" | "sphere" | "box" | "capsule" | "svg" | "hull" | "poly" | "ring" }
+shape_kind = @{ "point" | "sphere" | "box" | "capsule" | "svg" | "hull" | "poly" | "ring" | "cylinder" | "cone" | "plane" }
 size_field = { "size" ~ "=" ~ (vec3 | value) ~ ";"? }
 opacity_field = { "opacity" ~ "=" ~ value ~ ";"? }
 // Orientation from state slots 7/8/9 (euler pitch, yaw, roll) for state bodies.

@@ -1,13 +1,15 @@
 //! Presentation layer: turn a running simulation's `Scene` into 3D web frames.
 //!
 //! [`snapshot`] captures the world state (entity transforms + collider shapes +
-//! state slots + channels + camera) into a [`PresentationFrame`]; [`to_json`]
-//! serializes frames, and [`write_viewer`] emits a self-contained HTML file with
-//! a Three.js 3D viewport that plays them back in a browser.
+//! state slots + channels + camera) into a [`PresentationFrame`];
+//! [`frame_to_json`] serializes frames, and [`write_viewer`] emits one
+//! self-contained HTML file — three.js vendored into the source tree and
+//! embedded inline — that plays them back offline; double-click the file, no
+//! server or network needed. [`serve_live`] runs the same viewport against a
+//! live runtime over HTTP.
 //!
-//! The viewer is generated output (a single `.html`), not a build dependency —
-//! Three.js is loaded from a CDN at runtime. This makes a running simulation
-//! visibly observable, including a micro/macro world at any scale.
+//! The viewer is generated output, not a build dependency. This makes a running
+//! simulation visibly observable, including a micro/macro world at any scale.
 
 use crate::math::{Quat, Vec3};
 use crate::scene::Scene;
@@ -38,6 +40,22 @@ pub enum Shape {
     Ring {
         radius: f64,
         tube: f64,
+    },
+    /// A cylinder along the local Y axis: pillars, columns, rollers.
+    Cylinder {
+        radius: f64,
+        height: f64,
+    },
+    /// A cone along the local Y axis: tips, spikes, funnels.
+    Cone {
+        radius: f64,
+        height: f64,
+    },
+    /// A flat rectangle in the local XY plane (no thickness; double-sided in
+    /// the viewer): panels, screens, ground quads.
+    Plane {
+        width: f64,
+        height: f64,
     },
     /// An SVG path (`d`) extruded along Z into a 3D solid, then scaled.
     Svg {
@@ -128,6 +146,32 @@ pub struct EntityVisual {
     pub label: bool,
     /// When true, suppress the velocity arrow / orbit ring for this entity.
     pub no_velocity: bool,
+    /// Optional material overrides sent to the viewer as the `vis` JSON block.
+    /// Presentation-only; omitted entirely when unset, so older viewers and
+    /// exact-JSON expectations keep working (backwards compatible).
+    pub style: Option<VisualStyle>,
+}
+
+/// Per-entity material overrides for the viewer (the optional `vis` block).
+/// Purely presentational — never affects simulation state.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct VisualStyle {
+    /// Metalness in `[0, 1]` (default 0.1 in the viewer).
+    pub metalness: Option<f64>,
+    /// Roughness in `[0, 1]` (default 0.55 in the viewer).
+    pub roughness: Option<f64>,
+    /// Emissive color `0xRRGGBB`; defaults to the entity color.
+    pub emissive: Option<u32>,
+    /// Emissive intensity; defaults to the entity `glow`.
+    pub emissive_intensity: Option<f64>,
+    /// Draw the geometry as wireframe.
+    pub wireframe: Option<bool>,
+    /// Flat shading (faceted look) instead of smooth normals.
+    pub flat: Option<bool>,
+    /// Render both faces (for open surfaces such as `plane`).
+    pub double_sided: Option<bool>,
+    /// `false` opts this entity's meshes out of shadow casting.
+    pub cast_shadow: Option<bool>,
 }
 
 impl EntityVisual {
@@ -222,7 +266,6 @@ fn shape_of(collider: &crate::components::Collider) -> Shape {
     }
 }
 
-/// Captures the current `Scene` into a presentation frame.
 /// Captures the current `Scene` into a presentation frame. Entities whose ids
 /// are in `channels` are reported as channel values; everything else is a
 /// visible body (position from `Transform`, or from `state[0..2]` for
@@ -306,6 +349,7 @@ pub fn snapshot_with(
             glow: 0.8,
             label: true,
             no_velocity: false,
+            style: None,
         };
         // Presentation-only overrides declared in the language.
         if let Some(r) = &e.render {
@@ -357,6 +401,18 @@ pub fn snapshot_with(
                                 8 => Shape::Ring {
                                     radius: p.a * sc,
                                     tube: p.b * sc,
+                                },
+                                9 => Shape::Cylinder {
+                                    radius: p.a * sc,
+                                    height: (if p.b > 0.0 { p.b } else { p.a }) * sc,
+                                },
+                                10 => Shape::Cone {
+                                    radius: p.a * sc,
+                                    height: (if p.b > 0.0 { p.b } else { p.a }) * sc,
+                                },
+                                11 => Shape::Plane {
+                                    width: p.a * sc,
+                                    height: (if p.b > 0.0 { p.b } else { p.a }) * sc,
                                 },
                                 _ => Shape::Point,
                             };
@@ -484,6 +540,37 @@ fn fmt_f64(v: f64) -> String {
     }
 }
 
+/// The optional `vis` material block: only the set fields are emitted, so the
+/// viewer falls back to its defaults for everything else.
+fn style_json(st: &VisualStyle) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(v) = st.metalness {
+        parts.push(format!("\"metalness\":{}", fmt_f64(v)));
+    }
+    if let Some(v) = st.roughness {
+        parts.push(format!("\"roughness\":{}", fmt_f64(v)));
+    }
+    if let Some(v) = st.emissive {
+        parts.push(format!("\"emissive\":{}", v & 0xFF_FFFF));
+    }
+    if let Some(v) = st.emissive_intensity {
+        parts.push(format!("\"emissiveIntensity\":{}", fmt_f64(v)));
+    }
+    if let Some(v) = st.wireframe {
+        parts.push(format!("\"wireframe\":{v}"));
+    }
+    if let Some(v) = st.flat {
+        parts.push(format!("\"flat\":{v}"));
+    }
+    if let Some(v) = st.double_sided {
+        parts.push(format!("\"doubleSided\":{v}"));
+    }
+    if let Some(v) = st.cast_shadow {
+        parts.push(format!("\"castShadow\":{v}"));
+    }
+    format!("{{{}}}", parts.join(","))
+}
+
 fn vec3_json(v: Vec3) -> String {
     format!("[{},{},{}]", fmt_f64(v.x), fmt_f64(v.y), fmt_f64(v.z))
 }
@@ -498,6 +585,51 @@ fn quat_json(q: Quat) -> String {
     )
 }
 
+/// Escapes `s` as a JSON string body (no surrounding quotes).
+///
+/// Beyond the JSON minimum (backslash, quote, control characters), the angle
+/// brackets and the U+2028/U+2029 line separators are escaped as well: frames
+/// are embedded in a `<script>` element of the generated viewer, so a
+/// `</script>` inside a name, SVG path or field name must never close that
+/// element, and a line separator must not split the script source.
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Serializes a float slice as a JSON array string (`[1,2,3]`); non-finite
+/// values become `0`, matching [`fmt_f64`].
+fn f64_list_json(vs: &[f64]) -> String {
+    let mut out = String::from("[");
+    for (i, v) in vs.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&fmt_f64(*v));
+    }
+    out.push(']');
+    out
+}
+
 /// Serializes one frame to a JSON object string (no external serde).
 pub fn frame_to_json(frame: &PresentationFrame) -> String {
     let mut out = String::new();
@@ -507,9 +639,9 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
             out.push(',');
         }
         out.push_str(&format!(
-            "{{\"id\":{},\"name\":\"{}\",\"pos\":{},\"rot\":{},\"color\":{},\"opacity\":{},\"glow\":{},\"label\":{},\"vec\":{},\"kind\":",
+            "{{\"id\":{},\"name\":\"{}\",\"pos\":{},\"rot\":{},\"color\":{},\"opacity\":{},\"glow\":{},\"label\":{},\"vec\":{}",
             e.id,
-            e.name.replace('\\', "\\\\").replace('"', "\\\""),
+            json_str(&e.name),
             vec3_json(e.position),
             quat_json(e.rotation),
             e.color_value(),
@@ -518,6 +650,11 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
             e.label,
             !e.no_velocity
         ));
+        if let Some(st) = &e.style {
+            out.push_str(",\"vis\":");
+            out.push_str(&style_json(st));
+        }
+        out.push_str(",\"kind\":");
         match &e.shape {
             Shape::Box { dims } => {
                 out.push_str(&format!("\"box\",\"dims\":{}}}", vec3_json(*dims)));
@@ -540,7 +677,7 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
             Shape::Svg { path, depth, scale } => {
                 out.push_str(&format!(
                     "\"svg\",\"d\":\"{}\",\"depth\":{},\"scale\":{}}}",
-                    path.replace('\\', "\\\\").replace('"', "\\\""),
+                    json_str(path),
                     fmt_f64(*depth),
                     fmt_f64(*scale)
                 ));
@@ -550,6 +687,27 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
                     "\"ring\",\"a\":{},\"b\":{}}}",
                     fmt_f64(*radius),
                     fmt_f64(*tube)
+                ));
+            }
+            Shape::Cylinder { radius, height } => {
+                out.push_str(&format!(
+                    "\"cylinder\",\"radius\":{},\"height\":{}}}",
+                    fmt_f64(*radius),
+                    fmt_f64(*height)
+                ));
+            }
+            Shape::Cone { radius, height } => {
+                out.push_str(&format!(
+                    "\"cone\",\"radius\":{},\"height\":{}}}",
+                    fmt_f64(*radius),
+                    fmt_f64(*height)
+                ));
+            }
+            Shape::Plane { width, height } => {
+                out.push_str(&format!(
+                    "\"plane\",\"w\":{},\"h\":{}}}",
+                    fmt_f64(*width),
+                    fmt_f64(*height)
                 ));
             }
             Shape::Group(parts) => {
@@ -589,7 +747,7 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
                             let _ = write!(
                                 out,
                                 ",\"k\":4,\"d\":\"{}\",\"depth\":{},\"scale\":{}",
-                                path.replace('\\', "\\\\").replace('"', "\\\""),
+                                json_str(path),
                                 fmt_f64(*depth),
                                 fmt_f64(*scale)
                             );
@@ -636,6 +794,30 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
                                 fmt_f64(*tube)
                             );
                         }
+                        Shape::Cylinder { radius, height } => {
+                            let _ = write!(
+                                out,
+                                ",\"k\":9,\"a\":{},\"b\":{}",
+                                fmt_f64(*radius),
+                                fmt_f64(*height)
+                            );
+                        }
+                        Shape::Cone { radius, height } => {
+                            let _ = write!(
+                                out,
+                                ",\"k\":10,\"a\":{},\"b\":{}",
+                                fmt_f64(*radius),
+                                fmt_f64(*height)
+                            );
+                        }
+                        Shape::Plane { width, height } => {
+                            let _ = write!(
+                                out,
+                                ",\"k\":11,\"a\":{},\"b\":{}",
+                                fmt_f64(*width),
+                                fmt_f64(*height)
+                            );
+                        }
                         _ => out.push_str(",\"k\":0"),
                     }
                     if let Some(c) = part.color {
@@ -660,14 +842,9 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
                     out.push('}');
                 }
                 out.push(']');
-                out.push_str(",\"state\":[");
-                for (j, s) in e.state.iter().enumerate() {
-                    if j > 0 {
-                        out.push(',');
-                    }
-                    out.push_str(&fmt_f64(*s));
-                }
-                out.push_str("]}");
+                out.push_str(",\"state\":");
+                out.push_str(&f64_list_json(&e.state));
+                out.push('}');
             }
             Shape::Poly { points, faces } => {
                 out.push_str("\"poly\",\"pts\":[");
@@ -702,26 +879,16 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
                     out.push_str(&vec3_json(*p));
                 }
                 out.push(']');
-                out.push_str(",\"state\":[");
-                for (j, s) in e.state.iter().enumerate() {
-                    if j > 0 {
-                        out.push(',');
-                    }
-                    out.push_str(&fmt_f64(*s));
-                }
-                out.push_str("]}");
+                out.push_str(",\"state\":");
+                out.push_str(&f64_list_json(&e.state));
+                out.push('}');
             }
             Shape::Point => {
                 out.push_str("\"point\",\"size\":");
                 out.push_str(&fmt_f64(e.size));
-                out.push_str(",\"state\":[");
-                for (j, s) in e.state.iter().enumerate() {
-                    if j > 0 {
-                        out.push(',');
-                    }
-                    out.push_str(&fmt_f64(*s));
-                }
-                out.push_str("]}");
+                out.push_str(",\"state\":");
+                out.push_str(&f64_list_json(&e.state));
+                out.push('}');
             }
         }
     }
@@ -754,21 +921,16 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
         }
         let _ = write!(
             out,
-            "{{\"name\":\"{}\",\"width\":{},\"height\":{},\"depth\":{},\"dx\":{},\"stride\":{},\"cells\":[",
-            f.name.replace('\\', "\\\\").replace('"', "\\\""),
+            "{{\"name\":\"{}\",\"width\":{},\"height\":{},\"depth\":{},\"dx\":{},\"stride\":{},\"cells\":{}",
+            json_str(&f.name),
             f.width,
             f.height,
             f.depth,
             fmt_f64(f.dx),
-            f.stride
+            f.stride,
+            f64_list_json(&f.cells)
         );
-        for (j, c) in f.cells.iter().enumerate() {
-            if j > 0 {
-                out.push(',');
-            }
-            out.push_str(&fmt_f64(*c));
-        }
-        out.push_str("]}");
+        out.push('}');
     }
     out.push_str("],\"bonds\":[");
     for (i, bd) in frame.bonds.iter().enumerate() {
@@ -795,8 +957,10 @@ pub fn frame_to_json(frame: &PresentationFrame) -> String {
     out
 }
 
-/// Writes a self-contained 3D web viewport over `frames` to `path`. Open the
-/// generated `.html` in a browser to watch the simulation play back.
+/// Writes a single self-contained 3D web viewport over `frames` to `path`:
+/// three.js is embedded in the file itself (see [`vendor_json`]), so the
+/// generated `.html` runs offline — open it directly from disk (`file://`),
+/// no server and no network needed.
 pub fn write_viewer(path: &str, frames: &[PresentationFrame]) -> std::io::Result<()> {
     let mut json = String::from("[");
     for (i, f) in frames.iter().enumerate() {
@@ -809,7 +973,116 @@ pub fn write_viewer(path: &str, frames: &[PresentationFrame]) -> std::io::Result
     std::fs::write(path, template(&json))
 }
 
+/// The vendored three.js modules as one JSON object, keyed by the bare
+/// specifier the viewer imports them under (`three`, `three/addons/…`).
+/// `ConvexGeometry`'s relative import of `ConvexHull` is rewritten to its bare
+/// specifier: the bootstrap loads modules from blob URLs, which cannot resolve
+/// relative paths. Keys are emitted in dependency order (an importee before
+/// its importer) because the bootstrap resolves specifiers as it goes.
+/// [`json_str`] keeps the payload inert inside the embedding
+/// `<script type="application/json">` element.
+fn vendor_json() -> String {
+    let convex = include_str!("../vendor/three/addons/geometries/ConvexGeometry.js").replace(
+        "'../math/ConvexHull.js'",
+        "'three/addons/math/ConvexHull.js'",
+    );
+    // The postprocessing graph imports siblings (`./Pass.js`) and shaders
+    // (`../shaders/CopyShader.js`) relatively; blob URLs cannot resolve
+    // relative specifiers, so rewrite them to bare `three/addons/...` keys the
+    // bootstrap resolves. The live viewer serves the same files over HTTP,
+    // where relative imports resolve naturally (see `vendor_file`).
+    let rw = |src: &str| {
+        src.replace("'./", "'three/addons/postprocessing/")
+            .replace("'../shaders/", "'three/addons/shaders/")
+    };
+    // Emitted importee-first: a module may only be embedded after every
+    // module it imports, because the bootstrap resolves specifiers against
+    // the URLs built so far.
+    let entries: [(&str, String); 15] = [
+        (
+            "three",
+            include_str!("../vendor/three/three.module.js").to_string(),
+        ),
+        (
+            "three/addons/math/ConvexHull.js",
+            include_str!("../vendor/three/addons/math/ConvexHull.js").to_string(),
+        ),
+        ("three/addons/geometries/ConvexGeometry.js", convex),
+        (
+            "three/addons/controls/OrbitControls.js",
+            include_str!("../vendor/three/addons/controls/OrbitControls.js").to_string(),
+        ),
+        (
+            "three/addons/loaders/SVGLoader.js",
+            include_str!("../vendor/three/addons/loaders/SVGLoader.js").to_string(),
+        ),
+        (
+            "three/addons/objects/MarchingCubes.js",
+            include_str!("../vendor/three/addons/objects/MarchingCubes.js").to_string(),
+        ),
+        (
+            "three/addons/renderers/CSS2DRenderer.js",
+            include_str!("../vendor/three/addons/renderers/CSS2DRenderer.js").to_string(),
+        ),
+        (
+            "three/addons/postprocessing/Pass.js",
+            rw(include_str!(
+                "../vendor/three/addons/postprocessing/Pass.js"
+            )),
+        ),
+        (
+            "three/addons/shaders/CopyShader.js",
+            rw(include_str!("../vendor/three/addons/shaders/CopyShader.js")),
+        ),
+        (
+            "three/addons/shaders/LuminosityHighPassShader.js",
+            rw(include_str!(
+                "../vendor/three/addons/shaders/LuminosityHighPassShader.js"
+            )),
+        ),
+        (
+            "three/addons/postprocessing/MaskPass.js",
+            rw(include_str!(
+                "../vendor/three/addons/postprocessing/MaskPass.js"
+            )),
+        ),
+        (
+            "three/addons/postprocessing/ShaderPass.js",
+            rw(include_str!(
+                "../vendor/three/addons/postprocessing/ShaderPass.js"
+            )),
+        ),
+        (
+            "three/addons/postprocessing/RenderPass.js",
+            rw(include_str!(
+                "../vendor/three/addons/postprocessing/RenderPass.js"
+            )),
+        ),
+        (
+            "three/addons/postprocessing/EffectComposer.js",
+            rw(include_str!(
+                "../vendor/three/addons/postprocessing/EffectComposer.js"
+            )),
+        ),
+        (
+            "three/addons/postprocessing/UnrealBloomPass.js",
+            rw(include_str!(
+                "../vendor/three/addons/postprocessing/UnrealBloomPass.js"
+            )),
+        ),
+    ];
+    let mut out = String::new();
+    for (i, (key, src)) in entries.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let _ = write!(out, "\"{key}\":\"{}\"", json_str(src));
+    }
+    format!("{{{out}}}")
+}
+
 fn template(frames_json: &str) -> String {
+    let vendor = vendor_json();
     format!(
         r#"<!doctype html>
 <html>
@@ -832,35 +1105,86 @@ input[type=range]{{flex:1}}label{{color:#89b4fa}}
   <label>frame <span id="frame">0</span>/<span id="maxf">0</span></label>
   <button id="lbl" title="show / hide all labels">🏷 Labels</button>
 </div>
-<script type="importmap">{{
-  "imports": {{
-    "three": "/vendor/three/three.module.js",
-    "three/addons/": "/vendor/three/addons/"
+<script type="application/json" id="pwe-vendor">{vendor}</script>
+<script>
+// Single-file mode: turn the embedded vendored three.js sources into
+// same-origin blob module URLs, rewriting each module's import specifiers to
+// the URLs already built. No import map, no server, no network — the page
+// runs from file:// as well. Order matters: a module may only be resolved
+// after the modules it imports (see `vendor_json`), which is why keys are
+// emitted importee-first.
+window.__pweVendor = (function(){{
+  const srcs = JSON.parse(document.getElementById('pwe-vendor').textContent);
+  const urls = {{}};
+  for (const k of Object.keys(srcs)) {{
+    const src = srcs[k].replace(/from '(three[^']*)'/g, function(m, spec){{
+      return urls[spec] ? "from '" + urls[spec] + "'" : m;
+    }});
+    urls[k] = URL.createObjectURL(new Blob([src], {{type:'text/javascript'}}));
   }}
-}}</script>
+  return urls;
+}})();
+</script>
 <script type="module">
-import * as THREE from 'three';
-import {{ OrbitControls }} from 'three/addons/controls/OrbitControls.js';
-import {{ ConvexGeometry }} from 'three/addons/geometries/ConvexGeometry.js';
-import {{ SVGLoader }} from 'three/addons/loaders/SVGLoader.js';
-import {{ MarchingCubes }} from 'three/addons/objects/MarchingCubes.js';
-import {{ CSS2DRenderer, CSS2DObject }} from 'three/addons/renderers/CSS2DRenderer.js';
+const V = window.__pweVendor;
+const [T, OC, CG, SL, MC, C2D, EC, RP, UBP] = await Promise.all([
+  import(V['three']),
+  import(V['three/addons/controls/OrbitControls.js']),
+  import(V['three/addons/geometries/ConvexGeometry.js']),
+  import(V['three/addons/loaders/SVGLoader.js']),
+  import(V['three/addons/objects/MarchingCubes.js']),
+  import(V['three/addons/renderers/CSS2DRenderer.js']),
+  import(V['three/addons/postprocessing/EffectComposer.js']),
+  import(V['three/addons/postprocessing/RenderPass.js']),
+  import(V['three/addons/postprocessing/UnrealBloomPass.js'])
+]).catch(function(err){{
+  document.body.insertAdjacentHTML('beforeend','<pre style="position:fixed;z-index:99;left:8px;bottom:8px;background:#11141c;color:#f38ba8;padding:8px;border:1px solid #f38ba8">viewer failed to load vendored three.js: '+err+'</pre>');
+  throw err;
+}});
+const THREE = T;
+const {{ OrbitControls }} = OC;
+const {{ ConvexGeometry }} = CG;
+const {{ SVGLoader }} = SL;
+const {{ MarchingCubes }} = MC;
+const {{ CSS2DRenderer, CSS2DObject }} = C2D;
+const {{ EffectComposer }} = EC;
+const {{ RenderPass }} = RP;
+const {{ UnrealBloomPass }} = UBP;
 const FRAMES = {frames_json};
 let idx = 0, playing = false;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0e14);
 const gridHelp = new THREE.GridHelper(20, 20, 0x2a3240, 0x1a2030); scene.add(gridHelp);
 const axesHelp = new THREE.AxesHelper(2); scene.add(axesHelp);
-scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-scene.add(new THREE.HemisphereLight(0x9cc4ff, 0x0b0e14, 0.9));
-const dl = new THREE.DirectionalLight(0xffffff, 0.8); dl.position.set(8, 14, 10); scene.add(dl);
+// Lit scene: a shadow-casting key light plus dimmer fill (ACES tone mapping
+// below lifts the mid-tones, so the fill does not need to be hot).
+scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+scene.add(new THREE.HemisphereLight(0x9cc4ff, 0x0b0e14, 0.55));
+const dl = new THREE.DirectionalLight(0xffffff, 1.6); dl.position.set(8, 14, 10);
+dl.castShadow = true;
+dl.shadow.mapSize.set(2048, 2048);
+dl.shadow.camera.left = -30; dl.shadow.camera.right = 30;
+dl.shadow.camera.top = 30; dl.shadow.camera.bottom = -30;
+dl.shadow.camera.near = 1; dl.shadow.camera.far = 90;
+dl.shadow.bias = -0.0004; dl.shadow.normalBias = 0.02;
+scene.add(dl); scene.add(dl.target);
 const sunLight = new THREE.PointLight(0xFFD24A, 2, 100); scene.add(sunLight);
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 1000);
 camera.position.set(8, 8, 8);
 const renderer = new THREE.WebGLRenderer({{antialias:true}});
 renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.getElementById('view').appendChild(renderer.domElement);
 const labelRenderer = new CSS2DRenderer(); labelRenderer.setSize(innerWidth, innerHeight); labelRenderer.domElement.style.position='absolute'; labelRenderer.domElement.style.top='0'; labelRenderer.domElement.style.pointerEvents='none'; document.getElementById('view').appendChild(labelRenderer.domElement);
+// Post-processing: scene pass + a gentle bloom so emissive bodies (sun, glow)
+// bleed light like real emitters.
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.35, 0.5, 0.9);
+composer.addPass(bloomPass);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping=true; controls.dampingFactor=0.08; controls.autoRotate=true; controls.autoRotateSpeed=1.2;
 controls.minDistance=0.5; controls.maxDistance=500; controls.screenSpacePanning=true; controls.maxPolarAngle=Math.PI;
@@ -876,17 +1200,40 @@ renderer.domElement.addEventListener('pointerdown',()=>{{controls.autoRotate=fal
   scene.add(new THREE.Points(g,new THREE.PointsMaterial({{color:0xffffff,size:0.3,sizeAttenuation:false}})));
 }})();
 const raycaster=new THREE.Raycaster();const pointer=new THREE.Vector2();
-const highlight=new THREE.Mesh(new THREE.SphereGeometry(0.4,16,16),new THREE.MeshBasicMaterial({{color:0xffffff,wireframe:true,transparent:true,opacity:0.5}}));highlight.visible=false;scene.add(highlight);
-let selected=null;
+// Selection feedback: a wireframe box fitted to the selection's world bounds
+// (a fixed-size sphere gets depth-occluded inside larger meshes).
+const selBox=new THREE.Box3();
+const highlight=new THREE.Box3Helper(selBox,0xffffff);highlight.visible=false;scene.add(highlight);
+let selectedId=null;
 renderer.domElement.addEventListener('pointerdown',(ev)=>{{
   const rect=renderer.domElement.getBoundingClientRect();
   pointer.x=((ev.clientX-rect.left)/rect.width)*2-1; pointer.y=-((ev.clientY-rect.top)/rect.height)*2+1;
   raycaster.setFromCamera(pointer,camera);
-  const hits=raycaster.intersectObjects([...meshes.values()]);
-  selected=hits.length?hits[0].object:null;
+  const hits=raycaster.intersectObjects([...meshes.values()], true);
+  selectedId=null;
+  if(hits.length){{
+    // A composite (`group`) entity is hit at a child part: walk up to the
+    // mesh carrying the entity (`userData.id`), and keep only the id — meshes
+    // are rebuilt every frame, so a held object reference goes stale.
+    let o=hits[0].object;
+    while(o && (o.userData==null || o.userData.id==null)) o=o.parent;
+    if(o) selectedId=o.userData.id;
+  }}
+  updateSelection();
 }});
 const panel = document.getElementById('panel');
 const meshes = new Map();
+// Selection persists across frame rebuilds (by id, not by mesh reference):
+// re-resolve it from the current meshes and refresh the highlight right away,
+// so a click responds even while playback is paused.
+function updateSelection(){{
+  const selM = selectedId!=null && meshes.has(selectedId) ? meshes.get(selectedId) : null;
+  if (selM) {{ selBox.setFromObject(selM); selBox.expandByScalar(0.03); highlight.visible=true; }}
+  else highlight.visible=false;
+}}
+// Names / field names / info lines are user-authored text pasted into
+// innerHTML: escape them so a name like `<img onerror=…>` stays text.
+const esc = function(s){{ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }};
 function svgGeo(d, depth, scale){{ const data=new SVGLoader().parse(d); let sh=[]; for(const p of data.paths) sh=sh.concat(SVGLoader.createShapes(p));
   const geo=new THREE.ExtrudeGeometry(sh,{{depth:Math.max(depth,0.001),bevelEnabled:false,curveSegments:16}}); geo.scale(scale,-scale,scale); geo.center(); return geo; }}
 function polyGeo(pts, faces){{ const pos=[]; const F=faces&&faces.length?faces:null;
@@ -896,23 +1243,39 @@ function capsuleGeo(r0,len,r1){{ const cs=8, pts=[];
   for(let i=0;i<=cs;i++){{const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r0*Math.sin(a), -len/2 - r0*Math.cos(a)));}}
   for(let i=0;i<=cs;i++){{const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r1*Math.cos(a), len/2 + r1*Math.sin(a)));}}
   return new THREE.LatheGeometry(pts,28); }}
+// Data-driven primitive registry: `kind` resolves through this table, so a
+// new frame primitive only needs one entry here — unknown kinds degrade to a
+// point marker instead of breaking the viewer.
+const PRIMS = {{
+  box: p=>new THREE.BoxGeometry(p.dims[0],p.dims[1],p.dims[2]),
+  sphere: p=>new THREE.SphereGeometry(p.radius,24,18),
+  ring: p=>new THREE.TorusGeometry(p.a||0.5, p.b||0.05, 12, 48),
+  capsule: p=>capsuleGeo(p.r0||0.06, p.len||0.3, p.r1||0.06),
+  cylinder: p=>new THREE.CylinderGeometry(p.radius, p.radius, p.height, 24),
+  cone: p=>new THREE.ConeGeometry(p.radius, p.height, 24),
+  plane: p=>new THREE.PlaneGeometry(p.w, p.h),
+  svg: p=>svgGeo(p.d, p.depth, p.scale),
+  hull: p=>{{ const verts=(p.points||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2])); try {{ return new ConvexGeometry(verts); }} catch(err) {{ return new THREE.SphereGeometry(0.1,8,6); }} }},
+  poly: p=>polyGeo(p.pts||[], p.faces||[]),
+  point: p=>new THREE.SphereGeometry((p.size||0.25)/2,16,12)
+}};
 function makeMesh(e, t) {{
   t = t||0;
   const opacity = e.opacity==null?1:e.opacity, glow = e.glow==null?0.8:e.glow;
+  const st = e.vis || {{}};
   const matFor = (col, op, ds)=>{{ const c = (col==null? e.color : col), o = (op==null? opacity : op);
-    return new THREE.MeshStandardMaterial({{color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:o<1,opacity:o,side:ds?THREE.DoubleSide:THREE.FrontSide}}); }};
-  const mat = matFor(null);
-  if (e.kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(e.dims[0],e.dims[1],e.dims[2]), mat);
-  if (e.kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(e.radius,20,16), mat);
-  if (e.kind==='ring') return new THREE.Mesh(new THREE.TorusGeometry(e.a||0.5, e.b||0.05, 12, 48), mat);
-  if (e.kind==='hull' && e.points) {{
-    const verts = e.points.map(p=>new THREE.Vector3(p[0],p[1],p[2]));
-    let g; try {{ g = new ConvexGeometry(verts); }} catch(err) {{ g = new THREE.SphereGeometry(0.1,8,6); }}
-    return new THREE.Mesh(g, mat);
-  }}
-  if (e.kind==='capsule') return new THREE.Mesh(capsuleGeo(e.r0||0.06, e.len||0.3, e.r1||0.06), mat);
+    return new THREE.MeshStandardMaterial({{color:c,
+      emissive:new THREE.Color(st.emissive==null?c:st.emissive),
+      emissiveIntensity:st.emissiveIntensity==null?glow:st.emissiveIntensity,
+      metalness:st.metalness==null?0.1:st.metalness,
+      roughness:st.roughness==null?0.55:st.roughness,
+      transparent:o<1, opacity:o,
+      side:(ds || st.double_sided || e.kind==='plane')?THREE.DoubleSide:THREE.FrontSide,
+      wireframe:!!st.wireframe, flatShading:!!st.flat}}); }};
   if (e.kind==='group' && e.parts) return groupMesh(e.parts, t, matFor);
-  return new THREE.Mesh(new THREE.SphereGeometry((e.size||0.25)/2,20,16), mat);
+  const build = PRIMS[e.kind];
+  const geo = build ? build(e) : new THREE.SphereGeometry((e.size||0.25)/2,16,12);
+  return new THREE.Mesh(geo, matFor(null));
 }}
 function groupMesh(parts, t, matFor) {{
   const g=new THREE.Group();
@@ -923,6 +1286,9 @@ function groupMesh(parts, t, matFor) {{
     else if (p.k===5) {{ ch=new THREE.Mesh(new ConvexGeometry((p.pts||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2]))), m); }}
     else if (p.k===6) {{ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), matFor(p.color, p.opacity, true)); }}
     else if (p.k===8) {{ ch=new THREE.Mesh(new THREE.TorusGeometry(p.a,p.b,12,48), m); }}
+    else if (p.k===9) {{ ch=new THREE.Mesh(new THREE.CylinderGeometry(p.a,p.a,p.b,24), m); }}
+    else if (p.k===10) {{ ch=new THREE.Mesh(new THREE.ConeGeometry(p.a,p.b,24), m); }}
+    else if (p.k===11) {{ ch=new THREE.Mesh(new THREE.PlaneGeometry(p.a,p.b), matFor(p.color, p.opacity, true)); }}
     else {{ ch=new THREE.Mesh(new THREE.SphereGeometry(p.a,20,16), m); }}
     const off=p.off||[0,0,0];
     if (p.orbit) {{ const o=p.orbit, ang=(o[2]||0)+(o[1]||0)*t;
@@ -951,19 +1317,19 @@ function addBonds(frame){{
     const order=Math.max(1,bd.order||1), pol=bd.polarity||0;
     for(let i=0;i<order;i++){{
       const off=(i-(order-1)/2)*0.11;
-      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,len,8,1,true), new THREE.MeshPhongMaterial({{color:0xcccccc,transparent:true,opacity:0.9}}));
+      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,len,8,1,true), new THREE.MeshStandardMaterial({{color:0xcccccc,metalness:0.3,roughness:0.4,transparent:true,opacity:0.9}}));
       m.position.copy(p1).add(p2).multiplyScalar(0.5).addScaledVector(v,off);
       m.quaternion.setFromUnitVectors(up,n); scene.add(m);decals.push(m);
     }}
     if(pol>0){{
       const ca=new THREE.Color(A.material.color), cb=new THREE.Color(B.material.color);
-      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.058,0.058,len,8,1,true), new THREE.MeshPhongMaterial({{color:ca.lerp(cb,0.5+0.5*pol),transparent:true,opacity:0.55}}));
+      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.058,0.058,len,8,1,true), new THREE.MeshStandardMaterial({{color:ca.lerp(cb,0.5+0.5*pol),metalness:0.2,roughness:0.5,transparent:true,opacity:0.55}}));
       m.position.copy(p1).add(p2).multiplyScalar(0.5);
       m.quaternion.setFromUnitVectors(up,n); scene.add(m);decals.push(m);
     }}
     if(bd.cloud){{
       const geo=new THREE.SphereGeometry(1,16,12); geo.scale(0.16,0.16,len*0.7);
-      const m=new THREE.Mesh(geo,new THREE.MeshPhongMaterial({{color:0x66ccff,transparent:true,opacity:0.28}}));
+      const m=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({{color:0x66ccff,metalness:0.0,roughness:0.3,transparent:true,opacity:0.28}}));
       m.position.copy(p1).add(p2).multiplyScalar(0.5);
       m.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),n); scene.add(m);decals.push(m);
     }}
@@ -987,7 +1353,6 @@ const fieldObjects = new Map();
 let fieldExtent = 0;
 function disposeMat(m){{ if(!m) return; const arr=Array.isArray(m)?m:[m]; for(const mm of arr){{ try{{ if(mm){{ const tex=mm.map; if(tex&&tex.dispose)tex.dispose(); if(mm.dispose)mm.dispose(); }} }}catch(e){{}} }} }}
 function disposeObj(o){{ if(!o) return; try{{ if(o.geometry&&o.geometry.dispose)o.geometry.dispose(); }}catch(e){{}} disposeMat(o.material); try{{ if(o.element&&o.element.remove)o.element.remove(); }}catch(e){{}} if(o.children) for(const c of o.children) disposeObj(c); }}
-function clearFields() {{ for (const o of fieldObjects.values()) {{ if (o.mc) {{ scene.remove(o.mc); disposeObj(o.mc); if (o.trough && o.trough.mc) {{ scene.remove(o.trough.mc); disposeObj(o.trough.mc); }} disposeMat(o.mat); if (o.trough) disposeMat(o.trough.mat); }} if (o.line) {{ scene.remove(o.line); disposeObj(o.line); }} if (o.pts) {{ scene.remove(o.pts); disposeObj(o.pts); }} }} fieldObjects.clear(); }}
 // One translucent shell per field, coloured by radius (energy ~ 1/r^2): hot near
 // the source -> cool far away, across the shell's own hue family.
 function fieldRes(W, H, D) {{ return Math.max(16, Math.min(40, Math.round(1.5*Math.max(W,H,D)))); }}
@@ -1057,7 +1422,7 @@ function renderFields(fields) {{
       }}
       pos.needsUpdate = true; col.needsUpdate = true;
       fieldExtent = Math.max(fieldExtent, W*dx, scale*2);
-      txt += fl.name+' 1D |u|max='+hi.toFixed(3)+'<br>';
+      txt += esc(fl.name)+' 1D |u|max='+hi.toFixed(3)+'<br>';
       return;
     }}
 
@@ -1105,12 +1470,69 @@ function renderFields(fields) {{
     ent.crest.mat.color.setScalar(b); ent.trough.mat.color.setScalar(b);
     fieldExtent = Math.max(fieldExtent, W*dx, H*dx, D*dx);
     const dk=(D>1?('\u00d7'+D):'');
-    txt += fl.name+' '+W+'\u00d7'+H+dk+'  E\u221d|u|max '+peak.toFixed(3)+'<br>';
+    txt += esc(fl.name)+' '+W+'\u00d7'+H+dk+'  E\u221d|u|max '+peak.toFixed(3)+'<br>';
   }});
   for (const [name, ent] of [...fieldObjects]) {{
     if (!seen.has(name)) {{ if (ent.mc) {{ scene.remove(ent.mc); disposeObj(ent.mc); if (ent.trough && ent.trough.mc) {{ scene.remove(ent.trough.mc); disposeObj(ent.trough.mc); }} disposeMat(ent.mat); if (ent.trough) disposeMat(ent.trough.mat); }} if (ent.line) {{ scene.remove(ent.line); disposeObj(ent.line); }} if (ent.pts) {{ scene.remove(ent.pts); disposeObj(ent.pts); }} fieldObjects.delete(name); }}
   }}
   return txt;
+}}
+// Trails: a fading polyline over each moving entity's recent positions. Static
+// mode knows every frame upfront, so histories are precomputed once from
+// FRAMES (entities that never move are skipped). Sparse by frame index: an
+// entity may be absent from some frames.
+const TRAIL_N = 48;
+const trailHist = new Map();
+{{
+  const byId = new Map();
+  FRAMES.forEach((f, fi)=>{{ for (const e of f.entities) {{
+    if (e.vec===false) continue;
+    let a = byId.get(e.id); if (!a) {{ a = []; byId.set(e.id, a); }}
+    a[fi] = e.pos;
+  }} }});
+  for (const [id, arr] of byId) {{
+    const pts = arr.filter(Boolean);
+    let moved = false;
+    for (let i=1;i<pts.length;i++) {{ const dx=pts[i][0]-pts[i-1][0], dy=pts[i][1]-pts[i-1][1], dz=pts[i][2]-pts[i-1][2];
+      if (dx*dx+dy*dy+dz*dz > 1e-6) {{ moved = true; break; }} }}
+    if (moved && pts.length>=2) trailHist.set(id, arr);
+  }}
+}}
+const trailLines = new Map();
+function updateTrails(frame, index) {{
+  const seen = new Set();
+  for (const e of frame.entities) {{
+    const hist = trailHist.get(e.id); if (!hist) continue;
+    const end = Math.min(hist.length, index+1), start = Math.max(0, end-TRAIL_N);
+    const pts = [];
+    for (let i=start;i<end;i++) if (hist[i]) pts.push(hist[i]);
+    if (pts.length < 2) continue;
+    seen.add(e.id);
+    const pos = new Float32Array(pts.length*3), col = new Float32Array(pts.length*3);
+    const c = new THREE.Color(e.color);
+    for (let i=0;i<pts.length;i++) {{
+      pos[i*3]=pts[i][0]; pos[i*3+1]=pts[i][1]; pos[i*3+2]=pts[i][2];
+      const a = Math.pow(i/(pts.length-1), 1.5);
+      col[i*3]=c.r*a; col[i*3+1]=c.g*a; col[i*3+2]=c.b*a;
+    }}
+    let line = trailLines.get(e.id);
+    if (!line) {{
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+      g.setAttribute('color', new THREE.BufferAttribute(col,3));
+      line = new THREE.Line(g, new THREE.LineBasicMaterial({{vertexColors:true,transparent:true,depthWrite:false}}));
+      line.frustumCulled = false;
+      scene.add(line); trailLines.set(e.id, line);
+    }} else {{
+      const g = line.geometry;
+      g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+      g.setAttribute('color', new THREE.BufferAttribute(col,3));
+      g.attributes.position.needsUpdate = true;
+      g.attributes.color.needsUpdate = true;
+    }}
+    line.visible = true;
+  }}
+  for (const [id, line] of trailLines) if (!seen.has(id)) line.visible = false;
 }}
 function applyFrame(f) {{
   const isMol = f.bonds && f.bonds.length>0;
@@ -1127,10 +1549,14 @@ function applyFrame(f) {{
     m.quaternion.set(e.rot[0],e.rot[1],e.rot[2],e.rot[3]);
     if ((e.name==='sun'||(sun&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6)) && m.material) {{ m.material.emissive=new THREE.Color(e.color); if (e.glow==null) m.material.emissiveIntensity=1.2; }}
     m.userData=e; scene.add(m); meshes.set(e.id, m);
+    // Shadows: opaque meshes cast and receive; transparent/wireframe ones
+    // only receive (a translucent shadow looks wrong), and `vis.castShadow
+    // = false` opts an entity out entirely.
+    m.traverse(o=>{{ if(o.isMesh && o.material && !Array.isArray(o.material)){{ o.castShadow = !o.material.transparent && !o.material.wireframe && !(e.vis && e.vis.castShadow===false); o.receiveShadow = !o.material.transparent; }} }});
     if (e.name && e.label!==false && labelsOn) {{ const el=document.createElement('div'); el.className='lbl'; el.textContent=e.name; const l=new CSS2DObject(el); l.position.set(e.pos[0],e.pos[1]+(e.size||0.3),e.pos[2]); scene.add(l); decals.push(l); }}
-    if (e.vec!==false && !isMol && sun && e.state && e.state.length>=5 && Math.hypot(e.state[3],e.state[4],e.state[5])>1e-6) addOrbit(sun, Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y), e.color);
-    if (e.vec!==false && !isMol && e.state && e.state.length>=5) addVel(e.pos[0],e.pos[1],e.pos[2],e.state[3],e.state[4],e.state[5],e.color);
-    if (e.state && e.state.length) html += (e.name||('#'+e.id))+' r='+Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y).toFixed(2)+'<br>';
+    if (e.vec!==false && !isMol && sun && e.state && e.state.length>=6 && Math.hypot(e.state[3],e.state[4],e.state[5])>1e-6) addOrbit(sun, Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y), e.color);
+    if (e.vec!==false && !isMol && e.state && e.state.length>=6) addVel(e.pos[0],e.pos[1],e.pos[2],e.state[3],e.state[4],e.state[5],e.color);
+    if (e.state && e.state.length) html += esc(e.name||('#'+e.id))+' r='+Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y).toFixed(2)+'<br>';
   }}
   if (isMol) addBonds(f);
   const hasFields = f.fields && f.fields.length;
@@ -1142,9 +1568,9 @@ function applyFrame(f) {{
   else if (fieldExtent>0 && !cameraSet && !userMoved) {{ const e=fieldExtent*2.0; camera.position.set(e,e*0.8,e); camera.lookAt(0,0,0); controls.target.set(0,0,0); controls.update(); cameraSet=true; }}
   document.getElementById('time').textContent = f.time.toFixed(3);
   document.getElementById('frame').textContent = idx;
-  const selE = selected ? f.entities.find(e=>e===selected.userData) : null;
-  if (selE) {{ highlight.position.set(selE.pos[0],selE.pos[1],selE.pos[2]); highlight.visible=true; }}
-  else highlight.visible=false;
+  updateTrails(f, idx);
+  // Re-resolve the selection from this frame's freshly built meshes.
+  updateSelection();
 }}
 const slider = document.getElementById('slider');
 slider.max = Math.max(0, FRAMES.length-1);
@@ -1156,9 +1582,9 @@ slider.oninput = ()=>{{ go(+slider.value); }};
 document.addEventListener('keydown', e=>{{ if(e.key===' '){{ document.getElementById('play').onclick(); e.preventDefault(); }} }});
 renderer.setAnimationLoop(()=>{{
   if (playing && FRAMES.length) {{ go(idx+1); if (idx>=FRAMES.length-1) playing=false; }}
-  controls.update(); renderer.render(scene, camera); labelRenderer.render(scene, camera);
+  controls.update(); composer.render(); labelRenderer.render(scene, camera);
 }});
-addEventListener('resize', ()=>{{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); labelRenderer.setSize(innerWidth,innerHeight); }});
+addEventListener('resize', ()=>{{ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); composer.setSize(innerWidth,innerHeight); labelRenderer.setSize(innerWidth,innerHeight); }});
 applyFrame(FRAMES[0]);
 </script>
 </body></html>
@@ -1214,6 +1640,30 @@ fn vendor_file(path: &str) -> Option<&'static str> {
         }
         "/vendor/three/addons/math/ConvexHull.js" => {
             include_str!("../vendor/three/addons/math/ConvexHull.js")
+        }
+        "/vendor/three/addons/postprocessing/Pass.js" => {
+            include_str!("../vendor/three/addons/postprocessing/Pass.js")
+        }
+        "/vendor/three/addons/postprocessing/MaskPass.js" => {
+            include_str!("../vendor/three/addons/postprocessing/MaskPass.js")
+        }
+        "/vendor/three/addons/postprocessing/ShaderPass.js" => {
+            include_str!("../vendor/three/addons/postprocessing/ShaderPass.js")
+        }
+        "/vendor/three/addons/postprocessing/RenderPass.js" => {
+            include_str!("../vendor/three/addons/postprocessing/RenderPass.js")
+        }
+        "/vendor/three/addons/postprocessing/EffectComposer.js" => {
+            include_str!("../vendor/three/addons/postprocessing/EffectComposer.js")
+        }
+        "/vendor/three/addons/postprocessing/UnrealBloomPass.js" => {
+            include_str!("../vendor/three/addons/postprocessing/UnrealBloomPass.js")
+        }
+        "/vendor/three/addons/shaders/CopyShader.js" => {
+            include_str!("../vendor/three/addons/shaders/CopyShader.js")
+        }
+        "/vendor/three/addons/shaders/LuminosityHighPassShader.js" => {
+            include_str!("../vendor/three/addons/shaders/LuminosityHighPassShader.js")
         }
         "/vendor/three/LICENSE" => include_str!("../vendor/three/LICENSE"),
         _ => return None,
@@ -1314,7 +1764,7 @@ fn live_state_json(live: &LiveState) -> String {
             out.push(',');
         }
         out.push('"');
-        out.push_str(&s.replace('\\', "\\\\").replace('"', "\\\""));
+        out.push_str(&json_str(s));
         out.push('"');
     }
     out.push_str("]}");
@@ -1351,14 +1801,23 @@ import {ConvexGeometry} from 'three/addons/geometries/ConvexGeometry.js';
 import {SVGLoader} from 'three/addons/loaders/SVGLoader.js';
 import {MarchingCubes} from 'three/addons/objects/MarchingCubes.js';
 import {CSS2DRenderer,CSS2DObject} from 'three/addons/renderers/CSS2DRenderer.js';
+import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
+import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
+import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
 const scene=new THREE.Scene(); scene.background=new THREE.Color(0x0b0e14);
 const gridHelp=new THREE.GridHelper(20,20,0x2a3240,0x1a2030); scene.add(gridHelp); const axesHelp=new THREE.AxesHelper(2); scene.add(axesHelp);
-scene.add(new THREE.AmbientLight(0xffffff,0.5)); scene.add(new THREE.HemisphereLight(0x9cc4ff,0x0b0e14,0.9)); const dl=new THREE.DirectionalLight(0xffffff,0.8); dl.position.set(8,14,10); scene.add(dl);
+scene.add(new THREE.AmbientLight(0xffffff,0.3)); scene.add(new THREE.HemisphereLight(0x9cc4ff,0x0b0e14,0.55)); const dl=new THREE.DirectionalLight(0xffffff,1.6); dl.position.set(8,14,10); dl.castShadow=true; dl.shadow.mapSize.set(2048,2048); dl.shadow.camera.left=-30; dl.shadow.camera.right=30; dl.shadow.camera.top=30; dl.shadow.camera.bottom=-30; dl.shadow.camera.near=1; dl.shadow.camera.far=90; dl.shadow.bias=-0.0004; dl.shadow.normalBias=0.02; scene.add(dl);
 const sunLight=new THREE.PointLight(0xFFD24A,2,100); scene.add(sunLight);
 const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.01,1000); camera.position.set(8,8,8);
 const renderer=new THREE.WebGLRenderer({antialias:true}); renderer.setSize(innerWidth,innerHeight);
+renderer.toneMapping=THREE.ACESFilmicToneMapping; renderer.toneMappingExposure=1.05;
+renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 const labelRenderer=new CSS2DRenderer(); labelRenderer.setSize(innerWidth,innerHeight); labelRenderer.domElement.style.position='absolute'; labelRenderer.domElement.style.top='0'; labelRenderer.domElement.style.pointerEvents='none'; document.body.appendChild(labelRenderer.domElement);
+const composer=new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene,camera));
+const bloomPass=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),0.35,0.5,0.9);
+composer.addPass(bloomPass);
 const controls=new OrbitControls(camera,renderer.domElement);
 controls.enableDamping=true; controls.dampingFactor=0.08; controls.autoRotate=true; controls.autoRotateSpeed=1.4;
 controls.minDistance=0.5; controls.maxDistance=250; controls.screenSpacePanning=true; controls.maxPolarAngle=Math.PI;
@@ -1370,17 +1829,44 @@ renderer.domElement.addEventListener('pointerdown',()=>{controls.autoRotate=fals
 (function(){const N=1200;const pos=new Float32Array(N*3);for(let i=0;i<N;i++){const r=60+Math.random()*120;const t=Math.random()*Math.PI*2;const p=Math.acos(2*Math.random()-1);pos[i*3]=r*Math.sin(p)*Math.cos(t);pos[i*3+1]=r*Math.sin(p)*Math.sin(t);pos[i*3+2]=r*Math.cos(p);}const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));const stars=new THREE.Points(g,new THREE.PointsMaterial({color:0xffffff,size:0.3,sizeAttenuation:false}));scene.add(stars);})();
 // Click-to-inspect.
 const raycaster=new THREE.Raycaster();const pointer=new THREE.Vector2();
-const highlight=new THREE.Mesh(new THREE.SphereGeometry(0.4,16,16),new THREE.MeshBasicMaterial({color:0xffffff,wireframe:true,transparent:true,opacity:0.5}));highlight.visible=false;scene.add(highlight);
-let selected=null;const inspect=document.createElement('div');inspect.style.cssText='position:fixed;left:8px;bottom:56px;background:#11141c;border:1px solid #2a3240;padding:8px;font-size:11px;z-index:10;max-width:300px;';document.body.appendChild(inspect);
+// Selection feedback: a wireframe box fitted to the selection's world bounds
+// (a fixed-size sphere gets depth-occluded inside larger meshes).
+const selBox=new THREE.Box3();
+const highlight=new THREE.Box3Helper(selBox,0xffffff);highlight.visible=false;scene.add(highlight);
+let selectedId=null;const inspect=document.createElement('div');inspect.style.cssText='position:fixed;left:8px;bottom:56px;background:#11141c;border:1px solid #2a3240;padding:8px;font-size:11px;z-index:10;max-width:300px;';document.body.appendChild(inspect);
 renderer.domElement.addEventListener('pointerdown',(ev)=>{
   const rect=renderer.domElement.getBoundingClientRect();
   pointer.x=((ev.clientX-rect.left)/rect.width)*2-1; pointer.y=-((ev.clientY-rect.top)/rect.height)*2+1;
   raycaster.setFromCamera(pointer,camera);
-  const hits=raycaster.intersectObjects([...meshes.values()]);
-  selected=hits.length?hits[0].object:null;
+  const hits=raycaster.intersectObjects([...meshes.values()], true);
+  selectedId=null;
+  if(hits.length){
+    // A composite (`group`) entity is hit at a child part: walk up to the mesh
+    // carrying the entity (`userData.id`), and keep only the id — meshes are
+    // rebuilt every poll, so a held object reference goes stale.
+    let o=hits[0].object;
+    while(o && (o.userData==null || o.userData.id==null)) o=o.parent;
+    if(o) selectedId=o.userData.id;
+  }
+  updateSelection();
 });
 const panel=document.getElementById('panel'), procEl=document.getElementById('proc'), conn=document.getElementById('conn');
 const meshes=new Map();
+// Selection persists across rebuilds (by id, not by mesh reference):
+// re-resolve it from the current meshes and refresh the highlight / inspect
+// card right away, so a click responds even between polls.
+function updateSelection(){
+  const selM=selectedId!=null&&meshes.has(selectedId)?meshes.get(selectedId):null;
+  const selE=selM?selM.userData:null;
+  if(selM){selBox.setFromObject(selM);selBox.expandByScalar(0.03);highlight.visible=true;} else highlight.visible=false;
+  if(selE){
+    const st=selE.state||[];
+    inspect.innerHTML='<b>'+esc(selE.name)+'</b> ('+esc(selE.kind)+')<br>pos '+selE.pos.map(x=>x.toFixed(2)).join(', ')+'<br>'+(st.length?'state ['+st.map(x=>x.toFixed(3)).join(', ')+']':'')+'<br>size '+ (selE.size||0.25).toFixed(2);
+  } else {inspect.innerHTML='';}
+}
+// Names / field names / info lines are user-authored text pasted into
+// innerHTML: escape them so a name like `<img onerror=…>` stays text.
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 function svgGeo(d, depth, scale){ const data=new SVGLoader().parse(d); let sh=[]; for(const p of data.paths) sh=sh.concat(SVGLoader.createShapes(p));
   const geo=new THREE.ExtrudeGeometry(sh,{depth:Math.max(depth,0.001),bevelEnabled:false,curveSegments:16}); geo.scale(scale,-scale,scale); geo.center(); return geo; }
 function polyGeo(pts, faces){ const pos=[]; const F=faces&&faces.length?faces:null;
@@ -1390,17 +1876,35 @@ function capsuleGeo(r0,len,r1){ const cs=8, pts=[];
   for(let i=0;i<=cs;i++){const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r0*Math.sin(a), -len/2 - r0*Math.cos(a)));}
   for(let i=0;i<=cs;i++){const a=i/cs*Math.PI/2; pts.push(new THREE.Vector2(r1*Math.cos(a), len/2 + r1*Math.sin(a)));}
   return new THREE.LatheGeometry(pts,28); }
+// Data-driven primitive registry: `kind` resolves through this table, so a
+// new frame primitive only needs one entry here — unknown kinds degrade to a
+// point marker instead of breaking the viewer.
+const PRIMS = {
+  box: p=>new THREE.BoxGeometry(p.dims[0],p.dims[1],p.dims[2]),
+  sphere: p=>new THREE.SphereGeometry(p.radius,24,18),
+  ring: p=>new THREE.TorusGeometry(p.a||0.5, p.b||0.05, 12, 48),
+  capsule: p=>capsuleGeo(p.r0||0.06, p.len||0.3, p.r1||0.06),
+  cylinder: p=>new THREE.CylinderGeometry(p.radius, p.radius, p.height, 24),
+  cone: p=>new THREE.ConeGeometry(p.radius, p.height, 24),
+  plane: p=>new THREE.PlaneGeometry(p.w, p.h),
+  svg: p=>svgGeo(p.d, p.depth, p.scale),
+  hull: p=>{ const verts=(p.points||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2])); try { return new ConvexGeometry(verts); } catch(err) { return new THREE.SphereGeometry(0.1,8,6); } },
+  poly: p=>polyGeo(p.pts||[], p.faces||[]),
+  point: p=>new THREE.SphereGeometry((p.size||0.25)/2,16,12)
+};
 function make(e, t){
   t = t||0;
   const opacity=e.opacity==null?1:e.opacity, glow=e.glow==null?0.8:e.glow;
+  const st = e.vis || {};
   const matFor=(col,op,ds)=>{ const c=(col==null? e.color : col), o=(op==null? opacity : op);
-    return new THREE.MeshStandardMaterial({color:c,emissive:new THREE.Color(c),emissiveIntensity:glow,metalness:0.0,roughness:0.5,transparent:o<1,opacity:o,side:ds?THREE.DoubleSide:THREE.FrontSide}); };
-  const mat=matFor(null);
-  if(e.kind==='box') return new THREE.Mesh(new THREE.BoxGeometry(e.dims[0],e.dims[1],e.dims[2]),mat);
-  if(e.kind==='sphere') return new THREE.Mesh(new THREE.SphereGeometry(e.radius,20,16),mat);
-  if(e.kind==='ring') return new THREE.Mesh(new THREE.TorusGeometry(e.a||0.5, e.b||0.05, 12, 48),mat);
-  if(e.kind==='hull'&&e.points){const v=e.points.map(p=>new THREE.Vector3(p[0],p[1],p[2]));let g;try{g=new ConvexGeometry(v);}catch(err){g=new THREE.SphereGeometry(0.1,8,6);}return new THREE.Mesh(g,mat);}
-  if(e.kind==='capsule') return new THREE.Mesh(capsuleGeo(e.r0||0.06, e.len||0.3, e.r1||0.06), mat);
+    return new THREE.MeshStandardMaterial({color:c,
+      emissive:new THREE.Color(st.emissive==null?c:st.emissive),
+      emissiveIntensity:st.emissiveIntensity==null?glow:st.emissiveIntensity,
+      metalness:st.metalness==null?0.1:st.metalness,
+      roughness:st.roughness==null?0.55:st.roughness,
+      transparent:o<1, opacity:o,
+      side:(ds || st.double_sided || e.kind==='plane')?THREE.DoubleSide:THREE.FrontSide,
+      wireframe:!!st.wireframe, flatShading:!!st.flat}); };
   if(e.kind==='group' && e.parts){
     const g=new THREE.Group();
     for(const p of e.parts){ const m=matFor(p.color, p.opacity); let ch;
@@ -1410,6 +1914,9 @@ function make(e, t){
       else if(p.k===5){ ch=new THREE.Mesh(new ConvexGeometry((p.pts||[]).map(q=>new THREE.Vector3(q[0],q[1],q[2]))), m); }
       else if(p.k===6){ ch=new THREE.Mesh(polyGeo(p.pts||[], p.faces||[]), matFor(p.color, p.opacity, true)); }
       else if(p.k===8){ ch=new THREE.Mesh(new THREE.TorusGeometry(p.a,p.b,12,48), m); }
+      else if(p.k===9){ ch=new THREE.Mesh(new THREE.CylinderGeometry(p.a,p.a,p.b,24), m); }
+      else if(p.k===10){ ch=new THREE.Mesh(new THREE.ConeGeometry(p.a,p.b,24), m); }
+      else if(p.k===11){ ch=new THREE.Mesh(new THREE.PlaneGeometry(p.a,p.b), matFor(p.color, p.opacity, true)); }
       else { ch=new THREE.Mesh(new THREE.SphereGeometry(p.a,20,16), m); }
       const off=p.off||[0,0,0];
       if(p.orbit){ const o=p.orbit, ang=(o[2]||0)+(o[1]||0)*t;
@@ -1425,13 +1932,14 @@ function make(e, t){
     }
     return g;
   }
-  return new THREE.Mesh(new THREE.SphereGeometry((e.size||0.25)/2,20,16),mat);
+  const build = PRIMS[e.kind];
+  const geo = build ? build(e) : new THREE.SphereGeometry((e.size||0.25)/2,16,12);
+  return new THREE.Mesh(geo, matFor(null));
 }
 const fieldObjects = new Map();
 let fieldExtent = 0;
 function disposeMat(m){ if(!m) return; const arr=Array.isArray(m)?m:[m]; for(const mm of arr){ try{ if(mm){ const tex=mm.map; if(tex&&tex.dispose)tex.dispose(); if(mm.dispose)mm.dispose(); } }catch(e){} } }
 function disposeObj(o){ if(!o) return; try{ if(o.geometry&&o.geometry.dispose)o.geometry.dispose(); }catch(e){} disposeMat(o.material); try{ if(o.element&&o.element.remove)o.element.remove(); }catch(e){} if(o.children) for(const c of o.children) disposeObj(c); }
-function clearFields() { for (const o of fieldObjects.values()) { if (o.mc) { scene.remove(o.mc); disposeObj(o.mc); if (o.trough && o.trough.mc) { scene.remove(o.trough.mc); disposeObj(o.trough.mc); } disposeMat(o.mat); if (o.trough) disposeMat(o.trough.mat); } if (o.line) { scene.remove(o.line); disposeObj(o.line); } if (o.pts) { scene.remove(o.pts); disposeObj(o.pts); } } fieldObjects.clear(); }
 // One translucent shell per field, coloured by radius (energy ~ 1/r^2): hot near
 // the source -> cool far away, across the shell's own hue family.
 function fieldRes(W, H, D) { return Math.max(16, Math.min(40, Math.round(1.5*Math.max(W,H,D)))); }
@@ -1503,7 +2011,7 @@ function renderFields(fields) {
       }
       pos.needsUpdate = true; col.needsUpdate = true;
       fieldExtent = Math.max(fieldExtent, W*dx, scale*2);
-      txt += fl.name+' 1D |u|max='+hi.toFixed(3)+'<br>';
+      txt += esc(fl.name)+' 1D |u|max='+hi.toFixed(3)+'<br>';
       return;
     }
 
@@ -1551,12 +2059,65 @@ function renderFields(fields) {
     ent.crest.mat.color.setScalar(b); ent.trough.mat.color.setScalar(b);
     fieldExtent = Math.max(fieldExtent, W*dx, H*dx, D*dx);
     const dk=(D>1?('\u00d7'+D):'');
-    txt += fl.name+' '+W+'\u00d7'+H+dk+'  E\u221d|u|max '+peak.toFixed(3)+'<br>';
+    txt += esc(fl.name)+' '+W+'\u00d7'+H+dk+'  E\u221d|u|max '+peak.toFixed(3)+'<br>';
   });
   for (const [name, ent] of [...fieldObjects]) {
     if (!seen.has(name)) { if (ent.mc) { scene.remove(ent.mc); disposeObj(ent.mc); if (ent.trough && ent.trough.mc) { scene.remove(ent.trough.mc); disposeObj(ent.trough.mc); } disposeMat(ent.mat); if (ent.trough) disposeMat(ent.trough.mat); } if (ent.line) { scene.remove(ent.line); disposeObj(ent.line); } if (ent.pts) { scene.remove(ent.pts); disposeObj(ent.pts); } fieldObjects.delete(name); }
   }
   return txt;
+}
+// Trails: a fading polyline over each moving entity's recent steps. Each poll
+// appends one point when the step advanced and the entity actually moved
+// (static entities contribute a single point and never draw a line); a step
+// jump backwards (restart/rewind) resets the history.
+const TRAIL_N = 48;
+const trailHist = new Map();
+const trailLines = new Map();
+function updateTrails(frame, step){
+  const seen = new Set();
+  for(const e of frame.entities){
+    if(e.vec===false) continue;
+    let h = trailHist.get(e.id);
+    if(!h){ h = {last:-1, pts:[]}; trailHist.set(e.id, h); }
+    if(step > h.last){
+      if(h.last >= 0 && step !== h.last + 1) h.pts = [];
+      const p = e.pos, q = h.pts[h.pts.length-1];
+      if(!q || Math.hypot(p[0]-q[0],p[1]-q[1],p[2]-q[2]) > 1e-6){
+        h.pts.push(p);
+        if(h.pts.length > TRAIL_N) h.pts.shift();
+      }
+      h.last = step;
+    } else if(step < h.last){
+      h.pts = [e.pos]; h.last = step;
+    }
+    const pts = h.pts;
+    if(pts.length < 2) continue;
+    seen.add(e.id);
+    const pos = new Float32Array(pts.length*3), col = new Float32Array(pts.length*3);
+    const c = new THREE.Color(e.color);
+    for(let i=0;i<pts.length;i++){
+      pos[i*3]=pts[i][0]; pos[i*3+1]=pts[i][1]; pos[i*3+2]=pts[i][2];
+      const a = Math.pow(i/(pts.length-1), 1.5);
+      col[i*3]=c.r*a; col[i*3+1]=c.g*a; col[i*3+2]=c.b*a;
+    }
+    let line = trailLines.get(e.id);
+    if(!line){
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+      g.setAttribute('color', new THREE.BufferAttribute(col,3));
+      line = new THREE.Line(g, new THREE.LineBasicMaterial({vertexColors:true,transparent:true,depthWrite:false}));
+      line.frustumCulled = false;
+      scene.add(line); trailLines.set(e.id, line);
+    } else {
+      const g = line.geometry;
+      g.setAttribute('position', new THREE.BufferAttribute(pos,3));
+      g.setAttribute('color', new THREE.BufferAttribute(col,3));
+      g.attributes.position.needsUpdate = true;
+      g.attributes.color.needsUpdate = true;
+    }
+    line.visible = true;
+  }
+  for(const [id, line] of trailLines) if(!seen.has(id)) line.visible = false;
 }
 function apply(f){
   const isMol = f.frame.bonds && f.frame.bonds.length > 0;
@@ -1573,14 +2134,18 @@ function apply(f){
     m.position.set(e.pos[0],e.pos[1],e.pos[2]);m.quaternion.set(e.rot[0],e.rot[1],e.rot[2],e.rot[3]);
     if((e.name==='sun'||(sun.r&&Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y)<1e-6))&&m.material){m.material.emissive=new THREE.Color(e.color);if(e.glow==null)m.material.emissiveIntensity=0.6;}
     m.userData=e; scene.add(m);meshes.set(e.id,m);
+    // Shadows: opaque meshes cast and receive; transparent/wireframe ones
+    // only receive (a translucent shadow looks wrong), and `vis.castShadow
+    // = false` opts an entity out entirely.
+    m.traverse(o=>{ if(o.isMesh && o.material && !Array.isArray(o.material)){ o.castShadow = !o.material.transparent && !o.material.wireframe && !(e.vis && e.vis.castShadow===false); o.receiveShadow = !o.material.transparent; } });
     // Name label.
     if(e.label!==false && labelsOn){ const el=document.createElement('div'); el.className='lbl'; el.textContent=e.name||('#'+e.id);
     const l=new CSS2DObject(el); l.position.set(e.pos[0],e.pos[1]+(e.size||0.3),e.pos[2]); scene.add(l); decals.push(l); }
     // For a molecule (bonds present) skip orbit rings; atoms don't orbit.
-    if(e.vec!==false && !isMol && e.state && e.state.length>=5 && Math.hypot(e.state[3],e.state[4],e.state[5])>1e-6){ if(sun.r){const r=Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y);addOrbit(sun,r,e.color);} }
+    if(e.vec!==false && !isMol && e.state && e.state.length>=6 && Math.hypot(e.state[3],e.state[4],e.state[5])>1e-6){ if(sun.r){const r=Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y);addOrbit(sun,r,e.color);} }
     // Velocity vector (skip for static molecule atoms).
-    if(e.vec!==false && !isMol && e.state&&e.state.length>=5){addVel(e.pos[0],e.pos[1],e.pos[2],e.state[3],e.state[4],e.state[5],e.color);}
-    html+='<span style="color:#'+e.color.toString(16).padStart(6,'0')+'">■</span> '+(e.name||('#'+e.id))+' r='+Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y).toFixed(2)+'<br>';
+    if(e.vec!==false && !isMol && e.state&&e.state.length>=6){addVel(e.pos[0],e.pos[1],e.pos[2],e.state[3],e.state[4],e.state[5],e.color);}
+    html+='<span style="color:#'+e.color.toString(16).padStart(6,'0')+'">■</span> '+esc(e.name||('#'+e.id))+' r='+Math.hypot(e.pos[0]-sun.x,e.pos[1]-sun.y).toFixed(2)+'<br>';
   }
   // Draw bonds (molecule) as lines between bonded atoms.
   if(isMol) addBonds(f.frame);
@@ -1588,17 +2153,15 @@ function apply(f){
   if(hasFields) html+='<hr>'+renderFields(f.frame.fields);
   for(const c of f.frame.channels) html+='ch#'+c.id+' = '+c.value.toFixed(3)+'<br>';
   panel.innerHTML=html;
-  let p=''; for(let i=f.info.length-1;i>=0;i--) p+=f.info[i]+'<br>'; procEl.innerHTML=p;
+  let p=''; for(let i=f.info.length-1;i>=0;i--) p+=esc(f.info[i])+'<br>'; procEl.innerHTML=p;
   if(f.frame.camera&&!cameraInit){camera.position.set(f.frame.camera.pos[0],f.frame.camera.pos[1],f.frame.camera.pos[2]);camera.lookAt(f.frame.camera.target[0],f.frame.camera.target[1],f.frame.camera.target[2]);cameraInit=true;}
   else if(fieldExtent>0&&!cameraInit){const e=fieldExtent*2.0;camera.position.set(e,e*0.8,e);camera.lookAt(0,0,0);controls.target.set(0,0,0);controls.update();cameraInit=true;}
-  // Highlight + inspect the selected body.
-  lastFrame=f;
-  const selE=selected?f.frame.entities.find(e=>e===selected.userData):null;
-  if(selE){highlight.position.set(selE.pos[0],selE.pos[1],selE.pos[2]);highlight.visible=true;
-    const st=selE.state||[];inspect.innerHTML='<b>'+selE.name+'</b> ('+selE.kind+')<br>pos '+selE.pos.map(x=>x.toFixed(2)).join(', ')+'<br>'+(st.length?'state ['+st.map(x=>x.toFixed(3)).join(', ')+']':'')+'<br>size '+ (selE.size||0.25).toFixed(2);
-  } else {highlight.visible=false;inspect.innerHTML='';}
+  // Rolling trails over the polled steps.
+  updateTrails(f.frame, f.step);
+  // Highlight + inspect the selected body, re-resolved from this poll's
+  // freshly built meshes (by id; a mesh reference would go stale).
+  updateSelection();
 }
-let lastFrame=null;
 const decals=[];
 function addOrbit(center,r,color){
   const pts=[]; const N=64;
@@ -1626,26 +2189,26 @@ function addBonds(frame){
     const order=Math.max(1,bd.order||1), pol=bd.polarity||0;
     for(let i=0;i<order;i++){
       const off=(i-(order-1)/2)*0.11;
-      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,len,8,1,true), new THREE.MeshPhongMaterial({color:0xcccccc,transparent:true,opacity:0.9}));
+      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,len,8,1,true), new THREE.MeshStandardMaterial({color:0xcccccc,metalness:0.3,roughness:0.4,transparent:true,opacity:0.9}));
       m.position.copy(p1).add(p2).multiplyScalar(0.5).addScaledVector(v,off);
       m.quaternion.setFromUnitVectors(up,n); scene.add(m);decals.push(m);
     }
     if(pol>0){
       const ca=new THREE.Color(A.material.color), cb=new THREE.Color(B.material.color);
-      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.058,0.058,len,8,1,true), new THREE.MeshPhongMaterial({color:ca.lerp(cb,0.5+0.5*pol),transparent:true,opacity:0.55}));
+      const m=new THREE.Mesh(new THREE.CylinderGeometry(0.058,0.058,len,8,1,true), new THREE.MeshStandardMaterial({color:ca.lerp(cb,0.5+0.5*pol),metalness:0.2,roughness:0.5,transparent:true,opacity:0.55}));
       m.position.copy(p1).add(p2).multiplyScalar(0.5);
       m.quaternion.setFromUnitVectors(up,n); scene.add(m);decals.push(m);
     }
     if(bd.cloud){
       const geo=new THREE.SphereGeometry(1,16,12); geo.scale(0.16,0.16,len*0.7);
-      const m=new THREE.Mesh(geo,new THREE.MeshPhongMaterial({color:0x66ccff,transparent:true,opacity:0.28}));
+      const m=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({color:0x66ccff,metalness:0.0,roughness:0.3,transparent:true,opacity:0.28}));
       m.position.copy(p1).add(p2).multiplyScalar(0.5);
       m.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1),n); scene.add(m);decals.push(m);
     }
   }
 }
 let alive=true, inflight=null;
-function startLoop(){ renderer.setAnimationLoop(()=>{controls.update();renderer.render(scene,camera);labelRenderer.render(scene,camera);}); }
+function startLoop(){ renderer.setAnimationLoop(()=>{controls.update();composer.render();labelRenderer.render(scene,camera);}); }
 window.__pwe=()=>({geo:renderer.info.memory.geometries,tex:renderer.info.memory.textures,prog:renderer.info.programs?renderer.info.programs.length:-1,meshes:meshes.size,decals:decals.length,children:scene.children.length});
 // Stop polling and rendering, aborting any in-flight request. Called when the
 // tab is hidden or torn down.
@@ -1681,7 +2244,7 @@ document.getElementById('rst').addEventListener('click',()=>{paused=true;documen
 document.getElementById('lbl').onclick=()=>{labelsOn=!labelsOn;document.getElementById('lbl').style.opacity=labelsOn?'1':'0.45';};
 poll();
 startLoop();
-addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);labelRenderer.setSize(innerWidth,innerHeight);});
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);composer.setSize(innerWidth,innerHeight);labelRenderer.setSize(innerWidth,innerHeight);});
 </script>
 </body></html>"#
         .to_string()
@@ -1723,9 +2286,17 @@ mod tests {
             "/vendor/three/addons/objects/MarchingCubes.js",
             "/vendor/three/addons/renderers/CSS2DRenderer.js",
             "/vendor/three/addons/math/ConvexHull.js",
+            "/vendor/three/addons/postprocessing/EffectComposer.js",
+            "/vendor/three/addons/postprocessing/Pass.js",
+            "/vendor/three/addons/postprocessing/RenderPass.js",
+            "/vendor/three/addons/postprocessing/UnrealBloomPass.js",
+            "/vendor/three/addons/shaders/CopyShader.js",
+            "/vendor/three/addons/shaders/LuminosityHighPassShader.js",
         ] {
             assert!(vendor_file(f).is_some(), "missing vendored asset {f}");
         }
+        // Bloom pipeline is wired through the import map.
+        assert!(html.contains("three/addons/postprocessing/UnrealBloomPass.js"));
     }
 
     #[test]
@@ -1845,6 +2416,114 @@ mod tests {
         assert!(json.contains("\"parts\":["));
     }
 
+    /// Cylinder / cone / plane (the new 3D primitives) reach the frame both as
+    /// group parts — the path the language produces — and as top-level shapes.
+    #[test]
+    fn three_dimensional_primitives_serialize() {
+        let part = |kind: u8, a: f64, b: f64| crate::components::ShapePart {
+            name: None,
+            kind,
+            a,
+            b,
+            c: 0.0,
+            offset: (0.0, 0.0, 0.0),
+            path: None,
+            points: Vec::new(),
+            faces: Vec::new(),
+            scale: 1.0,
+            ..Default::default()
+        };
+        let mut scene = Scene::new(Vec3::ZERO);
+        let mut e = Entity::dynamic();
+        e.state = Some(crate::components::State::new(vec![0.0]));
+        e.render = Some(crate::components::RenderStyle {
+            shape_name: Some("tower".into()),
+            parts: Some(vec![
+                part(9, 0.5, 2.0),
+                part(10, 0.5, 1.0),
+                part(11, 4.0, 3.0),
+            ]),
+            ..Default::default()
+        });
+        scene.insert(EntityId(1), e);
+        let mut frame = snapshot(&scene, None);
+        assert!(
+            matches!(&frame.entities[0].shape, Shape::Group(g) if g.len() == 3),
+            "cylinder+cone+plane shape must be a group"
+        );
+        let json = frame_to_json(&frame);
+        assert!(json.contains("\"k\":9"), "cylinder part: {json}");
+        assert!(json.contains("\"k\":10"), "cone part: {json}");
+        assert!(json.contains("\"k\":11"), "plane part: {json}");
+        // Top-level arms (a directly built frame can carry them).
+        frame.entities[0].shape = Shape::Cylinder {
+            radius: 0.5,
+            height: 2.0,
+        };
+        let json = frame_to_json(&frame);
+        assert!(
+            json.contains("\"kind\":\"cylinder\",\"radius\":0.5,\"height\":2"),
+            "{json}"
+        );
+        frame.entities[0].shape = Shape::Cone {
+            radius: 0.5,
+            height: 1.0,
+        };
+        let json = frame_to_json(&frame);
+        assert!(
+            json.contains("\"kind\":\"cone\",\"radius\":0.5,\"height\":1"),
+            "{json}"
+        );
+        frame.entities[0].shape = Shape::Plane {
+            width: 4.0,
+            height: 3.0,
+        };
+        let json = frame_to_json(&frame);
+        assert!(
+            json.contains("\"kind\":\"plane\",\"w\":4,\"h\":3"),
+            "{json}"
+        );
+    }
+
+    /// The optional `vis` material block: omitted entirely when unset (older
+    /// viewers and exact-JSON expectations keep working), and emitted with only
+    /// the fields that are actually set.
+    #[test]
+    fn vis_block_is_optional_and_serialized() {
+        let mut frame = snapshot(&scene_with_body(), None);
+        let plain = frame_to_json(&frame);
+        assert!(!plain.contains("\"vis\":"), "absent when unset: {plain}");
+        frame.entities[0].style = Some(VisualStyle {
+            metalness: Some(0.9),
+            roughness: Some(0.2),
+            emissive: Some(0xFF_00_00),
+            emissive_intensity: Some(2.0),
+            wireframe: Some(true),
+            flat: Some(true),
+            double_sided: Some(true),
+            cast_shadow: Some(false),
+        });
+        let json = frame_to_json(&frame);
+        assert!(json.contains("\"vis\":{"), "{json}");
+        assert!(json.contains("\"metalness\":0.9"), "{json}");
+        assert!(json.contains("\"roughness\":0.2"), "{json}");
+        assert!(json.contains("\"emissive\":16711680"), "{json}");
+        assert!(json.contains("\"emissiveIntensity\":2"), "{json}");
+        assert!(json.contains("\"wireframe\":true"), "{json}");
+        assert!(json.contains("\"flat\":true"), "{json}");
+        assert!(json.contains("\"doubleSided\":true"), "{json}");
+        assert!(json.contains("\"castShadow\":false"), "{json}");
+        // Partially set: only the set fields appear.
+        frame.entities[0].style = Some(VisualStyle {
+            metalness: Some(0.5),
+            ..Default::default()
+        });
+        let json = frame_to_json(&frame);
+        assert!(json.contains("\"metalness\":0.5"), "{json}");
+        assert!(!json.contains("roughness"), "{json}");
+        assert!(!json.contains("castShadow"), "{json}");
+    }
+
     #[test]
     fn frame_json_is_valid_shape() {
         let frame = snapshot(&scene_with_body(), None);
@@ -1861,10 +2540,102 @@ mod tests {
         let json = frame_to_json(&snapshot(&scene_with_body(), None));
         let html = template(&format!("[{json}]"));
         assert!(html.contains("PWE 3D viewport"));
-        // RFC-0041: three.js is vendored locally, not loaded from a CDN.
-        assert!(html.contains("/vendor/three/three.module.js"));
         // The frames placeholder is substituted.
         assert!(html.contains(&format!("[{json}]")));
+    }
+
+    /// `write_viewer` output must be a genuine single file: the vendored
+    /// three.js modules ride inside the document and are loaded through blob
+    /// URLs, so the page opens straight from `file://` with no server route,
+    /// no import map and no CDN.
+    #[test]
+    fn static_viewer_is_one_self_contained_file() {
+        let json = frame_to_json(&snapshot(&scene_with_body(), None));
+        let html = template(&format!("[{json}]"));
+        // Embedded vendored sources + blob bootstrap.
+        assert!(html.contains("id=\"pwe-vendor\""), "vendor payload missing");
+        assert!(
+            html.contains("URL.createObjectURL"),
+            "blob bootstrap missing"
+        );
+        assert!(html.contains("\"three\":\""), "three.module.js not inlined");
+        assert!(
+            html.contains("SPDX-License-Identifier: MIT"),
+            "vendor truncated"
+        );
+        // The only relative import inside the addons is rewritten to a bare
+        // specifier the bootstrap can resolve.
+        assert!(!html.contains("'../math/ConvexHull.js'"));
+        assert!(html.contains("three/addons/math/ConvexHull.js"));
+        // No server-relative route, no import map (blocked on file://), no CDN.
+        assert!(!html.contains("/vendor/three/"));
+        assert!(!html.contains("<script type=\"importmap\">"));
+        assert!(!html.contains("unpkg.com"));
+        // Both viewers escape user-authored strings before innerHTML sinks.
+        assert!(html.contains("const esc ="));
+        // Realistic presentation: ACES tone mapping, bloom composer, a
+        // shadow-casting key light, data-driven primitives and fading trails.
+        assert!(html.contains("ACESFilmicToneMapping"));
+        assert!(html.contains("UnrealBloomPass"));
+        assert!(html.contains("renderer.shadowMap.enabled"));
+        assert!(html.contains("o.castShadow"));
+        assert!(html.contains("const PRIMS ="));
+        assert!(html.contains("function updateTrails"));
+        // The postprocessing modules ride inside the same document.
+        assert!(
+            html.contains("\"three/addons/postprocessing/UnrealBloomPass.js\":\""),
+            "postprocessing payload missing"
+        );
+    }
+
+    /// Names, field names and info strings are user-authored text; they must
+    /// never be able to close the data `<script>` element or inject markup.
+    #[test]
+    fn frame_json_cannot_break_out_of_script_or_markup() {
+        let mut scene = Scene::new(Vec3::ZERO);
+        scene.insert(EntityId(1), Entity::dynamic());
+        let mut names = std::collections::BTreeMap::new();
+        names.insert(1u128, "</script><script>alert(1)</script>\n\t".to_string());
+        let frame = snapshot_with(&names, &[], &scene, None);
+        let json = frame_to_json(&frame);
+        assert!(!json.contains("</script>"), "raw tag leaked: {json}");
+        assert!(!json.contains("<script"), "raw tag leaked: {json}");
+        assert!(
+            json.contains("\\u003c/script\\u003e"),
+            "missing escape: {json}"
+        );
+        assert!(
+            json.contains("\\n") && json.contains("\\t"),
+            "missing escapes: {json}"
+        );
+        let html = template(&format!("[{json}]"));
+        assert!(!html.contains("<script>alert(1)"));
+        // Live info lines get the same treatment.
+        let live = LiveState {
+            frame,
+            step: 1,
+            info: vec!["</script>x".into()],
+        };
+        let lj = live_state_json(&live);
+        assert!(!lj.contains("</script>"), "raw tag leaked: {lj}");
+    }
+
+    /// The 7-slot body state must serialize as a compact JSON array.
+    #[test]
+    fn state_slots_serialize_as_a_json_array() {
+        let mut scene = Scene::new(Vec3::ZERO);
+        let mut e = Entity::dynamic();
+        e.state = Some(crate::components::State::new(vec![
+            4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]));
+        scene.insert(EntityId(1), e);
+        let json = frame_to_json(&snapshot(&scene, None));
+        // The body state is a fixed 16-slot register file; it serializes as a
+        // compact JSON array of slot values.
+        assert!(
+            json.contains("\"state\":[4,2,0,0,0,0,1,0,0,0,0,0,0,0,0,0]"),
+            "{json}"
+        );
     }
 
     #[test]
@@ -1892,12 +2663,25 @@ mod tests {
         assert!(page.contains("forceContextLoss"));
         assert!(page.contains("AbortController"));
         assert!(page.contains("pagehide"));
+        // User-authored names/info are escaped before innerHTML sinks.
+        assert!(page.contains("const esc=s=>"));
+        // Selection walks up the parent chain to the entity id (opaque ids).
+        assert!(page.contains("userData.id"));
         // Leak guard: every per-frame removal must dispose GPU/DOM resources,
         // or memory (and close time) grows with runtime.
         assert!(page.contains("function disposeObj"));
         assert!(page.contains("function disposeMat"));
         assert!(page.contains("scene.remove(m); disposeObj(m)"));
         assert!(page.contains("OrbitControls"));
+        // Realistic presentation: ACES tone mapping, bloom composer, a
+        // shadow-casting key light, data-driven primitives and rolling trails.
+        assert!(page.contains("ACESFilmicToneMapping"));
+        assert!(page.contains("UnrealBloomPass"));
+        assert!(page.contains("composer.render()"));
+        assert!(page.contains("renderer.shadowMap.enabled"));
+        assert!(page.contains("o.castShadow"));
+        assert!(page.contains("const PRIMS ="));
+        assert!(page.contains("function updateTrails"));
     }
 
     #[test]

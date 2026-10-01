@@ -3590,6 +3590,23 @@ fn micro_shape_parts_carry_ring_colour_and_orbit() {
     );
 }
 
+/// The 3D primitives — cylinder, cone, plane — parse as shape parts (kinds
+/// 9/10/11) and their `(radius, height)` pair survives into the frame.
+#[test]
+fn three_dimensional_shape_parts_parse() {
+    let src = "world { gravity=(0,0,0) \
+        shape tower { \
+            part cylinder=(0.5,2.0); \
+            part cone=(0.5,1.0); \
+            part plane=(4.0,3.0) } \
+        entity e { shape = tower } }";
+    let rt = LangRuntime::compile(src).expect("cylinder/cone/plane must compile");
+    let json = crate::present::frame_to_json(&rt.present_frame(None));
+    assert!(json.contains("\"k\":9"), "cylinder part: {json}");
+    assert!(json.contains("\"k\":10"), "cone part: {json}");
+    assert!(json.contains("\"k\":11"), "plane part: {json}");
+}
+
 /// #75: `spin` is documented bare (`spin s`) but the older documented form
 /// `spin = s` must also parse — both spellings describe the same part.
 #[test]

@@ -1758,6 +1758,9 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     "hull" => 5,
                                     "poly" => 6,
                                     "ring" => 8,
+                                    "cylinder" => 9,
+                                    "cone" => 10,
+                                    "plane" => 11,
                                     _ => 0,
                                 };
                                 let val = next_pair(&mut pi)?;

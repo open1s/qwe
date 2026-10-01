@@ -562,8 +562,8 @@ unambiguous.
 * entity `position` `velocity` `state` `vec` `mass` `dynamic` `nbody` `parent`
   `restitution` `friction` `box` `sphere` `hull` `rotation` `camera` `color`
   `size` `opacity` `glow` `label` `orient` `vector`
-* shapes `point` `sphere` `box` `capsule` `svg` `hull` `poly` `at` `depth`
-  `scale` `faces`
+* shapes `point` `sphere` `box` `capsule` `svg` `hull` `poly` `ring`
+  `cylinder` `cone` `plane` `at` `depth` `scale` `faces`
 * control `return` `let` `repeat` `until` `while` `for` `in` `break` `continue`
   `if` `else`
 * rules `inte` `integrate` `+=` (and the operators `inte(…)`, `deriv(…)`)
@@ -650,6 +650,8 @@ Presentation-only: `color`, `shape = point\|sphere\|box\|capsule\|<custom>`,
 
 * `sphere = r`, `box = (dx,dy,dz)`, `capsule = (r0, len, r1)`;
 * `ring = (radius, tube)` (a torus — e.g. an electron shell);
+* `cylinder = (radius, height)`, `cone = (radius, height)`,
+  `plane = (width, height)` (3D primitives; a `plane` renders double-sided);
 * `hull = [(x,y,z), …]` (convex);
 * `poly = [(x,y,z), …] faces = [[i,j,k,…], …]` (arbitrary mesh);
 * `svg = "<d>" depth <d>`;

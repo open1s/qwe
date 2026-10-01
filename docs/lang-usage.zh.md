@@ -594,6 +594,9 @@ ODE 视角在总量上一致，在单个分子上不一致。见 `cli/examples/k
 `part <kind> = <参数> [at (x,y,z)] [scale s]`：
 
 * `sphere = r`、`box = (dx,dy,dz)`、`capsule = (r0, len, r1)`；
+* `ring = (radius, tube)`（圆环 —— 例如电子壳层）；
+* `cylinder = (radius, height)`、`cone = (radius, height)`、
+  `plane = (width, height)`（3D 图元；`plane` 双面渲染）；
 * `hull = [(x,y,z), …]`（凸）；
 * `poly = [(x,y,z), …] faces = [[i,j,k,…], …]`（任意网格）；
 * `svg = "<d>" depth <d>`；

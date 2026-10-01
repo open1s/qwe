@@ -3,8 +3,10 @@
 //!
 //! Run: `cargo run --example present_demo`  then open `science_viewer.html`.
 //!
-//! The generated HTML uses Three.js (loaded from a CDN) and plays the frames
-//! back with orbit controls, a timeline slider, and a state/channel panel.
+//! The generated HTML is fully self-contained: Three.js (including the bloom
+//! postprocessing modules) is vendored into the document, and it plays the
+//! frames back with orbit controls, a timeline slider, and a state/channel
+//! panel — it opens straight from `file://` with no server.
 
 use pwe_api::EntityId;
 use pwe_reference::lang::LangRuntime;
@@ -19,6 +21,15 @@ const SOURCE: &str = r#"
         }
         entity ground {
             position = (0, -2, 0); dynamic = false; box = (40, 2, 40)
+        }
+        shape pedestal {
+            part cylinder = (1.5, 0.6)
+            part cone = (1.2, 1.0)
+            part plane = (3.0, 3.0)
+        }
+        entity monument {
+            position = (4, -1.4, -3); dynamic = false
+            shape = pedestal
         }
         chan telemetry { value = 0 }
     }
