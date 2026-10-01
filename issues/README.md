@@ -115,6 +115,8 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0086](https://github.com/open1s/qwe/issues/86) | Medium | `c665a0db` fails the CI gate (E0063 `pipeline_demo` missing `EntityDecl.tag` ×2 + clippy parens under `-D`): main/CI red ~12 min until `78e157ff`; gate-discipline recurrence noted at #78's close | .github/workflows/ci.yml, reference/examples/pipeline_demo.rs, dsl.rs EntityDecl |
 | [0087](https://github.com/open1s/qwe/issues/87) | Low | `bonds {}` swallows typos: unknown key/`within=junk` → `max=∞` default (live probe: `withn` typo bonds atoms 5 apart), missing tag/inverted range silent, undocumented `max` alias, docs show `within` required; + reaction.pwe header still describes removed per-pair `max` mechanism | lang/parser.rs `Rule::bonds_stmt`, cli/examples/reaction.pwe:6-8 |
 | [0088](https://github.com/open1s/qwe/issues/88) | Low | entity-level `opacity_field` still raw after #81's fix: docs promise `[0,1]` (lang-usage:383) but `opacity = 2.5` and duplicates compile rc 0 (functional path — laser.pwe uses entity-level opacity, `/state` carries it); part-level got 105/107 in e1534259 | lang/parser.rs `opacity_field` (:142), entity_field (:153) |
+| [0089](https://github.com/open1s/qwe/issues/89) | Low | README/README-ZH counts stale at tip: badge/table/prose say 439 tests + 25 conformance, actual **450/26** (ebbee9df refreshed correctly, 84cd89bb/8388c3d7 drifted them; third #74-class occurrence, no count gate) | README.md:9/:10/:22/:186, README-ZH.md:8/:9/:210/:232 |
+| [0090](https://github.com/open1s/qwe/issues/90) | Low | required `Commit message` check RED on main tip: `8388c3d7 lang:` and `84cd89bb present:` aren't valid types; 3 tips pushed-then-force-rewritten (933b06ef ✗ → 2d02ca6a ✗ → fab7a30f ✓ → 24a3a314 ✗) in 50 min; no pre-push subject check | .github/workflows/commit-lint.yml, CONTRIBUTING § Commit messages |
 
 ## Suggested order
 
@@ -1476,5 +1478,47 @@ Review pass 43 (2 commits `2ee12aae` + `1083500c`; closed 0086/0088 —
 4. Note: `2ee12aae`+`1083500c` arrived as one push, so CI runs exist on
    the head only (both commits covered by the same green head).
 5. Open after pass 43: **none**.
+
+Review pass 44 (6 commits `e7966104`…`24a3a314`; filed 0089/0090):
+
+1. Gates green at tip `24a3a314`: fmt, clippy, **450 tests** (+11),
+   conformance **26/26** (+1), release build.
+2. `e7966104` benchmark regression gate: reviewed `tools/bench-check.sh`
+   (parse of `us/op` lines, local 5%/15% warn/fail, CI ceilings = 6×
+   baseline, `--update` re-record, missing-label notes, pipefail-safe)
+   and **ran it**: rc 0, `0 fail(s), 2 warning(s)` — `compile(field)`
+   +10%, `present_frame` +8% (the latter plausible after the +1036-line
+   viewer rewrite; warn-only, recommend `--update` if intended).
+   `gate.sh` now includes it; ci.yml gained a `bench` job.
+3. `84cd89bb` viewer→3D-layer verified end-to-end: new shape kinds
+   `cylinder/cone/plane` compile rc 0; `pwe present` serves HTTP 200
+   (30 KB shell), `/state` streams, **all vendored assets 200**
+   (`three.module.js` 1.27 MB, EffectComposer/UnrealBloomPass/
+   CopyShader/LuminosityHighPassShader, LICENSE = MIT + copyright),
+   import map `three → /vendor/three/three.module.js` present, and a
+   **real-browser check** (chrome-devtools) imported the full module
+   graph (`three r160`, `UnrealBloomPass`/`EffectComposer` = function),
+   canvas 1200×2029, WebGL2 — screenshot shows the laser scene with PBR
+   nucleus/bloom, grid, HUD, legend rendering correctly.
+4. `3ac54656` correct: `science_viewer.html` is `present_demo`'s
+   generated output — pre-emptively gitignored, never tracked (no
+   stale-tracking bug).
+5. `8388c3d7` is **not** docs-only despite the subject style: 21 files
+   +1122 (typed-arrays implementation in `lang/systems.rs`, +153 test
+   lines) plus RFC-0044/0047 updates — but subject `lang:` violates the
+   commit-lint type list (see 0090).
+6. `24a3a314` verified: `pwe compile robot.pwe` → rc 0 with clean
+   3-line output, no warnings (claim accurate).
+7. **0089 (Low) filed**: README/README-ZH say 439 tests + 25/25
+   (badge, prose ×2, totals tables) vs actual **450/26** — third
+   #74-class drift (ebbee9df was correct when written; the next two
+   commits drifted it); suggest a count-asserting test like the `.pwe`
+   fmt gate.
+8. **0090 (Low) filed**: tip's required `Commit message` check is
+   **failing** (`8388c3d7 lang:`, `84cd89bb present:` not in the type
+   list), and three pushed tips were force-rewritten within 50 min
+   chasing the lint; suggest rewriting the two subjects + a pre-push
+   local subject check (gate.sh step or commit-msg hook).
+9. Open after pass 44: **#89, #90**.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
