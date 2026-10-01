@@ -344,7 +344,12 @@ fn cmd_compile(args: &[String]) -> i32 {
     let (parsed, sources) = match lang::load_program_sources(std::path::Path::new(&input)) {
         Ok(pair) => pair,
         Err(e) => {
-            eprintln!("{}", lang::diagnose("", &e));
+            // No sources were returned, so re-read the file to render the
+            // caret — unless it imports modules, where the offset may belong
+            // to an imported file and would point at the wrong text.
+            let raw = std::fs::read_to_string(&input).unwrap_or_default();
+            let text = lang::load_error_source(&raw).unwrap_or_default();
+            eprintln!("{}", lang::diagnose(&text, &e));
             return 1;
         }
     };

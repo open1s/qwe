@@ -1758,6 +1758,23 @@ pub fn load_program_sources_with_root(
     load_program_sources_inner(path, Some(root))
 }
 
+/// The source a failure of [`load_program_sources`] can be located in.
+///
+/// That function hands back its [`ProgramSources`] only on success, so a
+/// caller rendering a `line:col` caret for a load failure re-reads the file
+/// and passes it through here: the result is the file with its directive lines
+/// stripped (the text the parser actually measured offsets against), or `None`
+/// when the file imports modules — the offset may then belong to an imported
+/// file, and pointing at this one would be misleading.
+pub fn load_error_source(src: &str) -> Option<String> {
+    let strip = strip_directives(src);
+    if strip.imports.is_empty() {
+        Some(strip.source)
+    } else {
+        None
+    }
+}
+
 fn load_program_sources_inner(
     path: &std::path::Path,
     root_override: Option<&str>,

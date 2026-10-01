@@ -528,6 +528,69 @@ pub(crate) fn next_pair<'a>(
     pairs.next().ok_or_else(|| error(Status::Invalid, 60))
 }
 
+/// The leading key of an option pair: `opacity = 0.5` → `opacity`,
+/// `at (0,0,0)` → `at`, `color=0xFF0000` → `color`.
+pub(crate) fn opt_key(s: &str) -> &str {
+    let before_eq = s.split('=').next().unwrap_or(s);
+    before_eq.split_whitespace().next().unwrap_or("").trim()
+}
+
+/// Records one option occurrence on an item. Every option may appear at most
+/// once, so a repeat is a located error instead of a silent last-wins write.
+pub(crate) fn once(seen: &mut Vec<Rule>, rule: Rule, key: &str, offset: usize) -> Result<()> {
+    if seen.contains(&rule) {
+        return Err(error_at(
+            Status::Invalid,
+            107,
+            offset,
+            format!("duplicate `{key}` option (each option may appear at most once)"),
+        ));
+    }
+    seen.push(rule);
+    Ok(())
+}
+
+/// Parses an option's numeric text, rejecting non-finite and non-parseable
+/// values instead of falling back to a default.
+pub(crate) fn opt_number(text: &str, what: &str, offset: usize) -> Result<f64> {
+    match text.trim().parse::<f64>() {
+        Ok(v) if v.is_finite() => Ok(v),
+        _ => Err(error_at(
+            Status::Invalid,
+            108,
+            offset,
+            format!("`{what}` expects a finite number, got `{text}`"),
+        )),
+    }
+}
+
+/// An entity tag (`tag = atom`, `bonds { tag = … }`) is a bare identifier.
+pub(crate) fn is_tag_name(s: &str) -> bool {
+    let mut it = s.chars();
+    matches!(it.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && it.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Parses a `color = 0xRRGGBB` option. The entity `color` field already
+/// rejects anything but exactly six hex digits (detail 64); a per-part color
+/// must not silently drop a malformed literal instead.
+pub(crate) fn parse_color_opt(text: &str, offset: usize) -> Result<u32> {
+    let raw = text.trim();
+    let hex = raw.split("0x").nth(1).unwrap_or("");
+    let bad = || {
+        error_at(
+            Status::Invalid,
+            64,
+            offset,
+            format!("invalid color `{raw}` (expected `color = 0xRRGGBB`)"),
+        )
+    };
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(bad());
+    }
+    u32::from_str_radix(hex, 16).map_err(|_| bad())
+}
+
 pub(crate) fn check_let_name(name: &str, offset: usize) -> Result<()> {
     let reserved = name == "t"
         || name == "pi"
@@ -1411,40 +1474,141 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             model.channels.push(crate::dsl::ChanDecl { name, value });
                         }
                         Rule::bonds_stmt => {
-                            let mut tag = String::new();
+                            let stmt_start = item.as_span().start();
+                            let mut seen: Vec<String> = Vec::new();
+                            let mut tag: Option<String> = None;
                             let mut other: Option<String> = None;
-                            let mut min = 0.0f64;
-                            let mut max = f64::INFINITY;
+                            let mut min: Option<f64> = None;
+                            let mut within: Option<f64> = None;
                             let mut axis: Option<(f64, f64, f64)> = None;
                             let mut angle: Option<f64> = None;
                             for p in item.into_inner() {
+                                let start = p.as_span().start();
                                 let mut pi = p.into_inner();
                                 let key = next_pair(&mut pi)?.as_str().to_string();
                                 let val = next_pair(&mut pi)?;
-                                let text = val.as_str().trim().to_string();
+                                if seen.contains(&key) {
+                                    return Err(error_at(
+                                        Status::Invalid,
+                                        107,
+                                        start,
+                                        format!(
+                                            "duplicate `bonds` key `{key}` (each key may appear at most once)"
+                                        ),
+                                    ));
+                                }
+                                seen.push(key.clone());
+                                let text = val.as_str().trim().trim_matches('"').to_string();
                                 match key.as_str() {
-                                    "tag" => tag = text,
-                                    "other" => other = Some(text),
-                                    "min" => min = text.parse().unwrap_or(0.0),
-                                    "within" | "max" => max = text.parse().unwrap_or(f64::INFINITY),
+                                    "tag" => {
+                                        if !is_tag_name(&text) {
+                                            return Err(error_at(
+                                                Status::Invalid,
+                                                108,
+                                                start,
+                                                format!("`bonds tag` expects a name, got `{text}`"),
+                                            ));
+                                        }
+                                        tag = Some(text);
+                                    }
+                                    "other" => {
+                                        if !is_tag_name(&text) {
+                                            return Err(error_at(
+                                                Status::Invalid,
+                                                108,
+                                                start,
+                                                format!(
+                                                    "`bonds other` expects a name, got `{text}`"
+                                                ),
+                                            ));
+                                        }
+                                        other = Some(text);
+                                    }
+                                    "min" => min = Some(opt_number(&text, "bonds min", start)?),
+                                    "within" => {
+                                        within = Some(opt_number(&text, "bonds within", start)?)
+                                    }
                                     "axis" => {
+                                        if val.as_rule() != Rule::vec3 {
+                                            return Err(error_at(
+                                                Status::Invalid,
+                                                108,
+                                                start,
+                                                format!(
+                                                    "`bonds axis` expects a vec3, got `{text}`"
+                                                ),
+                                            ));
+                                        }
                                         let v = parse_vec3(val);
                                         axis = Some((v.x, v.y, v.z));
                                     }
-                                    "angle" => angle = Some(text.parse().unwrap_or(0.0)),
-                                    _ => {}
+                                    "angle" => {
+                                        angle = Some(opt_number(&text, "bonds angle", start)?)
+                                    }
+                                    unknown => {
+                                        return Err(error_at(
+                                            Status::Invalid,
+                                            108,
+                                            start,
+                                            format!(
+                                                "unknown `bonds` key `{unknown}` (expected tag, other, within, min, axis, angle)"
+                                            ),
+                                        ));
+                                    }
                                 }
+                            }
+                            let tag = tag.ok_or_else(|| {
+                                error_at(
+                                    Status::Invalid,
+                                    108,
+                                    stmt_start,
+                                    "`bonds` requires `tag = <name>` (a net without a tag matches nothing)",
+                                )
+                            })?;
+                            let within = within.ok_or_else(|| {
+                                error_at(
+                                    Status::Invalid,
+                                    108,
+                                    stmt_start,
+                                    "`bonds` requires `within = <distance>` (the bond radius)",
+                                )
+                            })?;
+                            let min = min.unwrap_or(0.0);
+                            if min < 0.0 {
+                                return Err(error_at(
+                                    Status::Invalid,
+                                    108,
+                                    stmt_start,
+                                    format!("`bonds min` must be ≥ 0, got {min}"),
+                                ));
+                            }
+                            if within <= 0.0 {
+                                return Err(error_at(
+                                    Status::Invalid,
+                                    108,
+                                    stmt_start,
+                                    format!("`bonds within` must be > 0, got {within}"),
+                                ));
+                            }
+                            if min > within {
+                                return Err(error_at(
+                                    Status::Invalid,
+                                    108,
+                                    stmt_start,
+                                    format!("inverted `bonds` range: min {min} > within {within}"),
+                                ));
                             }
                             model.bond_nets.push(crate::dsl::BondNet {
                                 tag,
                                 other,
                                 min,
-                                max,
+                                max: within,
                                 axis,
                                 angle,
                             });
                         }
                         Rule::bond_stmt => {
+                            let stmt_start = item.as_span().start();
                             let mut inner = item.into_inner();
                             let a = next_pair(&mut inner)?.as_str().to_string();
                             let b = next_pair(&mut inner)?.as_str().to_string();
@@ -1453,8 +1617,11 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let mut cloud = false;
                             let mut min: Option<f64> = None;
                             let mut max: Option<f64> = None;
+                            let mut seen: Vec<Rule> = Vec::new();
                             for opt in inner {
                                 let rule = opt.as_rule();
+                                let start = opt.as_span().start();
+                                once(&mut seen, rule, opt_key(opt.as_str()), start)?;
                                 let v = next_pair(&mut opt.into_inner())?;
                                 match rule {
                                     Rule::bond_order => {
@@ -1464,9 +1631,35 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         polarity = parse_value(v).clamp(0.0, 1.0);
                                     }
                                     Rule::bond_cloud => cloud = v.as_str() == "true",
-                                    Rule::bond_min => min = Some(parse_value(v)),
-                                    Rule::bond_max => max = Some(parse_value(v)),
+                                    Rule::bond_min => {
+                                        min = Some(parse_value(v));
+                                    }
+                                    Rule::bond_max => {
+                                        max = Some(parse_value(v));
+                                    }
                                     _ => {}
+                                }
+                            }
+                            for (name, v) in [("min", min), ("max", max)] {
+                                if let Some(v) = v {
+                                    if v < 0.0 || !v.is_finite() {
+                                        return Err(error_at(
+                                            Status::Invalid,
+                                            108,
+                                            stmt_start,
+                                            format!("`bond {name}` must be a finite distance ≥ 0, got {v}"),
+                                        ));
+                                    }
+                                }
+                            }
+                            if let (Some(lo), Some(hi)) = (min, max) {
+                                if lo > hi {
+                                    return Err(error_at(
+                                        Status::Invalid,
+                                        108,
+                                        stmt_start,
+                                        format!("inverted `bond` range: min {lo} > max {hi}"),
+                                    ));
                                 }
                             }
                             model.bonds.push(crate::dsl::BondDecl {
@@ -1496,15 +1689,13 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                     let mut orbit: Option<(f64, f64, f64)> = None;
                                     let mut orbit_axis: Option<(f64, f64, f64)> = None;
                                     let mut spin = 0.0f64;
+                                    let mut seen: Vec<Rule> = Vec::new();
                                     for opt in pi {
                                         let rule = opt.as_rule();
+                                        let start = opt.as_span().start();
+                                        once(&mut seen, rule, opt_key(opt.as_str()), start)?;
                                         if rule == Rule::part_color_opt {
-                                            let text = opt.as_str();
-                                            if let Some(pos) = text.find("0x") {
-                                                color =
-                                                    u32::from_str_radix(text[pos + 2..].trim(), 16)
-                                                        .ok();
-                                            }
+                                            color = Some(parse_color_opt(opt.as_str(), start)?);
                                             continue;
                                         }
                                         let inner = next_pair(&mut opt.into_inner())?;
@@ -1525,7 +1716,14 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                             Rule::part_opacity_opt => {
                                                 let v = parse_value(inner);
                                                 if !(0.0..=1.0).contains(&v) {
-                                                    return Err(error(Status::Invalid, 105));
+                                                    return Err(error_at(
+                                                        Status::Invalid,
+                                                        105,
+                                                        start,
+                                                        format!(
+                                                            "per-part opacity {v} is outside 0..1"
+                                                        ),
+                                                    ));
                                                 }
                                                 opacity = Some(v);
                                             }
@@ -1599,15 +1797,14 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                 let mut orbit: Option<(f64, f64, f64)> = None;
                                 let mut orbit_axis: Option<(f64, f64, f64)> = None;
                                 let mut spin = 0.0f64;
+                                let mut seen: Vec<Rule> = Vec::new();
                                 for opt in pi {
                                     let rule = opt.as_rule();
+                                    let start = opt.as_span().start();
+                                    once(&mut seen, rule, opt_key(opt.as_str()), start)?;
                                     if rule == Rule::part_color_opt {
                                         // `color = 0xRRGGBB` (an atomic rule).
-                                        let text = opt.as_str();
-                                        if let Some(pos) = text.find("0x") {
-                                            color = u32::from_str_radix(text[pos + 2..].trim(), 16)
-                                                .ok();
-                                        }
+                                        color = Some(parse_color_opt(opt.as_str(), start)?);
                                         continue;
                                     }
                                     let inner = next_pair(&mut opt.into_inner())?;
@@ -1629,7 +1826,12 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         Rule::part_opacity_opt => {
                                             let v = parse_value(inner);
                                             if !(0.0..=1.0).contains(&v) {
-                                                return Err(error(Status::Invalid, 105));
+                                                return Err(error_at(
+                                                    Status::Invalid,
+                                                    105,
+                                                    start,
+                                                    format!("per-part opacity {v} is outside 0..1"),
+                                                ));
                                             }
                                             opacity = Some(v);
                                         }

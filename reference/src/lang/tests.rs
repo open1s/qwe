@@ -3664,6 +3664,125 @@ fn proximity_gated_bonds_carry_min_max() {
     assert!(json.contains("\"max\":2"), "{json}");
 }
 
+/// #81: a shape part may carry each option at most once — a repeat is a
+/// located error (detail 107), not a silent last-wins write.
+#[test]
+fn duplicate_shape_part_opts_are_rejected() {
+    let cases = [
+        "part sphere=0.1 opacity=0.3 opacity=0.8",
+        "part sphere=0.1 color=0xFF0000 color=0x00FF00",
+        "part sphere=0.1 at (0,0,0) at (1,1,1)",
+        "part sphere=0.1 scale 1.0 scale 2.0",
+        "part sphere=0.1 spin 1.0 spin 2.0",
+    ];
+    for bad in cases {
+        let src = format!("world {{ gravity=(0,0,0) shape s {{ {bad} }} entity e {{ shape=s }} }}");
+        let err = LangRuntime::compile(&src)
+            .err()
+            .unwrap_or_else(|| panic!("`{bad}` must be rejected"));
+        assert_eq!(err.detail, 107, "detail for `{bad}`");
+    }
+    // Same rule for the referenced-shape form.
+    let src = "world { gravity=(0,0,0) \
+        shape inner { part sphere=0.1 color=0xFF5555 } \
+        shape outer { part inner at (0,0,0) at (1,1,1) } \
+        entity e { shape = outer } }";
+    let err = LangRuntime::compile(src)
+        .err()
+        .expect("a repeated `at` on a shape reference must be rejected");
+    assert_eq!(err.detail, 107);
+}
+
+/// #81: the out-of-range `opacity` error names the value and carries a source
+/// caret instead of the bare "unspecified compile error".
+#[test]
+fn opacity_error_names_the_value_and_points_at_it() {
+    clear_diagnostics();
+    let src =
+        "world { gravity=(0,0,0) shape s { part sphere=0.1 opacity=2 } entity e { shape=s } }";
+    let err = LangRuntime::compile(src)
+        .err()
+        .expect("`opacity=2` must be rejected");
+    assert_eq!(err.detail, 105);
+    let text = diagnose(src, &err);
+    assert!(
+        text.contains("opacity 2"),
+        "message names the value: {text}"
+    );
+    assert!(
+        text.contains("line") && text.contains('^'),
+        "diagnostic should carry a source caret: {text}"
+    );
+}
+
+/// #81: a malformed per-part colour is rejected like the entity `color` field
+/// (detail 64) instead of silently dropping the colour.
+#[test]
+fn malformed_part_color_is_rejected() {
+    for bad in ["color=0x12345", "color=0xFF6B4ACC"] {
+        let src = format!(
+            "world {{ gravity=(0,0,0) shape s {{ part sphere=0.1 {bad} }} entity e {{ shape=s }} }}"
+        );
+        let err = LangRuntime::compile(&src)
+            .err()
+            .unwrap_or_else(|| panic!("`{bad}` must be rejected"));
+        assert_eq!(err.detail, 64, "detail for `{bad}`");
+    }
+}
+
+/// #85: `bond` rejects an inverted or negative range and any repeated option.
+#[test]
+fn bond_opts_are_validated() {
+    let cases: [(&str, u32); 6] = [
+        ("min = 5 max = 1", 108),
+        ("min = -2", 108),
+        ("max = -1", 108),
+        ("min = 0.5 min = 0.7", 107),
+        ("order = 2 order = 3", 107),
+        ("cloud = true cloud = false", 107),
+    ];
+    for (bad, detail) in cases {
+        let src = format!(
+            "world {{ gravity=(0,0,0) entity a {{ position=(0,0,0) }} \
+             entity b {{ position=(1,0,0) }} bond a b {bad} }}"
+        );
+        let err = LangRuntime::compile(&src)
+            .err()
+            .unwrap_or_else(|| panic!("`{bad}` must be rejected"));
+        assert_eq!(err.detail, detail, "detail for `{bad}`");
+    }
+}
+
+/// #87: `bonds { … }` requires `tag` and `within`, rejects unknown/duplicate
+/// keys, non-numeric radii and an inverted range — no more `within = ∞`
+/// fallback that live-bonds every tagged pair.
+#[test]
+fn bonds_net_opts_are_validated() {
+    let cases: [(&str, u32); 9] = [
+        ("bonds { }", 108),
+        ("bonds { tag = atom; withn = 1.6 }", 108),
+        ("bonds { within = 1.6 }", 108),
+        ("bonds { tag = atom; within = junk }", 108),
+        ("bonds { tag = atom; min = 5; within = 1 }", 108),
+        ("bonds { tag = atom; within = -1.0 }", 108),
+        ("bonds { tag = atom; axis = 4; within = 1.0 }", 108),
+        ("bonds { tag = atom; max = 1.6 }", 108),
+        ("bonds { tag = atom; within = 1.6; within = 2.0 }", 107),
+    ];
+    for (bad, detail) in cases {
+        let src =
+            format!("world {{ gravity=(0,0,0) entity a {{ position=(0,0,0) tag=atom }} {bad} }}");
+        let err = LangRuntime::compile(&src)
+            .err()
+            .unwrap_or_else(|| panic!("`{bad}` must be rejected"));
+        assert_eq!(err.detail, detail, "detail for `{bad}`");
+    }
+    // A well-formed net still compiles and bonds by proximity.
+    let src = "world { gravity=(0,0,0) entity a { position=(0,0,0) tag=atom } \
+        entity b { position=(1,0,0) tag=atom } bonds { tag = atom; within = 1.6 } }";
+    LangRuntime::compile(src).expect("a valid `bonds` net must compile");
+}
+
 #[test]
 fn neighbourhood_bond_net_forms_bonds() {
     let rt = LangRuntime::compile(

@@ -550,7 +550,19 @@ ODE 视角在总量上一致，在单个分子上不一致。见 `cli/examples/k
 | `field <name> { width; height; dx; depth? }` | 标量网格。 |
 | `pool <name>[N] { … }` | N 个未激活槽，用于动态实体。 |
 | `soft <name> { nx; ny; nz?; spacing; origin; mass }` | 质量-弹簧网格。 |
+| `bond <a> <b> [order=n] [polarity=p] [cloud=true] [min=d] [max=d]` | 两个具名实体之间的渲染键（球棍模型）。 |
+| `bonds { tag = <t>; other = <u>?; within = <d>; min = <d>?; axis = (x,y,z)?; angle = <rad>? }` | **邻域键网**：自动连接 `tag = <t>`（给了 `other` 则只连 `t`–`u` 跨组对）且距离落在 `[min, within]` 内的实体对，每帧重算（键随远近形成/断裂，例如化学反应）。`axis`+`angle` 再加**键角**门。 |
 | `import "…"` | 模块导入（路径相对当前文件）。 |
+
+`bond` **仅用于呈现**（不是物理约束）：在实体 `<a>` 与 `<b>` 的中心之间画一根
+短棍。选项：`order`（1/2/3 = 单/双/三键）、`polarity` ∈ `[0,1]`（把键的颜色从 A
+渐变到 B）、`cloud=true`（半透明的共用电子云）、`min`/`max` 距离（两端距离落在
+该区间内才画这根键 —— 近距成键/断键，例如化学反应）。
+
+两者的选项都会校验：同一选项**最多出现一次**；`bond` 须满足 `0 ≤ min ≤ max`；
+`bonds` 必须给出 `tag` 与 `within`，且 `0 < min ≤ within`。未知键或非数值是错误
+（detail 107/108），所以 `withn` 这类拼写错误会立刻报错，而不是悄悄让 `within`
+保持无界、把同 tag 的实体不管远近全连起来。
 
 **实体 id 顺序**：已声明实体 `1..E`，然后通道，然后池槽（`<pool>#k`），然后软体粒子
 （`<soft>#k`）。
@@ -584,6 +596,17 @@ ODE 视角在总量上一致，在单个分子上不一致。见 `cli/examples/k
 * `poly = [(x,y,z), …] faces = [[i,j,k,…], …]`（任意网格）；
 * `svg = "<d>" depth <d>`；
 * `part <另形状> [at …] [scale …]`（组合，递归）。
+
+仅呈现的部件选项（全部可选，绝不影响语义）：
+
+* `color = 0xRRGGBB` —— 覆盖该部件的实体颜色（多色形状：质子/中子/电子）；
+* `opacity = o` —— 覆盖该部件的实体不透明度（`0..1`）；
+* `spin s` —— 自转角速度 rad/s（数值紧跟关键字；`spin = s` 也接受）；
+* `orbit (radius, speed, phase)` —— 让部件绕实体局部原点转动（电子绕核），
+  `speed` 为 rad/s；`axis (x,y,z)` 设轨道平面法线（默认局部 `+Z`）。
+
+同一部件上每个选项**最多出现一次**（detail 107）；`opacity` 超出 `0..1`
+（detail 105）或颜色字面量不合法（detail 64）都是错误，而不是被悄悄丢掉。
 
 ## 2.6 网格场
 
@@ -809,7 +832,11 @@ error 48: system 'update' is missing required parameter 'dt'
 | 100 | 赋值给未知状态槽（被忽略）—— 警告。 |
 | 101 | 模块名重复（两个模块声明了相同的 `module`）。 |
 | 102 | 引用了模块未导出的成员。 |
+| 103 | 字段名不是小写标识符。 |
+| 105 | 部件 `opacity` 超出 `0..1`。 |
 | 106 | `gillespie` 一步超出反应预算（`events`）—— 调大 `events` 或调小 `dt`。 |
+| 107 | 选项重复：部件 / `bond` / `bonds` 的每个选项最多只能出现一次。 |
+| 108 | `bond` / `bonds` 选项未知或非法（键拼错、数值不合法、缺 `tag`/`within`、范围颠倒）。 |
 
 **调试流程**：缩减到一个实体 + 一个系统；核对模型（§0.6）；核对积分/赋值陷阱；加
 `invariant`；`run … --steps N` 读打印状态。

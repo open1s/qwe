@@ -609,6 +609,12 @@ within that range — proximity-gated bonds that form/break, e.g. a chemical
 reaction). It is the basis of `std/molecules/`, where each atom is an entity and
 each chemical bond a `bond` — see L9 and `cli/examples/molecule.pwe`.
 
+Both statements validate their options: each option may appear **at most once**,
+a `bond` range must satisfy `0 ≤ min ≤ max`, and a `bonds` net requires `tag`
+and `within` with `0 < min ≤ within`. An unknown or non-numeric key is an error
+(details 107/108), so a typo like `withn` fails loudly instead of silently
+leaving `within` unbounded and bonding every tagged pair regardless of distance.
+
 **Entity id order**: declared entities `1..E`, then channels, then pool slots
 (`<pool>#k`), then soft particles (`<soft>#k`).
 
@@ -656,6 +662,10 @@ Presentation-only part options (all optional; they never affect semantics):
 * `orbit (radius, speed, phase)` — animates the part around the entity's local
   origin (electrons orbiting a nucleus), `speed` in rad/s; `axis (x,y,z)` sets
   the orbit-plane normal (default local `+Z`).
+
+Each option may appear **at most once** on a part (detail 107); an `opacity`
+outside `0..1` (detail 105) or a malformed colour literal (detail 64) is an
+error rather than a silently dropped value.
 
 `std/atoms/` uses these to draw atomic structure; `std/molecules/` for bonds.
 
@@ -922,6 +932,8 @@ error 48: system 'update' is missing required parameter 'dt'
 | 103 | A field name is not a lowercase identifier. |
 | 105 | A per-part `opacity` outside `0..1`. |
 | 106 | A `gillespie` step exceeded its reaction budget (`events`) — raise `events` or lower `dt`. |
+| 107 | A duplicate option: each option of a part, `bond` or `bonds` may appear at most once. |
+| 108 | An unknown or invalid `bond` / `bonds` option (bad key, non-numeric value, missing `tag`/`within`, inverted range). |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the
