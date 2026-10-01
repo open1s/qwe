@@ -272,6 +272,13 @@ declare_opcodes! {
     /// Result: the slot id, or 0 when the pool is full. Emits the activation and
     /// state writes.
     SpawnInto = 228 => u64,
+    /// RFC-0043: widen an exact `I64` value to `F64` (the coercion applied when
+    /// an integer is used where a number is required). Operand 0 = the integer.
+    I64ToF64 = 233 => f64,
+    /// RFC-0043: convert a numeric value to `I64`, truncating toward zero and
+    /// trapping (detail 18) on a non-finite input — the `i64(x)` cast and the
+    /// implicit demotion at an integer-annotated `let`.
+    F64ToI64 = 234 => none,
     /// `deriv(E)` history: read the previous (sub)step's value stored for a
     /// call site. The site id rides in `constant` (`Immediate::U64`). Result:
     /// the stored f64, or NaN when the site has no history yet.
@@ -830,6 +837,31 @@ impl EirModule {
                     Some(ValueType::U64)
                 }
                 Opcode::Time | Opcode::Random | Opcode::Io => Some(ValueType::F64),
+                Opcode::I64ToF64 => {
+                    // RFC-0043: exactly one integer operand; result is f64.
+                    if instruction.operands.len() != 1 {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    if reg_types
+                        .get(instruction.operands[0] as usize)
+                        .copied()
+                        .flatten()
+                        != Some(ValueType::I64)
+                    {
+                        return Err(error(Status::EirInvalid, 13, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::F64ToI64 => {
+                    // RFC-0043: exactly one numeric operand; result is i64.
+                    // (`F64ToI64` truncates toward zero and traps on a
+                    // non-finite input; `numeric_type` rejects e.g. a Bool.)
+                    if instruction.operands.len() != 1 {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    numeric_type(&reg_types, &instruction.operands, index)?;
+                    Some(ValueType::I64)
+                }
                 Opcode::Print => {
                     // `print(x)`: exactly one f64 operand; result is that value
                     // (transparent). Logs to the execution context.
@@ -1402,6 +1434,27 @@ impl EirModule {
                         _ => unreachable!(),
                     };
                     stacks[depth - 1].insert(instruction.result_id, out);
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::I64ToF64 => {
+                    let a = stacks[depth - 1]
+                        .get(&instruction.operands[0])
+                        .copied()
+                        .ok_or(error(Status::EirInvalid, 16, 0))?;
+                    let out = Immediate::F64(as_i64(a) as f64);
+                    stacks[depth - 1].insert(instruction.result_id, out);
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::F64ToI64 => {
+                    let a = stacks[depth - 1]
+                        .get(&instruction.operands[0])
+                        .copied()
+                        .ok_or(error(Status::EirInvalid, 16, 0))?;
+                    let x = as_f64(a);
+                    if !x.is_finite() {
+                        return Err(error(Status::EirInvalid, 18, 0));
+                    }
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::I64(x as i64));
                     pcs[depth - 1] += 1;
                 }
                 Opcode::Fma => {
@@ -2706,6 +2759,16 @@ fn arith(op: Opcode, a: Immediate, b: Immediate) -> Option<Immediate> {
         (Opcode::Mul, Immediate::U32(a), Immediate::U32(b)) => {
             Some(Immediate::U32(a.wrapping_mul(b)))
         }
+        // RFC-0043: exact 64-bit integer arithmetic.
+        (Opcode::Add, Immediate::I64(a), Immediate::I64(b)) => {
+            Some(Immediate::I64(a.wrapping_add(b)))
+        }
+        (Opcode::Sub, Immediate::I64(a), Immediate::I64(b)) => {
+            Some(Immediate::I64(a.wrapping_sub(b)))
+        }
+        (Opcode::Mul, Immediate::I64(a), Immediate::I64(b)) => {
+            Some(Immediate::I64(a.wrapping_mul(b)))
+        }
         (Opcode::Add, Immediate::U64(a), Immediate::U64(b)) => {
             Some(Immediate::U64(a.wrapping_add(b)))
         }
@@ -2787,6 +2850,21 @@ fn as_f64(value: Immediate) -> f64 {
         Immediate::I64(v) => v as f64,
         Immediate::U64(v) => v as f64,
         Immediate::Bool(v) => v as u8 as f64,
+    }
+}
+
+/// Reinterpret a value as an exact `i64` (RFC-0043 `I64ToF64`/integer ops).
+/// An `F64`/`F32` is truncated toward zero; callers that must reject a
+/// non-finite float do so explicitly (a nan/inf `as i64` saturates in Rust).
+fn as_i64(value: Immediate) -> i64 {
+    match value {
+        Immediate::I32(v) => v as i64,
+        Immediate::U32(v) => v as i64,
+        Immediate::I64(v) => v,
+        Immediate::U64(v) => v as i64,
+        Immediate::F32(v) => v as i64,
+        Immediate::F64(v) => v as i64,
+        Immediate::Bool(v) => u8::from(v) as i64,
     }
 }
 
@@ -2958,6 +3036,27 @@ fn h_fma(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<()>
     let b = as_f64(th_get_d(m, ins.operands[1], 17)?);
     let c = as_f64(th_get_d(m, ins.operands[2], 18)?);
     th_set(m, ins.result_id, Immediate::F64(a * b + c));
+    let d = m.frames.len() - 1;
+    m.pcs[d] += 1;
+    Ok(())
+}
+
+/// RFC-0043 `I64ToF64`: exact widen of an integer to f64.
+fn h_i64_to_f64(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<()> {
+    let a = as_i64(th_get_d(m, ins.operands[0], 16)?);
+    th_set(m, ins.result_id, Immediate::F64(a as f64));
+    let d = m.frames.len() - 1;
+    m.pcs[d] += 1;
+    Ok(())
+}
+
+/// RFC-0043 `F64ToI64`: truncate toward zero; trap (detail 18) on non-finite.
+fn h_f64_to_i64(m: &mut ThMachine<'_>, ins: &Instruction, _: &ThProg<'_>) -> Result<()> {
+    let x = as_f64(th_get_d(m, ins.operands[0], 16)?);
+    if !x.is_finite() {
+        return Err(error(Status::EirInvalid, 18, 0));
+    }
+    th_set(m, ins.result_id, Immediate::I64(x as i64));
     let d = m.frames.len() - 1;
     m.pcs[d] += 1;
     Ok(())
@@ -3170,6 +3269,8 @@ fn handlers() -> &'static Vec<Handler> {
             set(op, h_arith);
         }
         set(Opcode::Fma, h_fma);
+        set(Opcode::I64ToF64, h_i64_to_f64);
+        set(Opcode::F64ToI64, h_f64_to_i64);
         for op in [
             Opcode::Eq,
             Opcode::Ne,
@@ -3230,6 +3331,8 @@ fn is_threaded_op(op: Opcode) -> bool {
             | Opcode::Rem
             | Opcode::Pow
             | Opcode::Fma
+            | Opcode::I64ToF64
+            | Opcode::F64ToI64
             | Opcode::Eq
             | Opcode::Ne
             | Opcode::Lt

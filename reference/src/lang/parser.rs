@@ -89,6 +89,7 @@ fn infer_kind(e: &Expr, env: &std::collections::HashMap<String, LangType>) -> Op
     match e {
         Expr::Cmp(..) | Expr::And(..) | Expr::Or(..) | Expr::Not(..) => Some(LangType::Bool),
         Expr::Const(_)
+        | Expr::Int(_)
         | Expr::Add(..)
         | Expr::Sub(..)
         | Expr::Mul(..)
@@ -239,6 +240,15 @@ pub(crate) fn is_builtin_call(name: &str) -> bool {
             | "hypot"
             | "inte"
             | "deriv"
+            // RFC-0043 conversion casts (literal `i64(x)` / `f64(x)` lower to
+            // these opcodes rather than the old floor/abs desugaring).
+            | "i64"
+            | "i32"
+            | "u64"
+            | "u32"
+            | "f64"
+            | "__i64_to_f64"
+            | "__f64_to_i64"
     )
 }
 
@@ -248,6 +258,7 @@ pub(crate) fn is_builtin_call(name: &str) -> bool {
 fn fold_int(e: &Expr) -> Option<i64> {
     match e {
         Expr::Const(c) if c.is_finite() && c.fract() == 0.0 && c.abs() < 9.0e15 => Some(*c as i64),
+        Expr::Int(v) => Some(*v),
         Expr::Add(a, b) => Some(fold_int(a)?.checked_add(fold_int(b)?)?),
         Expr::Sub(a, b) => Some(fold_int(a)?.checked_sub(fold_int(b)?)?),
         Expr::Mul(a, b) => Some(fold_int(a)?.checked_mul(fold_int(b)?)?),
@@ -277,6 +288,7 @@ fn fold_int(e: &Expr) -> Option<i64> {
 fn contains_fractional_const(e: &Expr) -> bool {
     match e {
         Expr::Const(c) => c.is_finite() && c.fract() != 0.0,
+        Expr::Int(_) => false,
         Expr::SlotDyn(a) | Expr::Neg(a) | Expr::Not(a) => contains_fractional_const(a),
         Expr::Add(a, b)
         | Expr::Sub(a, b)
@@ -341,7 +353,11 @@ pub(crate) fn parse_let_parts(
     Ok((name, nxt.as_str().trim().to_string(), None))
 }
 
-pub(crate) fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Result<()> {
+pub(crate) fn store_param(
+    param: Pair<'_, Rule>,
+    decl: &mut SystemDecl,
+    array_lens: &std::collections::BTreeMap<String, usize>,
+) -> Result<()> {
     // A reaction channel is its own top-level alternative in a `gillespie`
     // body (not nested inside `param`), so it arrives as the pair itself.
     if param.as_rule() == Rule::channel_stmt {
@@ -390,7 +406,7 @@ pub(crate) fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Resul
     }
     // `repeat` / `for` loops keep their tree structure for gated lowering.
     if matches!(first.as_rule(), Rule::repeat_stmt | Rule::for_stmt) {
-        let stmt = build_loop_stmt(first, decl.byte_offset)?;
+        let stmt = build_loop_stmt(first, decl.byte_offset, array_lens)?;
         decl.update_stmts.push(stmt);
         return Ok(());
     }
@@ -625,8 +641,12 @@ pub(crate) fn check_let_name(name: &str, offset: usize) -> Result<()> {
 /// Parses an integer bound (repeat count / for-range end), rejecting
 /// non-integers.
 pub(crate) fn parse_int_bound(pair: Pair<'_, Rule>, offset: usize, what: &str) -> Result<f64> {
-    let raw = pair
-        .as_str()
+    parse_int_bound_text(pair.as_str(), offset, what)
+}
+
+/// Parses a literal integer bound (`number` grammar token).
+pub(crate) fn parse_int_bound_text(text: &str, offset: usize, what: &str) -> Result<f64> {
+    let raw = text
         .parse::<f64>()
         .map_err(|_| error(Status::Invalid, 57))?;
     if raw.fract() != 0.0 {
@@ -634,10 +654,47 @@ pub(crate) fn parse_int_bound(pair: Pair<'_, Rule>, offset: usize, what: &str) -
             Status::Invalid,
             65,
             offset,
-            format!("{what} must be an integer, got `{}`", pair.as_str()),
+            format!("{what} must be an integer, got `{text}`"),
         ));
     }
     Ok(raw)
+}
+
+/// Resolves a `for` bound: a literal integer, or `len(name)` for a named array
+/// declared in the world (a compile-time constant). RFC-0044.
+pub(crate) fn parse_for_bound(
+    pair: Pair<'_, Rule>,
+    offset: usize,
+    array_lens: &std::collections::BTreeMap<String, usize>,
+    what: &str,
+) -> Result<f64> {
+    // `for_bound` wraps a `len_call` or a literal `number`.
+    let pair = if pair.as_rule() == Rule::for_bound {
+        pair.into_inner().next().ok_or(error(Status::Invalid, 56))?
+    } else {
+        pair
+    };
+    match pair.as_rule() {
+        Rule::number => parse_int_bound_text(pair.as_str(), offset, what),
+        Rule::len_call => {
+            let name = pair
+                .into_inner()
+                .next()
+                .ok_or(error(Status::Invalid, 56))?
+                .as_str()
+                .to_string();
+            match array_lens.get(&name) {
+                Some(n) => Ok(*n as f64),
+                None => Err(error_at(
+                    Status::Invalid,
+                    109,
+                    offset,
+                    format!("`len({name})` names no array declared in the world"),
+                )),
+            }
+        }
+        _ => Err(error(Status::Invalid, 56)),
+    }
 }
 
 /// Number of statements a statement tree unrolls into (loops multiply; `for`
@@ -659,7 +716,11 @@ pub(crate) fn unrolled_size(stmts: &[UpdateStmt]) -> usize {
 /// Builds a `Repeat`/`For` statement tree from a parsed loop pair. The body
 /// keeps its structure (nested loops, `break`/`continue`) so lowering can
 /// unroll with per-loop gating. Size caps are enforced here.
-pub(crate) fn build_loop_stmt(pair: Pair<'_, Rule>, offset: usize) -> Result<UpdateStmt> {
+pub(crate) fn build_loop_stmt(
+    pair: Pair<'_, Rule>,
+    offset: usize,
+    array_lens: &std::collections::BTreeMap<String, usize>,
+) -> Result<UpdateStmt> {
     match pair.as_rule() {
         Rule::repeat_stmt => {
             let mut it = pair.into_inner();
@@ -690,7 +751,7 @@ pub(crate) fn build_loop_stmt(pair: Pair<'_, Rule>, offset: usize) -> Result<Upd
                     items.push(child);
                 }
             }
-            let mut body = build_loop_body(items.into_iter(), offset, n)?;
+            let mut body = build_loop_body(items.into_iter(), offset, n, array_lens)?;
             match &gate {
                 // `while (cond)`: check before each iteration — break when
                 // the condition is false.
@@ -716,8 +777,8 @@ pub(crate) fn build_loop_stmt(pair: Pair<'_, Rule>, offset: usize) -> Result<Upd
             let mut ri = range.into_inner();
             let lo_pair = ri.next().ok_or(error(Status::Invalid, 56))?;
             let hi_pair = ri.next().ok_or(error(Status::Invalid, 56))?;
-            let lo = parse_int_bound(lo_pair, offset, "for range start")?;
-            let hi = parse_int_bound(hi_pair, offset, "for range end")?;
+            let lo = parse_for_bound(lo_pair, offset, array_lens, "for range start")?;
+            let hi = parse_for_bound(hi_pair, offset, array_lens, "for range end")?;
             if hi < lo {
                 return Err(error_at(
                     Status::Invalid,
@@ -734,7 +795,7 @@ pub(crate) fn build_loop_stmt(pair: Pair<'_, Rule>, offset: usize) -> Result<Upd
                     format!("for range wider than {MAX_REPEAT_COUNT} iterations"),
                 ));
             }
-            let body = build_loop_body(it, offset, (hi - lo) as usize)?;
+            let body = build_loop_body(it, offset, (hi - lo) as usize, array_lens)?;
             Ok(UpdateStmt::For(name, lo, hi, body))
         }
         _ => Err(error(Status::Invalid, 56)),
@@ -748,6 +809,12 @@ pub(crate) fn to_let_stmts(stmts: &[UpdateStmt], offset: usize) -> Result<Vec<Le
     stmts
         .iter()
         .map(|s| match s {
+            // RFC-0043: a `let x: i64/i32/u64/u32` binds an exact integer; the
+            // annotation rides into lowering as `LetInt` (the RHS is coerced to
+            // `I64`, via `F64ToI64` when it is not an integer expression).
+            UpdateStmt::Let(name, text, Some(false)) => {
+                Ok(LetStmt::LetInt(name.clone(), parse_expr_str(text)?))
+            }
             UpdateStmt::Let(name, text, _) => Ok(LetStmt::Let(name.clone(), parse_expr_str(text)?)),
             UpdateStmt::Repeat(n, body) => Ok(LetStmt::Repeat(*n, to_let_stmts(body, offset)?)),
             UpdateStmt::For(name, lo, hi, body) => Ok(LetStmt::For(
@@ -780,6 +847,7 @@ pub(crate) fn build_loop_body<'a>(
     items: impl Iterator<Item = Pair<'a, Rule>>,
     offset: usize,
     iterations: usize,
+    array_lens: &std::collections::BTreeMap<String, usize>,
 ) -> Result<Vec<UpdateStmt>> {
     let mut body: Vec<UpdateStmt> = Vec::new();
     for item in items {
@@ -789,7 +857,9 @@ pub(crate) fn build_loop_body<'a>(
                 let (name, expr, ann) = parse_let_parts(inner, offset)?;
                 body.push(UpdateStmt::Let(name, expr, ann));
             }
-            Rule::repeat_stmt | Rule::for_stmt => body.push(build_loop_stmt(inner, offset)?),
+            Rule::repeat_stmt | Rule::for_stmt => {
+                body.push(build_loop_stmt(inner, offset, array_lens)?)
+            }
             Rule::break_stmt | Rule::continue_stmt => {
                 // Children: [kw] or [kw, if_kw, expr].
                 let is_break = inner.as_rule() == Rule::break_stmt;
@@ -950,11 +1020,21 @@ pub(crate) fn build_factor(pair: Pair<'_, Rule>) -> Result<Expr> {
                 Ok(Expr::Neg(Box::new(build_factor(child)?)))
             }
         }
-        Rule::number => inner
-            .as_str()
-            .parse::<f64>()
-            .map(Expr::Const)
-            .map_err(|_| error(Status::Invalid, 57)),
+        Rule::number => {
+            let text = inner.as_str();
+            // RFC-0043: a literal with no `.`/exponent is an exact integer.
+            // `-5` is a `Neg(Int(5))` (the grammar folds the sign into `number`,
+            // so keep the negative form exact here too).
+            if !text.contains('.') && !text.contains('e') && !text.contains('E') {
+                return text
+                    .parse::<i64>()
+                    .map(Expr::Int)
+                    .map_err(|_| error(Status::Invalid, 57));
+            }
+            text.parse::<f64>()
+                .map(Expr::Const)
+                .map_err(|_| error(Status::Invalid, 57))
+        }
         Rule::slot => {
             let idx: usize = inner
                 .as_str()
@@ -1034,8 +1114,13 @@ pub(crate) fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
         }
         let x = args.into_iter().next().ok_or(error(Status::Invalid, 59))?;
         return Ok(match ty.as_str() {
-            "f64" => x,
+            // RFC-0043: an explicit `f64(x)` cast is the widening opcode (no
+            // longer the identity for an exact integer operand).
+            "f64" => Expr::Call("__i64_to_f64", vec![x]),
             "bool" => Expr::Cmp("!=", Box::new(x), Box::new(Expr::Const(0.0))),
+            // RFC-0043: `i64(x)` (and the other integer widths) is the exact
+            // truncate-toward-zero conversion opcode.
+            "i64" | "i32" | "u64" | "u32" => Expr::Call("__f64_to_i64", vec![x]),
             // trunc(x) = sign(x) * floor(abs(x))
             _ => Expr::Mul(
                 Box::new(Expr::Call("sign", vec![x.clone()])),
@@ -1430,6 +1515,10 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
     let mut model = WorldModel::default();
     let mut systems = Vec::new();
     let mut funcs = Vec::new();
+    // RFC-0044: named array lengths declared anywhere in `world { … }`, so a
+    // `for` bound may be `len(name)` (a compile-time constant). Pre-scanned so
+    // declaration order does not matter.
+    let mut array_lens: std::collections::BTreeMap<String, usize> = Default::default();
 
     for section in pairs {
         match section.as_rule() {
@@ -1457,6 +1546,20 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                     model.structs.insert(name, fields);
                 }
                 let structs = model.structs.clone();
+                // Pass 1b: named array lengths (RFC-0044), from any order.
+                for item in section.clone().into_inner() {
+                    if item.as_rule() != Rule::entity_stmt {
+                        continue;
+                    }
+                    for field in item.into_inner() {
+                        if field.as_rule() != Rule::array_field {
+                            continue;
+                        }
+                        if let Some((name, n)) = crate::lang::parse_array_head(field.as_str()) {
+                            array_lens.insert(name, n);
+                        }
+                    }
+                }
                 for item in section.into_inner() {
                     match item.as_rule() {
                         Rule::gravity_stmt => {
@@ -2073,7 +2176,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                         channels: Vec::new(),
                     };
                     for param in inner {
-                        store_param(param, &mut decl)?;
+                        store_param(param, &mut decl, &array_lens)?;
                     }
                     systems.push(decl);
                 }
@@ -2129,7 +2232,11 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                                         i += 1;
                                     }
                                     Rule::repeat_stmt | Rule::for_stmt => {
-                                        stmts.push(build_loop_stmt(children[i].clone(), 0)?);
+                                        stmts.push(build_loop_stmt(
+                                            children[i].clone(),
+                                            0,
+                                            &array_lens,
+                                        )?);
                                         i += 1;
                                     }
                                     Rule::if_stmt => {

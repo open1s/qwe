@@ -39,7 +39,7 @@ subset exists; **Missing** = not implemented (RFC or sub-RFC required).
 
 | Domain / product class | The feature it actually requires | Status | Evidence / next gate |
 | --- | --- | --- | --- |
-| General numerics (MATLAB core) | typed values incl. exact `int`/`bool`, arrays, linear algebra | Partial | `int`/`bool` casts + `let` annotations, `array N name` (RFC-0044, Done); typed EIR registers RFC-0043 (Proposed); no matrix type / BLAS |
+| General numerics (MATLAB core) | typed values incl. exact `int`/`bool`, arrays, linear algebra | Partial | typed EIR registers RFC-0043 (Done: exact `I64` ops + `I64ToF64`/`F64ToI64`), `array N name` (RFC-0044, Done); no matrix type / BLAS |
 | Control systems (Simulink) | continuous + discrete blocks, zero-crossing, algebraic loops | Partial | `update`/`rk4`, `at`/`periodic`/`schedule`, `when` gate; no zero-crossing detection, no algebraic-loop solver, no block-diagram IR |
 | Equation-based / multi-physics (Modelica, Dymola) | acausal connectors, DAE (not just ODE), index reduction | Missing | PWE is causal ODE/difference only; a DAE layer would be a new Domain IR (needs RFC) |
 | Agent-based / DES (AnyLogic, Simio, Arena) | discrete-event queue, resources, entities, process flow | Partial | pools, `emit`/`last_event`, `schedule`, `gillespie`; no queue/resource/statistics primitives, no event calendar as a first-class value |

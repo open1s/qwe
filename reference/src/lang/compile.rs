@@ -2410,7 +2410,7 @@ impl DimEnv<'_> {
             )
         };
         Ok(match expr {
-            Expr::Const(_) => None,
+            Expr::Const(_) | Expr::Int(_) => None,
             Expr::Time => Some(Dim::seconds()),
             Expr::Slot(i) => self.slot_dims.get(*i).copied().flatten(),
             Expr::SlotDyn(_) => None,
@@ -2509,6 +2509,10 @@ impl DimEnv<'_> {
         for s in stmts {
             match s {
                 LetStmt::Let(name, e) => {
+                    let d = self.of_expr(e)?;
+                    self.locals.insert(name.clone(), d);
+                }
+                LetStmt::LetInt(name, e) => {
                     let d = self.of_expr(e)?;
                     self.locals.insert(name.clone(), d);
                 }
@@ -2936,6 +2940,7 @@ fn strict_names(
     };
     match e {
         Expr::Const(_) | Expr::Slot(_) | Expr::Time => Ok(()),
+        Expr::Int(_) => Ok(()),
         Expr::SlotDyn(a) | Expr::Neg(a) | Expr::Not(a) | Expr::Index(_, a) => {
             strict_names(a, allowed, entity_map, state_names_by_id, sys_off)
         }
@@ -3119,6 +3124,7 @@ fn check_let_array_index(
     for s in stmts {
         match s {
             LetStmt::Let(_, e) => check_array_index(e, state_names_by_id, sys_off)?,
+            LetStmt::LetInt(_, e) => check_array_index(e, state_names_by_id, sys_off)?,
             LetStmt::If(c, a, b) => {
                 check_array_index(c, state_names_by_id, sys_off)?;
                 check_array_index(a, state_names_by_id, sys_off)?;
@@ -3207,6 +3213,7 @@ fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
         for s in stmts {
             match s {
                 LetStmt::Let(_, e) => walk(e, arity)?,
+                LetStmt::LetInt(_, e) => walk(e, arity)?,
                 LetStmt::If(c, t, e) => {
                     walk(c, arity)?;
                     walk(t, arity)?;
@@ -3499,6 +3506,7 @@ they are read as a Z-spin, not euler angles",
             namespace: &f.namespace,
             params: &param_names,
             current_entity: 0,
+            int_locals: Default::default(),
         };
         let mut next_id = arg_count + 1;
         let mut instrs = Vec::new();
@@ -3526,7 +3534,7 @@ they are read as a Z-spin, not euler angles",
                 LetStmt::If(cond, then_e, else_e) => {
                     let ctx = parts.ctx(&locals);
                     let c = truthy(
-                        lower_expr(cond, &ctx, &mut next_id, &mut instrs),
+                        lower_expr_f64(cond, &ctx, &mut next_id, &mut instrs),
                         &mut next_id,
                         &mut instrs,
                     );
@@ -3541,7 +3549,7 @@ they are read as a Z-spin, not euler angles",
                     ));
                     let then_start = instrs.len() as u32;
                     let ctx_t = parts.ctx(&locals);
-                    let rt = lower_expr(then_e, &ctx_t, &mut next_id, &mut instrs);
+                    let rt = lower_expr_f64(then_e, &ctx_t, &mut next_id, &mut instrs);
                     instrs.push(crate::physics_eir::instr(
                         crate::eir::Opcode::Return,
                         0,
@@ -3553,7 +3561,7 @@ they are read as a Z-spin, not euler angles",
                     let else_target = if let Some(e) = else_e {
                         let else_start = instrs.len() as u32;
                         let ctx_e = parts.ctx(&locals);
-                        let re = lower_expr(e, &ctx_e, &mut next_id, &mut instrs);
+                        let re = lower_expr_f64(e, &ctx_e, &mut next_id, &mut instrs);
                         instrs.push(crate::physics_eir::instr(
                             crate::eir::Opcode::Return,
                             0,
@@ -3581,7 +3589,7 @@ they are read as a Z-spin, not euler angles",
             }
         }
         let ctx = parts.ctx(&locals);
-        let ret_reg = lower_expr(&f.body, &ctx, &mut next_id, &mut instrs);
+        let ret_reg = lower_expr_f64(&f.body, &ctx, &mut next_id, &mut instrs);
         instrs.push(crate::physics_eir::instr(
             crate::eir::Opcode::Return,
             0,
@@ -3603,8 +3611,14 @@ they are read as a Z-spin, not euler angles",
         // EIR-level validation error: surface the reason instead of the generic
         // "unspecified compile error" (its byte_offset is an instruction index,
         // not a source position).
+        let op = module
+            .functions
+            .first()
+            .and_then(|f| f.instructions.get(e.byte_offset as usize))
+            .map(|i| format!("{:?} {:?}", i.opcode, i.operands))
+            .unwrap_or_default();
         let msg = format!(
-            "internal EIR validation failed (EIR detail {} at instruction {})",
+            "internal EIR validation failed (EIR detail {} at instruction {}: {op})",
             e.detail, e.byte_offset
         );
         push_diag(60, 0, msg.clone());

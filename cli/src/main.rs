@@ -954,9 +954,10 @@ fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
             std::thread::sleep(std::time::Duration::from_millis(16));
             continue;
         }
-        // One step per frame; cross-verify the backends every CROSS_BATCH-th
-        // frame (the interpreter alone otherwise).
-        let r = if step % CROSS_BATCH as u64 == 0 {
+        // One step per frame; cross-verify the backends on the same 16-step
+        // phase as `run` (the last step of each batch, i.e. step ≡ 15 mod CROSS_BATCH)
+        // so the two CLIs agree about which steps are checked.
+        let r = if (step + 1) % CROSS_BATCH as u64 == 0 {
             rt.step_cross()
         } else {
             rt.step_interpreter()

@@ -1,5 +1,5 @@
 # RFC-0043: Value types — `int`/`bool` lowered to EIR
-**Status:** Proposed. This RFC specifies how the language's value kinds
+**Status:** Accepted. This RFC specifies how the language's value kinds
 (`f64`, `i64`/`i32`/`u64`/`u32`, `bool`) are **lowered to typed EIR registers**,
 instead of today's single `f64` register file with surface-only checks.
 

@@ -15,6 +15,15 @@ pub(crate) struct LowerCtx<'a> {
         &'a std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
     /// `let` local name -> register id.
     pub(crate) locals: &'a std::collections::BTreeMap<String, u32>,
+    /// Names of integer-annotated `let` locals (RFC-0043): their register holds
+    /// an exact `I64`; a read outside integer context widens via `I64ToF64`.
+    /// `None` at direct-construction sites (no integer locals in scope).
+    pub(crate) int_locals:
+        Option<std::rc::Rc<std::cell::RefCell<std::collections::BTreeSet<String>>>>,
+    /// Whether the expression currently being lowered is in integer context
+    /// (an integer-annotated `let` RHS): integer literals stay `I64` and
+    /// no `I64 -> F64` widening is applied.
+    pub(crate) int_ctx: bool,
     /// User-defined function name -> EIR function id (for `CALL`).
     pub(crate) func_ids: &'a std::collections::BTreeMap<String, u64>,
     /// Grid field name -> width (compile-time, from the model), for
@@ -46,6 +55,7 @@ pub(crate) fn resolve_array(ctx: &LowerCtx<'_>, name: &str) -> Option<(usize, us
 pub(crate) fn const_index(e: &Expr) -> Option<i64> {
     match e {
         Expr::Const(c) if c.is_finite() && c.fract() == 0.0 => Some(*c as i64),
+        Expr::Int(v) => Some(*v),
         _ => None,
     }
 }
@@ -131,10 +141,28 @@ pub(crate) fn lower_expr(
             ));
             r
         }
+        // RFC-0043: an exact integer literal lowers to an `I64` register with
+        // integer semantics.
+        Expr::Int(v) => {
+            let r = *next_id;
+            *next_id += 1;
+            out.push(crate::physics_eir::instr(
+                crate::eir::Opcode::Const,
+                r,
+                Some(crate::eir::ValueType::I64),
+                vec![],
+                Some(crate::eir::Immediate::I64(*v)),
+                None,
+            ));
+            // RFC-0043: the literal stays exact; a mixed-kind operation or an
+            // f64-required boundary widens it (`as_f64`), so `2 * pi` still
+            // evaluates in f64 and `7 / 2` stays integer.
+            r
+        }
         Expr::Slot(i) => ctx.slot_regs.get(*i).copied().unwrap_or(0),
         Expr::SlotDyn(idx) => {
             // `s[i]`: read the State slot at a runtime index via the EIR.
-            let ri = lower_expr(idx, ctx, next_id, out);
+            let ri = lower_expr_f64(idx, ctx, next_id, out);
             let out_reg = *next_id;
             *next_id += 1;
             out.push(crate::physics_eir::instr(
@@ -171,7 +199,7 @@ pub(crate) fn lower_expr(
                         }
                         ctx.slot_regs.get(base + k).copied().unwrap_or(0)
                     } else {
-                        let ri = lower_expr(idx, ctx, next_id, out);
+                        let ri = lower_expr_f64(idx, ctx, next_id, out);
                         let base_reg = *next_id;
                         *next_id += 1;
                         out.push(crate::physics_eir::instr(
@@ -211,7 +239,21 @@ pub(crate) fn lower_expr(
             }
         }
         Expr::Neg(x) => {
+            // Negation of an exact integer stays integer (RFC-0043).
             let rx = lower_expr(x, ctx, next_id, out);
+            let empty: ExprIntLocals =
+                std::rc::Rc::new(std::cell::RefCell::new(std::collections::BTreeSet::new()));
+            let int_locs = ctx.int_locals.clone().unwrap_or(empty);
+            if expr_kind(x, &int_locs) == Kind::Int {
+                return binary_typed(
+                    crate::eir::Opcode::Sub,
+                    const_i64_reg(0, next_id, out),
+                    rx,
+                    crate::eir::ValueType::I64,
+                    next_id,
+                    out,
+                );
+            }
             let neg_one = *next_id;
             *next_id += 1;
             out.push(crate::physics_eir::instr(
@@ -222,7 +264,14 @@ pub(crate) fn lower_expr(
                 Some(crate::eir::Immediate::F64(-1.0)),
                 None,
             ));
-            binary(crate::eir::Opcode::Mul, rx, neg_one, next_id, out)
+            binary_typed(
+                crate::eir::Opcode::Mul,
+                rx,
+                neg_one,
+                crate::eir::ValueType::F64,
+                next_id,
+                out,
+            )
         }
         Expr::Time => {
             // Read the global simulation clock (entity id is ignored by the runtime).
@@ -257,6 +306,8 @@ pub(crate) fn lower_expr(
             //   3. a model parameter — bare (`G`) or module-qualified (`mod.G`),
             //   4. a cross-entity named state slot (`@name.x` / `@name.state.x`).
             if let Some(&reg) = ctx.locals.get(name.as_str()) {
+                // RFC-0043: an integer-annotated local used where a number is
+                // required (outside integer context) widens to f64.
                 return reg;
             }
             // Own named state slot — including dotted struct fields (`pos.x`).
@@ -342,35 +393,19 @@ pub(crate) fn lower_expr(
             ));
             r
         }
-        Expr::Add(a, b) => {
-            let ra = lower_expr(a, ctx, next_id, out);
-            let rb = lower_expr(b, ctx, next_id, out);
-            binary(crate::eir::Opcode::Add, ra, rb, next_id, out)
-        }
-        Expr::Sub(a, b) => {
-            let ra = lower_expr(a, ctx, next_id, out);
-            let rb = lower_expr(b, ctx, next_id, out);
-            binary(crate::eir::Opcode::Sub, ra, rb, next_id, out)
-        }
-        Expr::Mul(a, b) => {
-            let ra = lower_expr(a, ctx, next_id, out);
-            let rb = lower_expr(b, ctx, next_id, out);
-            binary(crate::eir::Opcode::Mul, ra, rb, next_id, out)
-        }
-        Expr::Div(a, b) => {
-            let ra = lower_expr(a, ctx, next_id, out);
-            let rb = lower_expr(b, ctx, next_id, out);
-            binary(crate::eir::Opcode::Div, ra, rb, next_id, out)
-        }
-        Expr::Rem(a, b) => {
-            let ra = lower_expr(a, ctx, next_id, out);
-            let rb = lower_expr(b, ctx, next_id, out);
-            binary(crate::eir::Opcode::Rem, ra, rb, next_id, out)
-        }
+        // RFC-0043 kind-driven binary arithmetic: `Int op Int` keeps exact
+        // integer semantics (`/`/`%` truncate toward zero); any other pair
+        // widens both operands to f64, exactly as before RFC-0043.
+        Expr::Add(a, b) => arith_rule(Expr::Add(a.clone(), b.clone()), ctx, next_id, out),
+        Expr::Sub(a, b) => arith_rule(Expr::Sub(a.clone(), b.clone()), ctx, next_id, out),
+        Expr::Mul(a, b) => arith_rule(Expr::Mul(a.clone(), b.clone()), ctx, next_id, out),
+        Expr::Div(a, b) => arith_rule(Expr::Div(a.clone(), b.clone()), ctx, next_id, out),
+        Expr::Rem(a, b) => arith_rule(Expr::Rem(a.clone(), b.clone()), ctx, next_id, out),
         Expr::Cmp(op, a, b) => {
             // Compute the boolean comparison, then Select(cond, 1.0, 0.0).
-            let ra = lower_expr(a, ctx, next_id, out);
-            let rb = lower_expr(b, ctx, next_id, out);
+            // Operands are f64 (RFC-0043: an integer operand widens first).
+            let ra = lower_expr_f64(a, ctx, next_id, out);
+            let rb = lower_expr_f64(b, ctx, next_id, out);
             let cmp_op = match *op {
                 "<" => crate::eir::Opcode::Lt,
                 "<=" => crate::eir::Opcode::Le,
@@ -426,16 +461,16 @@ pub(crate) fn lower_expr(
         Expr::And(a, b) => {
             // bool(a) AND bool(b): normalize each operand to 1.0 / 0.0, then
             // multiply. Any nonzero operand counts as true.
-            let ra = lower_expr(a, ctx, next_id, out);
-            let rb = lower_expr(b, ctx, next_id, out);
+            let ra = lower_expr_f64(a, ctx, next_id, out);
+            let rb = lower_expr_f64(b, ctx, next_id, out);
             let na = truthy(ra, next_id, out);
             let nb = truthy(rb, next_id, out);
             binary(crate::eir::Opcode::Mul, na, nb, next_id, out)
         }
         Expr::Or(a, b) => {
             // bool(a) OR bool(b) via de Morgan: 1 - (1-na)*(1-nb).
-            let ra = lower_expr(a, ctx, next_id, out);
-            let rb = lower_expr(b, ctx, next_id, out);
+            let ra = lower_expr_f64(a, ctx, next_id, out);
+            let rb = lower_expr_f64(b, ctx, next_id, out);
             let na = truthy(ra, next_id, out);
             let nb = truthy(rb, next_id, out);
             let one = const_reg(1.0, next_id, out);
@@ -446,7 +481,7 @@ pub(crate) fn lower_expr(
         }
         Expr::Not(a) => {
             // NOT bool(a): Eq(a, 0) yields 1.0 exactly when `a` is zero.
-            let ra = lower_expr(a, ctx, next_id, out);
+            let ra = lower_expr_f64(a, ctx, next_id, out);
             let zero = const_reg(0.0, next_id, out);
             let bool_reg = *next_id;
             *next_id += 1;
@@ -464,6 +499,34 @@ pub(crate) fn lower_expr(
             if *name == "inte" || *name == "deriv" {
                 return lower_inte_deriv(name, args, ctx, next_id, out);
             }
+            // RFC-0043 explicit casts. `__i64_to_f64` widens an exact integer
+            // (a no-op on an already-f64 value); the integer casts truncate
+            // toward zero via `F64ToI64`.
+            if *name == "__i64_to_f64" {
+                // `f64(x)` is the widening opcode for an exact-integer operand
+                // and the identity for one that is already an f64 value.
+                let int_locs = ctx.int_locals.clone().unwrap_or_else(|| {
+                    std::rc::Rc::new(std::cell::RefCell::new(Default::default()))
+                });
+                let is_int = expr_kind(&args[0], &int_locs) == Kind::Int;
+                let a = lower_expr(&args[0], ctx, next_id, out);
+                return if is_int {
+                    i64_to_f64(a, next_id, out)
+                } else {
+                    a
+                };
+            }
+            if *name == "__f64_to_i64" {
+                let a = lower_expr(&args[0], ctx, next_id, out);
+                let i = f64_to_i64(a, next_id, out);
+                // Outside integer context the cast is only a truncation step;
+                // the value flows on as a number.
+                return if ctx.int_ctx {
+                    i
+                } else {
+                    i64_to_f64(i, next_id, out)
+                };
+            }
             // A user-defined function (not a builtin) lowers to an EIR `CALL`.
             // Unqualified names resolve within the system's module first.
             let qualified = if ctx.namespace.is_empty() {
@@ -476,7 +539,9 @@ pub(crate) fn lower_expr(
             if let Some(target) = qualified.or_else(|| ctx.func_ids.get(*name).copied()) {
                 let mut operands = vec![target as u32];
                 for a in args {
-                    operands.push(lower_expr(a, ctx, next_id, out));
+                    // User functions take f64 parameters (RFC-0043: integer
+                    // arguments are widened at the call boundary).
+                    operands.push(lower_expr_f64(a, ctx, next_id, out));
                 }
                 let out_reg = *next_id;
                 *next_id += 1;
@@ -520,9 +585,11 @@ pub(crate) fn lower_expr(
             };
             let r = match *name {
                 "if" => {
+                    // The condition is truthiness (any type); the selected
+                    // values are f64 (RFC-0043: integer branches widen).
                     let cond = lower_expr(&args[0], ctx, next_id, out);
-                    let a = lower_expr(&args[1], ctx, next_id, out);
-                    let b = lower_expr(&args[2], ctx, next_id, out);
+                    let a = lower_expr_f64(&args[1], ctx, next_id, out);
+                    let b = lower_expr_f64(&args[2], ctx, next_id, out);
                     let out_reg = *next_id;
                     *next_id += 1;
                     out.push(crate::physics_eir::instr(
@@ -536,8 +603,8 @@ pub(crate) fn lower_expr(
                     out_reg
                 }
                 "min" | "max" => {
-                    let a = lower_expr(&args[0], ctx, next_id, out);
-                    let b = lower_expr(&args[1], ctx, next_id, out);
+                    let a = lower_expr_f64(&args[0], ctx, next_id, out);
+                    let b = lower_expr_f64(&args[1], ctx, next_id, out);
                     let cmp = if *name == "min" {
                         crate::eir::Opcode::Lt
                     } else {
@@ -599,8 +666,9 @@ pub(crate) fn lower_expr(
                 }
                 "emit" => {
                     // Emit an ordered event (kind, payload); yields 0.0.
-                    let kind = lower_expr(&args[0], ctx, next_id, out);
-                    let payload = lower_expr(&args[1], ctx, next_id, out);
+                    // The event queue carries f64 fields (RFC-0043: widen).
+                    let kind = lower_expr_f64(&args[0], ctx, next_id, out);
+                    let payload = lower_expr_f64(&args[1], ctx, next_id, out);
                     out.push(crate::physics_eir::instr(
                         crate::eir::Opcode::EmitEvent,
                         0,
@@ -633,7 +701,7 @@ pub(crate) fn lower_expr(
                     };
                     let operands: Vec<u32> = args
                         .iter()
-                        .map(|a| lower_expr(a, ctx, next_id, out))
+                        .map(|a| lower_expr_f64(a, ctx, next_id, out))
                         .collect();
                     // `schedule` yields nothing (a void opcode) — emit with no
                     // result so the validator accepts it; its value is discarded.
@@ -668,7 +736,7 @@ pub(crate) fn lower_expr(
                     };
                     let operands: Vec<u32> = args
                         .iter()
-                        .map(|a| lower_expr(a, ctx, next_id, out))
+                        .map(|a| lower_expr_f64(a, ctx, next_id, out))
                         .collect();
                     let out_reg = *next_id;
                     *next_id += 1;
@@ -711,7 +779,7 @@ pub(crate) fn lower_expr(
                     // vdist = length of the component difference.
                     let comps: Vec<u32> = args
                         .iter()
-                        .map(|a| lower_expr(a, ctx, next_id, out))
+                        .map(|a| lower_expr_f64(a, ctx, next_id, out))
                         .collect();
                     let squares: Vec<u32> = match *name {
                         "vlen" => (0..3)
@@ -783,10 +851,10 @@ pub(crate) fn lower_expr(
                     // existing field opcodes address a 3D grid unchanged.
                     let idx_args = if is_fset { args.len() - 1 } else { args.len() };
                     let three_d = idx_args - 1 == 3;
-                    let ri = lower_expr(&args[1], ctx, next_id, out);
-                    let rj = lower_expr(&args[2], ctx, next_id, out);
+                    let ri = lower_expr_f64(&args[1], ctx, next_id, out);
+                    let rj = lower_expr_f64(&args[2], ctx, next_id, out);
                     let rj = if three_d {
-                        let rk = lower_expr(&args[3], ctx, next_id, out);
+                        let rk = lower_expr_f64(&args[3], ctx, next_id, out);
                         let h = const_reg(height as f64, next_id, out);
                         let kt = binary(crate::eir::Opcode::Mul, rk, h, next_id, out);
                         binary(crate::eir::Opcode::Add, rj, kt, next_id, out)
@@ -794,7 +862,7 @@ pub(crate) fn lower_expr(
                         rj
                     };
                     if is_fset {
-                        let rv = lower_expr(&args[idx_args], ctx, next_id, out);
+                        let rv = lower_expr_f64(&args[idx_args], ctx, next_id, out);
                         out.push(crate::physics_eir::instr(
                             crate::eir::Opcode::WriteFieldCell,
                             0,
@@ -836,7 +904,9 @@ pub(crate) fn lower_expr(
                 _ => {
                     let mut operands = Vec::with_capacity(args.len());
                     for a in args {
-                        operands.push(lower_expr(a, ctx, next_id, out));
+                        // Elementary/binary builtins (`sin`, `hypot`, …) are f64
+                        // functions (RFC-0043: widen integer arguments).
+                        operands.push(lower_expr_f64(a, ctx, next_id, out));
                     }
                     let out_reg = *next_id;
                     *next_id += 1;
@@ -944,7 +1014,27 @@ pub(crate) fn collect_refs(
             collect_refs(idx, out, props, named_refs, entity_map, state_names_by_id)
         }
         Expr::Const(_) | Expr::Slot(_) | Expr::Time => {}
+        Expr::Int(_) => {}
     }
+}
+
+/// An `I64` constant register (RFC-0043 exact-integer lowering).
+pub(crate) fn const_i64_reg(
+    value: i64,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> u32 {
+    let r = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        crate::eir::Opcode::Const,
+        r,
+        Some(crate::eir::ValueType::I64),
+        vec![],
+        Some(crate::eir::Immediate::I64(value)),
+        None,
+    ));
+    r
 }
 
 /// Emits a `Const` instruction and returns its result register.
@@ -980,6 +1070,159 @@ pub(crate) fn const_u64_reg(
         Some(crate::eir::ValueType::U64),
         vec![],
         Some(crate::eir::Immediate::U64(value)),
+        None,
+    ));
+    r
+}
+
+/// The surface value kind of an expression (RFC-0043). Only `Int` and `Float`
+/// are needed for the arithmetic rule; comparisons/logicals are handled
+/// separately and every unknown operand coerces to f64.
+fn expr_kind(e: &Expr, int_locals: &ExprIntLocals) -> Kind {
+    match e {
+        Expr::Int(_) => Kind::Int,
+        Expr::Name(n) => {
+            if int_locals.borrow().contains(n) {
+                Kind::Int
+            } else {
+                Kind::Float
+            }
+        }
+        Expr::Neg(a) => expr_kind(a, int_locals),
+        // `Int op Int` is exact integer (RFC-0043); any other pair is f64.
+        Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) | Expr::Rem(a, b) => {
+            if expr_kind(a, int_locals) == Kind::Int && expr_kind(b, int_locals) == Kind::Int {
+                Kind::Int
+            } else {
+                Kind::Float
+            }
+        }
+        // A runtime slot read, parameter, time, call, cast result, comparison,
+        // or anything else is an f64 value.
+        _ => Kind::Float,
+    }
+}
+
+/// RFC-0043 value kinds used by the arithmetic rule.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Kind {
+    Int,
+    Float,
+}
+
+/// Shared set of in-scope integer-annotated `let` names (RFC-0043).
+pub(crate) type ExprIntLocals = std::rc::Rc<std::cell::RefCell<std::collections::BTreeSet<String>>>;
+
+/// Lowers `a op b` with RFC-0043 kind semantics: `Int op Int` stays exact
+/// (`I64` operands, truncating `/`/`%`); any other pair coerces each integer
+/// operand to f64 and computes in f64, preserving pre-RFC-0043 behavior.
+fn arith_rule(
+    e: Expr,
+    ctx: &LowerCtx<'_>,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> u32 {
+    let (op, a, b) = match e {
+        Expr::Add(a, b) => (crate::eir::Opcode::Add, a, b),
+        Expr::Sub(a, b) => (crate::eir::Opcode::Sub, a, b),
+        Expr::Mul(a, b) => (crate::eir::Opcode::Mul, a, b),
+        Expr::Div(a, b) => (crate::eir::Opcode::Div, a, b),
+        Expr::Rem(a, b) => (crate::eir::Opcode::Rem, a, b),
+        _ => unreachable!(),
+    };
+    let empty: ExprIntLocals =
+        std::rc::Rc::new(std::cell::RefCell::new(std::collections::BTreeSet::new()));
+    let int_locs = ctx.int_locals.clone().unwrap_or(empty);
+    let a_int = expr_kind(&a, &int_locs) == Kind::Int;
+    let b_int = expr_kind(&b, &int_locs) == Kind::Int;
+    if a_int && b_int {
+        let ra = lower_expr(&a, ctx, next_id, out);
+        let rb = lower_expr(&b, ctx, next_id, out);
+        return binary_typed(op, ra, rb, crate::eir::ValueType::I64, next_id, out);
+    }
+    let ra = lower_expr(&a, ctx, next_id, out);
+    let ra = if a_int {
+        i64_to_f64(ra, next_id, out)
+    } else {
+        ra
+    };
+    let rb = lower_expr(&b, ctx, next_id, out);
+    let rb = if b_int {
+        i64_to_f64(rb, next_id, out)
+    } else {
+        rb
+    };
+    binary_typed(op, ra, rb, crate::eir::ValueType::F64, next_id, out)
+}
+
+/// Whether an expression already yields an exact integer (RFC-0043), so an
+/// integer-annotated `let` needs no `F64ToI64` coercion. Integer literals,
+/// integer-typed locals, and arithmetic over them qualify.
+fn expr_is_integer(
+    e: &Expr,
+    int_locals: &std::cell::RefCell<std::collections::BTreeSet<String>>,
+) -> bool {
+    match e {
+        Expr::Int(_) => true,
+        Expr::Name(n) => int_locals.borrow().contains(n),
+        Expr::Neg(a) => expr_is_integer(a, int_locals),
+        Expr::Add(a, b) | Expr::Sub(a, b) | Expr::Mul(a, b) | Expr::Div(a, b) | Expr::Rem(a, b) => {
+            expr_is_integer(a, int_locals) && expr_is_integer(b, int_locals)
+        }
+        _ => false,
+    }
+}
+
+/// Lowers an expression that must produce an f64 value (a state-slot write, a
+/// comparison operand, an f64 parameter, …): an exact-integer expression is
+/// widened with `I64ToF64` (RFC-0043's implicit coercion), everything else is
+/// lowered unchanged.
+pub(crate) fn lower_expr_f64(
+    e: &Expr,
+    ctx: &LowerCtx<'_>,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> u32 {
+    let int_locs = ctx
+        .int_locals
+        .clone()
+        .unwrap_or_else(|| std::rc::Rc::new(std::cell::RefCell::new(Default::default())));
+    let is_int = expr_kind(e, &int_locs) == Kind::Int;
+    let r = lower_expr(e, ctx, next_id, out);
+    if is_int {
+        i64_to_f64(r, next_id, out)
+    } else {
+        r
+    }
+}
+
+/// RFC-0043 `I64ToF64`: widens an exact integer register to f64 (the implicit
+/// coercion applied whenever an integer is used where a number is required).
+pub(crate) fn i64_to_f64(a: u32, next_id: &mut u32, out: &mut Vec<crate::eir::Instruction>) -> u32 {
+    let r = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        crate::eir::Opcode::I64ToF64,
+        r,
+        Some(crate::eir::ValueType::F64),
+        vec![a],
+        None,
+        None,
+    ));
+    r
+}
+
+/// RFC-0043 `F64ToI64`: truncates a numeric register toward zero (trap on
+/// non-finite), the coercion applied at an integer-annotated `let`.
+pub(crate) fn f64_to_i64(a: u32, next_id: &mut u32, out: &mut Vec<crate::eir::Instruction>) -> u32 {
+    let r = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        crate::eir::Opcode::F64ToI64,
+        r,
+        Some(crate::eir::ValueType::I64),
+        vec![a],
+        None,
         None,
     ));
     r
@@ -1022,6 +1265,19 @@ pub(crate) fn random_reg(next_id: &mut u32, out: &mut Vec<crate::eir::Instructio
 
 /// Normalizes a value to a strict 1.0 / 0.0 boolean: `Ne(x, 0)` then
 /// `Select(cond, 1.0, 0.0)`. Any nonzero input yields 1.0.
+/// RFC-0043: an integer-valued expression is widened first, so `Ne` sees a
+/// single numeric kind.
+pub(crate) fn truthy_f64(
+    e: &Expr,
+    ctx: &LowerCtx<'_>,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> u32 {
+    let r = lower_expr_f64(e, ctx, next_id, out);
+    truthy(r, next_id, out)
+}
+
+/// Normalizes an already-lowered register to a strict 1.0 / 0.0 boolean.
 pub(crate) fn truthy(reg: u32, next_id: &mut u32, out: &mut Vec<crate::eir::Instruction>) -> u32 {
     let zero = const_reg(0.0, next_id, out);
     let bool_reg = *next_id;
@@ -1114,6 +1370,7 @@ pub(crate) fn expr_slot_span(
 ) {
     match expr {
         Expr::Const(_) | Expr::Time => {}
+        Expr::Int(_) => {}
         Expr::Slot(i) => {
             *max = (*max).max(*i);
             *any = true;
@@ -1172,6 +1429,7 @@ pub(crate) fn let_stmts_slot_span(
     for s in stmts {
         match s {
             LetStmt::Let(_, e) => expr_slot_span(e, sn, max, any),
+            LetStmt::LetInt(_, e) => expr_slot_span(e, sn, max, any),
             LetStmt::If(c, t, e) => {
                 expr_slot_span(c, sn, max, any);
                 expr_slot_span(t, sn, max, any);
@@ -1202,6 +1460,9 @@ pub(crate) fn collect_let_refs(
     for s in stmts {
         match s {
             LetStmt::Let(_, e) => {
+                collect_refs(e, out, props, named_refs, entity_map, state_names_by_id);
+            }
+            LetStmt::LetInt(_, e) => {
                 collect_refs(e, out, props, named_refs, entity_map, state_names_by_id);
             }
             LetStmt::If(c, t, e) => {
@@ -1238,6 +1499,9 @@ pub(crate) struct LowerParts<'a> {
     pub(crate) namespace: &'a str,
     pub(crate) params: &'a std::collections::BTreeSet<String>,
     pub(crate) current_entity: u128,
+    /// RFC-0043: names of integer-annotated `let` locals in scope (shared,
+    /// interior-mutable so nested blocks push/pop without threading a map).
+    pub(crate) int_locals: std::rc::Rc<std::cell::RefCell<std::collections::BTreeSet<String>>>,
 }
 
 impl<'a> LowerParts<'a> {
@@ -1256,6 +1520,8 @@ impl<'a> LowerParts<'a> {
             state_names: self.state_names,
             state_names_by_id: self.state_names_by_id,
             locals,
+            int_locals: Some(std::rc::Rc::clone(&self.int_locals)),
+            int_ctx: false,
             func_ids: self.func_ids,
             field_dims: self.field_dims,
             namespace: self.namespace,
@@ -1290,7 +1556,7 @@ pub(crate) fn has_control(stmts: &[LetStmt]) -> bool {
     stmts.iter().any(|s| match s {
         LetStmt::Break(_) | LetStmt::Continue(_) | LetStmt::If(..) => true,
         LetStmt::Repeat(_, body) | LetStmt::For(_, _, _, body) => has_control(body),
-        LetStmt::Let(..) => false,
+        LetStmt::Let(..) | LetStmt::LetInt(..) => false,
     })
 }
 
@@ -1330,6 +1596,7 @@ pub(crate) fn expr_has_query(expr: &Expr) -> bool {
 pub(crate) fn stmts_have_query(stmts: &[LetStmt]) -> bool {
     stmts.iter().any(|s| match s {
         LetStmt::Let(_, e) => expr_has_query(e),
+        LetStmt::LetInt(_, e) => expr_has_query(e),
         LetStmt::If(c, t, e) => {
             expr_has_query(c)
                 || expr_has_query(t)
@@ -1396,6 +1663,25 @@ pub(crate) fn lower_let_block(
     let mut broke: Option<u32> = None; // block-local break accumulator
     for stmt in stmts {
         match stmt {
+            // RFC-0043: an integer-annotated `let` binds an exact `I64`.
+            LetStmt::LetInt(name, expr) => {
+                let ctx = parts.ctx(locals);
+                let ctx = LowerCtx {
+                    int_ctx: true,
+                    ..ctx
+                };
+                let computed = lower_expr(expr, &ctx, next_id, out);
+                // If the RHS is not already an exact integer (e.g. `let n: i64
+                // = x/2` with a state read), truncate toward zero.
+                let computed = if expr_is_integer(expr, &parts.int_locals) {
+                    computed
+                } else {
+                    f64_to_i64(computed, next_id, out)
+                };
+                locals.insert(name.clone(), computed);
+                parts.int_locals.borrow_mut().insert(name.clone());
+                continue;
+            }
             LetStmt::Let(name, expr) => {
                 let ctx = parts.ctx(locals);
                 let computed = lower_expr(expr, &ctx, next_id, out);
@@ -1425,7 +1711,7 @@ pub(crate) fn lower_let_block(
             LetStmt::Break(cond) | LetStmt::Continue(cond) => {
                 let ctx = parts.ctx(locals);
                 let c = match cond {
-                    Some(e) => truthy(lower_expr(e, &ctx, next_id, out), next_id, out),
+                    Some(e) => truthy_f64(e, &ctx, next_id, out),
                     None => const_reg(1.0, next_id, out),
                 };
                 let one = const_reg(1.0, next_id, out);
@@ -1544,12 +1830,25 @@ pub(crate) fn binary(
     next_id: &mut u32,
     out: &mut Vec<crate::eir::Instruction>,
 ) -> u32 {
+    binary_typed(op, a, b, crate::eir::ValueType::F64, next_id, out)
+}
+
+/// Binary op with an explicit result/operand value type (RFC-0043 uses this to
+/// emit `I64` arithmetic for `Int op Int` and `F64` otherwise).
+pub(crate) fn binary_typed(
+    op: crate::eir::Opcode,
+    a: u32,
+    b: u32,
+    ty: crate::eir::ValueType,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> u32 {
     let r = *next_id;
     *next_id += 1;
     out.push(crate::physics_eir::instr(
         op,
         r,
-        Some(crate::eir::ValueType::F64),
+        Some(ty),
         vec![a, b],
         None,
         None,

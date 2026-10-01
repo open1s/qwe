@@ -2923,6 +2923,36 @@ systems { update { on = e; dt = 1.0 x = nope[0] } }",
 }
 
 #[test]
+fn for_bound_can_be_array_len() {
+    // RFC-0044: `for j in 0..len(arr)` unrolls to the array's declared length,
+    // matching a hand-written bound, cross-backend.
+    let src = r#"
+        world { gravity=(0,0,0)
+            entity e { state = ( acc = 0.0 ) array 3 v { 1.0, 2.0, 3.0 } } }
+        systems { update { on = e; dt = 1.0
+            let sum = acc
+            for j in 0..len(v) { let sum = sum + v[j] }
+            acc = acc + ( sum - acc )
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 6.0, "1+2+3");
+}
+
+#[test]
+fn array_len_unknown_name_is_detail_109() {
+    match LangRuntime::compile(
+        "world { gravity=(0,0,0) entity e { state=(x=0.0) array 2 v { 1.0, 2.0 } } }\n\
+systems { update { on = e; dt = 1.0 for j in 0..len(nope) { let y = j } x = x } }",
+    ) {
+        Ok(_) => panic!("`len` of an unknown name must be rejected"),
+        Err(e) => assert_eq!(e.detail, 109, "detail = {}", e.detail),
+    }
+}
+
+#[test]
 fn typed_array_initializer_arity_is_checked() {
     match LangRuntime::compile(
         "world { gravity=(0,0,0) entity e { state=(x=0.0) array 2 v { 1.0, 2.0, 3.0 } } }\n\
@@ -2972,6 +3002,35 @@ fn int_let_uses_integer_semantics() {
     let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
     assert_eq!(st.values[0], 3.0, "7/2 must be 3 (integer)");
     assert_eq!(st.values[1], 1.0, "7%3 must be 1");
+}
+
+#[test]
+fn rfc_0043_integer_and_fractional_literals_mix() {
+    // RFC-0043: `Int op Int` stays exact; a fractional literal (or a float
+    // state read) widens the whole expression to f64. Exercised cross-backend
+    // (interpreter ≡ native JIT) with a non-trivial f64 boundary in between.
+    let src = r#"
+        world { gravity=(0,0,0) entity e { state=(a = 0.0, b = 0.0, c = 0.0, d = 0.0, e = 0.0) } }
+        systems { update { on = e; dt = 1.0
+            let n: i64 = 7 / 2
+            a = n + 0.0
+            b = 1 / 2
+            c = 1.0 / 2.0
+            d = 1 + 2 * 3
+            e = 2.5 + 1
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 3.0, "f64(7/2)");
+    assert_eq!(st.values[1], 0.0, "1/2 is integer division");
+    assert_eq!(st.values[2], 0.5, "1.0/2.0 stays fractional");
+    assert_eq!(st.values[3], 7.0, "exact integer arithmetic");
+    assert_eq!(
+        st.values[4], 3.5,
+        "a fractional operand widens the expression"
+    );
 }
 
 #[test]
@@ -3296,6 +3355,33 @@ fn native_jit_promotes_and_matches_interpreter() {
             rt.native_executions() > 0,
             "native JIT must promote and run on a hot, eligible kernel"
         );
+    }
+}
+
+#[test]
+fn native_jit_sin_cos_matches_interpreter_past_promotion() {
+    // #91: clang fused a `sin(x)`/`cos(x)` pair in the native backend into
+    // `__sincos_stret`, whose sine differs from libm `sin` (the interpreter's
+    // `f64::sin`) by 1 ULP. The divergence only appears once the native code is
+    // hot and the interpreter/JIT writes are compared bit-for-bit, so step well
+    // past `NATIVE_PROMOTE` with trig on a state slot read back each step.
+    // `-fno-builtin` in the native compile restores bit-identical math.
+    let src = "world { gravity=(0,0,0)\n\
+                 params { L1 = 2.0 }\n\
+                 entity a { state = (x=0.0, y=0.0, z=0.0, s3=0., s4=0., s5=0., s6=0., ang=0.0) } }\n\
+               systems { update { on=a; dt=1.0\n\
+                 let q1 = 1.1 * sin(6.283185307179586 * t / 40.0)\n\
+                 x = 0.5 * L1 * cos(q1)\n\
+                 y = 0.5 * L1 * sin(q1)\n\
+                 z = 0.0\n\
+                 ang = q1 } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.enable_native_jit(true);
+    // 2000 steps > the step-1935 ULP divergence, so a regression fails here.
+    for i in 0..2000 {
+        if let Err(e) = rt.step_cross() {
+            panic!("diverged at step {i}: {e:?}");
+        }
     }
 }
 

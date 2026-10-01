@@ -213,7 +213,12 @@ gate_kw = @{ "until" ~ !(ASCII_ALPHANUMERIC | "_") | "while" ~ !(ASCII_ALPHANUME
 // `for i in lo..hi { let … }` unrolls with the index bound as a local per
 // iteration (ascending integers, bounded). Same body restrictions as repeat.
 for_stmt = { "for" ~ ident ~ "in" ~ for_range ~ "{" ~ repeat_item* ~ "}" }
-for_range = { number ~ ".." ~ number }
+for_range = { for_bound ~ ".." ~ for_bound }
+// A `for` bound is a literal integer or the length of a named array declared in
+// the world (`for j in 0..len(samples)`), which is a compile-time constant
+// (RFC-0044).
+for_bound = { len_call | number }
+len_call = { "len" ~ "(" ~ ident ~ ")" }
 repeat_item = { (let_stmt | repeat_stmt | for_stmt | break_stmt | continue_stmt) ~ ";"? }
 // `break` / `continue` (optionally `break if (cond)`) inside a loop body.
 break_stmt = { break_kw ~ (if_kw ~ expr)? }

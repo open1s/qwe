@@ -8,18 +8,25 @@ either order; an entity may declare several `array` fields);
 `name[j] = expr`, `name[j] += expr`, and `inte name[j] = rate` writes;
 constant indices are bounds-checked at compile time (detail 52) and an unknown
 array name is detail 109 — both fail loudly instead of silently reading 0.0.
-`vecN` and `s[i]` are unchanged. Conformance: `pwe-conformance` "RFC-0044 typed
-arrays (static + runtime index, cross-backend)"; tests
+`vecN` and `s[i]` are unchanged. A `for` bound may be `len(name)` — the
+declared length of a named array, a compile-time integer (`for j in
+0..len(samples)`); an unknown array name is detail 109. Conformance:
+`pwe-conformance` "RFC-0044 typed arrays (static + runtime index + len bound,
+cross-backend)"; tests
 `lang::tests::typed_arrays_read_write_and_bounds`,
+`lang::tests::for_bound_can_be_array_len`,
+`lang::tests::array_len_unknown_name_is_detail_109`,
 `typed_array_runtime_index_read_matches_static`,
 `typed_array_constant_index_out_of_range_is_rejected`,
 `typed_array_initializer_arity_is_checked`, `typed_array_fields_compose_and_allow_several_per_entity`,
 `typed_array_dynamic_write_lands_on_the_target_layout`,
 `typed_array_unknown_array_in_ode_rule_is_rejected`.
 
-Deferred (future, see **Deferred** below): a `len(name)` builtin usable as a
-`for` bound, dynamic-index bounds checks, and array element unit annotations.
-The `EntityDecl.arrays` map records each array's length, so these are additive.
+Deferred (future, see **Deferred** below): dynamic-index bounds checks and
+array element unit annotations. The `EntityDecl.arrays` map records each
+array's length, so these are additive. (`len(name)` in a `for` bound is
+implemented; as a general scalar expression it is not — it resolves at parse
+time against the world's array layout, so it is only meaningful as a bound.)
 
 ## Motivation
 
@@ -82,11 +89,9 @@ recorded in `EntityDecl.arrays`):
 Specified here but **not** part of this revision; `EntityDecl.arrays` already
 records the length, so each item is additive:
 
-- `len(name)` — a compile-time integer literal `N`, usable in `for` bounds
-  (`for j in 0..len(arr)`), with an unrolled body matching a hand-written
-  sequence. On a non-array name it is detail 109.
 - Bounds checks on **runtime** indices (today unchecked, exactly like `s[i]`).
 - Per-element unit annotations.
+- `len(name)` outside a `for` bound (a general scalar expression).
 
 ## Backward compatibility
 

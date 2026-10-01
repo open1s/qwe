@@ -298,6 +298,7 @@ impl EirSystem for UpdateSystem {
                 params: &self.param_names,
                 field_dims: &self.field_dims,
                 current_entity: entity,
+                int_locals: Default::default(),
             };
             lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
             // Rebuild the ctx so the slot rules can see the locals.
@@ -309,6 +310,8 @@ impl EirSystem for UpdateSystem {
                 state_names: &sn,
                 state_names_by_id: &self.state_names_by_id,
                 locals: &locals,
+                int_ctx: false,
+                int_locals: Some(std::rc::Rc::clone(&parts.int_locals)),
                 func_ids: &self.func_ids,
                 namespace: &self.namespace,
                 params: &self.param_names,
@@ -319,7 +322,7 @@ impl EirSystem for UpdateSystem {
             // the state is untouched when the gate is 0 (mode semantics).
             let gate_reg = match &self.when {
                 Some(w) => {
-                    let rw = lower_expr(w, &ctx, &mut next_id, out);
+                    let rw = lower_expr_f64(w, &ctx, &mut next_id, out);
                     Some(truthy(rw, &mut next_id, out))
                 }
                 None => None,
@@ -329,7 +332,7 @@ impl EirSystem for UpdateSystem {
                     continue;
                 }
                 // delta = expr(state)
-                let expr_reg = lower_expr(expr, &ctx, &mut next_id, out);
+                let expr_reg = super::lower::lower_expr_f64(expr, &ctx, &mut next_id, out);
                 // delta *= dt
                 let dt_reg = next_id;
                 next_id += 1;
@@ -386,7 +389,7 @@ impl EirSystem for UpdateSystem {
                 let Some(idx_expr) = idx.resolve(&sn) else {
                     continue;
                 };
-                let expr_reg = lower_expr(expr, &ctx, &mut next_id, out);
+                let expr_reg = super::lower::lower_expr_f64(expr, &ctx, &mut next_id, out);
                 let dt_reg = next_id;
                 next_id += 1;
                 out.push(crate::physics_eir::instr(
@@ -411,7 +414,7 @@ impl EirSystem for UpdateSystem {
                     Some(g) => binary(crate::eir::Opcode::Mul, scaled, g, &mut next_id, out),
                     None => scaled,
                 };
-                let ri = lower_expr(&idx_expr, &ctx, &mut next_id, out);
+                let ri = lower_expr_f64(&idx_expr, &ctx, &mut next_id, out);
                 let cur = next_id;
                 next_id += 1;
                 out.push(crate::physics_eir::instr(
@@ -457,7 +460,7 @@ impl EirSystem for UpdateSystem {
                 if idx >= slots {
                     continue;
                 }
-                let val = lower_expr(expr, &ctx, &mut next_id, out);
+                let val = super::lower::lower_expr_f64(expr, &ctx, &mut next_id, out);
                 let val = match gate_reg {
                     Some(g) => {
                         let v = next_id;
@@ -491,8 +494,8 @@ impl EirSystem for UpdateSystem {
                 let Some(idx_expr) = idx.resolve(&sn) else {
                     continue;
                 };
-                let ri = lower_expr(&idx_expr, &ctx, &mut next_id, out);
-                let val = lower_expr(expr, &ctx, &mut next_id, out);
+                let ri = lower_expr_f64(&idx_expr, &ctx, &mut next_id, out);
+                let val = super::lower::lower_expr_f64(expr, &ctx, &mut next_id, out);
                 let val = match gate_reg {
                     Some(g) => {
                         let cur = next_id;
@@ -875,6 +878,7 @@ impl EirSystem for Rk4System {
                     params: &self.param_names,
                     field_dims: &self.field_dims,
                     current_entity: entity,
+                    int_locals: Default::default(),
                 };
                 lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
                 let ctx = LowerCtx {
@@ -885,6 +889,8 @@ impl EirSystem for Rk4System {
                     state_names: &sn,
                     state_names_by_id: &self.state_names_by_id,
                     locals: &locals,
+                    int_ctx: false,
+                    int_locals: None,
                     func_ids: &self.func_ids,
                     namespace: &self.namespace,
                     params: &self.param_names,
@@ -893,7 +899,7 @@ impl EirSystem for Rk4System {
                 };
                 let mut k: Vec<Option<u32>> = vec![None; slots];
                 for (i, expr) in &resolved {
-                    k[*i] = Some(lower_expr(expr, &ctx, &mut next_id, out));
+                    k[*i] = Some(lower_expr_f64(expr, &ctx, &mut next_id, out));
                 }
                 stage_k.push(k);
                 prev_k = stage_k.last();
@@ -932,6 +938,8 @@ impl EirSystem for Rk4System {
                     state_names: &sn,
                     state_names_by_id: &self.state_names_by_id,
                     locals: &glocals,
+                    int_ctx: false,
+                    int_locals: None,
                     func_ids: &self.func_ids,
                     namespace: &self.namespace,
                     params: &self.param_names,
@@ -939,7 +947,7 @@ impl EirSystem for Rk4System {
                     current_entity: entity,
                 };
                 let mut gnext = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
-                let rw = lower_expr(w, &gctx, &mut gnext, out);
+                let rw = lower_expr_f64(w, &gctx, &mut gnext, out);
                 truthy(rw, &mut gnext, out)
             });
             for (i, _) in &resolved {
@@ -1218,10 +1226,11 @@ impl EirSystem for InvariantSystem {
             params: &self.param_names,
             field_dims: &self.field_dims,
             current_entity: entity,
+            int_locals: Default::default(),
         };
         lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
         let ctx = parts.ctx(&locals);
-        let expr_reg = lower_expr(&self.expr, &ctx, &mut next_id, out);
+        let expr_reg = lower_expr_f64(&self.expr, &ctx, &mut next_id, out);
         // `conserved` records the quantity itself; `invariant` records a 0/1
         // verdict (1 = violated, when the expression is exactly zero / NaN).
         let value = if self.conserved {
@@ -1418,10 +1427,11 @@ impl EirSystem for WatchSystem {
             params: &self.param_names,
             field_dims: &self.field_dims,
             current_entity: entity,
+            int_locals: Default::default(),
         };
         let ctx = parts.ctx(&locals);
         // v = expr(state); prev = mem
-        let v = lower_expr(&self.expr, &ctx, &mut next_id, out);
+        let v = lower_expr_f64(&self.expr, &ctx, &mut next_id, out);
         let prev = slot_regs[self.mem];
         // crossing = prev·v < 0 (a strict sign change; a zero memory is the
         // initial state and never counts as a crossing).
@@ -2148,6 +2158,8 @@ impl EirSystem for DespawnSystem {
             state_names: &sn,
             state_names_by_id: &self.state_names_by_id,
             locals: &locals,
+            int_ctx: false,
+            int_locals: None,
             func_ids: &self.func_ids,
             field_dims: &self.field_dims,
             namespace: &self.namespace,
@@ -2168,7 +2180,7 @@ impl EirSystem for DespawnSystem {
                 0,
             )),
         ));
-        let w = lower_expr(&self.when, &ctx, &mut next_id, out);
+        let w = lower_expr_f64(&self.when, &ctx, &mut next_id, out);
         let zero = const_reg(0.0, &mut next_id, out);
         let one = const_reg(1.0, &mut next_id, out);
         let is_active = next_id;
@@ -2543,13 +2555,15 @@ impl EirSystem for ChanSystem {
                     state_names: &self.state_names,
                     state_names_by_id: &std::collections::BTreeMap::new(),
                     locals: &std::collections::BTreeMap::new(),
+                    int_ctx: false,
+                    int_locals: None,
                     func_ids: &self.func_ids,
                     namespace: &self.namespace,
                     params: &self.param_names,
                     field_dims: &self.field_dims,
                     current_entity: entity,
                 };
-                let value_reg = lower_expr(expr, &ctx, &mut next_id, out);
+                let value_reg = lower_expr_f64(expr, &ctx, &mut next_id, out);
                 out.push(crate::physics_eir::instr(
                     crate::eir::Opcode::WriteView,
                     0,
@@ -2955,6 +2969,7 @@ entity — skipped (not in its state; typo?)",
                 params: &self.param_names,
                 field_dims: &self.field_dims,
                 current_entity: entity,
+                int_locals: Default::default(),
             };
             lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
             let ctx = parts.ctx(&locals);
@@ -2963,7 +2978,7 @@ entity — skipped (not in its state; typo?)",
             // is not a reaction rate and would corrupt the selection).
             let mut a: Vec<u32> = Vec::with_capacity(active.len());
             for c in &active {
-                let r = lower_expr(c.prop, &ctx, &mut next_id, out);
+                let r = lower_expr_f64(c.prop, &ctx, &mut next_id, out);
                 let pos = nb_cmp(out, &mut next_id, crate::eir::Opcode::Gt, r, zero);
                 a.push(nb_select(out, &mut next_id, pos, r, zero));
             }
@@ -3016,7 +3031,7 @@ entity — skipped (not in its state; typo?)",
                 let fired = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, fire_f, hit);
                 let fired_b = nb_cmp(out, &mut next_id, crate::eir::Opcode::Ne, fired, zero);
                 for (slot, e) in &c.set {
-                    let new = lower_expr(e, &ctx, &mut next_id, out);
+                    let new = lower_expr_f64(e, &ctx, &mut next_id, out);
                     let base = pending
                         .iter()
                         .find(|(s, _)| s == slot)
@@ -3439,13 +3454,15 @@ impl EirSystem for PairSystem {
                 state_names: &sn,
                 state_names_by_id: &self.state_names_by_id,
                 locals: &locals,
+                int_ctx: false,
+                int_locals: None,
                 func_ids: &self.func_ids,
                 field_dims: &self.field_dims,
                 namespace: &self.namespace,
                 params: &self.param_names,
                 current_entity: entity,
             };
-            let f = super::lower::lower_expr(&self.law, &ctx, &mut next_id, out);
+            let f = super::lower::lower_expr_f64(&self.law, &ctx, &mut next_id, out);
             let ux = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, dx, r);
             let uy = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, dy, r);
             let uz = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, dz, r);

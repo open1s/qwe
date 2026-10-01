@@ -273,6 +273,10 @@ fn eligible(f: &Function) -> bool {
         | Opcode::Rem
         | Opcode::Pow
         | Opcode::Fma
+        // RFC-0043 conversions stay on the interpreter (the native backend
+        // compiles a pure-f64 register file today).
+        | Opcode::I64ToF64
+        | Opcode::F64ToI64
         | Opcode::Eq
         | Opcode::Ne
         | Opcode::Lt
@@ -370,6 +374,11 @@ impl NativeProgram {
             .arg("-fPIC")
             // Keep two-rounding `Mul;Add` semantics (EIR `Fma`): no contraction.
             .arg("-ffp-contract=off")
+            // Clang fuses a `sin(x)`/`cos(x)` pair into `__sincos_stret`, whose
+            // sine is up to 1 ULP off from libm's `sin` (the interpreter's
+            // `f64::sin`). The interpreter is the semantic oracle, so disable
+            // builtin substitution and call libm directly for bit-identical math.
+            .arg("-fno-builtin")
             .arg("-o")
             .arg(&lib_path)
             .arg(&c_path)
@@ -702,6 +711,10 @@ fn emit_function(f: &Function) -> String {
                 c_double(imm_double(ins.constant.unwrap_or(Immediate::F64(0.0))))
             ),
             Opcode::Fma => format!("  r[{res}] = r[{}] * r[{}] + r[{}];\n", o[0], o[1], o[2]),
+            // RFC-0043 conversions are interpreter-only; `eligible` excludes
+            // them, so this arm is unreachable for a compiled function.
+            Opcode::I64ToF64 => format!("  r[{res}] = r[{}];\n", o[0]),
+            Opcode::F64ToI64 => format!("  r[{res}] = r[{}];\n", o[0]),
             Opcode::Rem => div_guard(o[1], res, format!("fmod(r[{}], r[{}])", o[0], o[1])),
             Opcode::Pow => format!("  r[{res}] = pow(r[{}], r[{}]);\n", o[0], o[1]),
             Opcode::Atan2 => format!("  r[{res}] = atan2(r[{}], r[{}]);\n", o[0], o[1]),

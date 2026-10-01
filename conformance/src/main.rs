@@ -593,24 +593,70 @@ fn extensions(report: &mut Report) {
     // runtime index, on both backends.
     let arrays = r#"
         world { gravity = (0,0,0)
-            entity e { state = (x = 0.0, k = 2.0) array 4 v { 1.0, 2.0, 3.0, 4.0 } } }
+            entity e { state = (x = 0.0, k = 2.0, s = 0.0) array 4 v { 1.0, 2.0, 3.0, 4.0 } } }
         systems { update { on=e; dt = 1.0
             v[0] = v[0] + 10.0
             v[1] += 20.0
             v[k] = v[k] + 100.0
-            x = v[k] + v[3] } }
+            x = v[k] + v[3]
+            let sum = 0.0
+            for j in 0..len(v) { let sum = sum + v[j] }
+            s = sum } }
     "#;
     let arrays_ok = run(arrays, 1)
         .map(|rt| {
             let st = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
-            st.map(|s| s.values.get(2) == Some(&11.0) && s.values.get(4) == Some(&103.0))
-                .unwrap_or(false)
+            st.map(|s| {
+                // Slots: x, k, s, v.0, v.1, v.2, v.3.
+                s.values.get(3) == Some(&11.0)      // v[0] += 10
+                    && s.values.get(5) == Some(&103.0) // v[k] += 100 (k=2)
+                    // `for j in 0..len(v)` sums the pre-write array (1+2+3+4).
+                    && s.values.get(2) == Some(&10.0)
+            })
+            .unwrap_or(false)
                 && finite(&rt, 1)
         })
         .unwrap_or(false);
     report.record(
-        "RFC-0044 typed arrays (static + runtime index, cross-backend)",
+        "RFC-0044 typed arrays (static + runtime index + len bound, cross-backend)",
         if arrays_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0043: exact integer/bool values lowered to typed EIR registers.
+    // `n: i64` keeps exact integer arithmetic (`/`/`%` truncate), `f64(n)`
+    // widens, and a fractional literal stays f64 — all byte-identical across
+    // the interpreter and the JIT.
+    let typed = r#"
+        world { gravity = (0,0,0)
+            entity e { state = (x = 0.0, y = 0.0, z = 0.0, w = 0.0, v = 0.0, k = 0.0) } }
+        systems { update { on=e; dt = 1.0
+            let n: i64 = 7 / 2
+            x = f64(n)
+            y = n / 2
+            z = n % 4
+            w = 1 / 2
+            v = 1.0 / 2.0
+            k = 1 + 2 * 3 } }
+    "#;
+    let typed_ok = run(typed, 1)
+        .map(|rt| {
+            let st = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+            st.map(|s| {
+                let v = |i: usize| s.values.get(i).copied().unwrap_or(f64::NAN);
+                v(0) == 3.0       // f64(7/2) = 3
+                    && v(1) == 1.0 // 3/2 = 1 (integer division)
+                    && v(2) == 3.0 // 3 % 4
+                    && v(3) == 0.0 // 1/2 = 0 (integer division)
+                    && v(4) == 0.5 // fractional literal stays f64
+                    && v(5) == 7.0 // exact integer arithmetic
+            })
+            .unwrap_or(false)
+                && finite(&rt, 1)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0043 typed int/bool values (exact integer arithmetic, cross-backend)",
+        if typed_ok { Case::Pass } else { Case::Fail },
     );
 }
 

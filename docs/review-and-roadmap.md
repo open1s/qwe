@@ -21,7 +21,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 | 最大文件 | `lang/tests.rs` 4.3k；`eir.rs` 4.3k；`lang/systems.rs` 3.5k（原 `lang.rs` 10.8k 已拆分为 8 个模块） |
 | 外部依赖 | 运行时仅 `pest`（+ macOS 可选 `metal`）；dev 依赖仅 `naga`；无其它重依赖 |
 | `pwe-api` | `#![no_std]`、零依赖、82 个 `pub` 项、`include/pwe_abi.h`（布局被测试锁定） |
-| RFC | 46 份（RFC-0001…0046，其中 0043/0044/0045/0046 为扩展集）；conformance 25 用例 |
+| RFC | 46 份（RFC-0001…0046，其中 0043/0044/0045/0046 为扩展集）；conformance 27 用例 |
 | 测试 | 439 个（单元 381 + laws 21 + property 4 + stdlib 6 + fmt 1 + fuzz 2 + `pwe-api` 15 + cli 9） |
 | 非测试 `unwrap()` | 0（`clippy.toml` + `#![cfg_attr(not(test), deny(clippy::unwrap_used))]` 防回归） |
 | `unsafe` | 31 处，集中在 `src/ffi.rs`(10)/`native.rs`(19)/`gpu.rs`(2) |
@@ -39,8 +39,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 ### 2.2 语法与语言设计
 - 优点：领域关键词清晰；单位词法无歧义；`1/60` 分数；`vecN`/`struct` 铺平；`=`/`inte`/`deriv(E)` 语义已自洽。
 - 问题：`funcs` **位置式 `s0..` 形参**；表达式靠 PEG 顺序消歧、脆弱；**仅 f64 用户可见**
-  （`let` 标注与 `i64/f64/bool(…)` 转换已交付，但 int/bool 直达寄存器与数组为 RFC-0043/0044，
-  Proposed）；`import` 仅相对路径、无命名空间；语义带 v0.3 pragma + 迁移器但**尚未冻结**。
+  （`let` 标注、`i64/f64/bool(…)` 转换、int/bool 直达寄存器（RFC-0043）与具名数组（RFC-0044）均已交付）；`import` 仅相对路径、无命名空间；语义带 v0.3 pragma + 迁移器但**尚未冻结**。
 
 ### 2.3 科学正确性
 - 优点：`tests/laws.rs` 21 项解析解校验；std 覆盖 12 域；系统内同步屏障已交付。
@@ -51,7 +50,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 - 已具备：解释器/原生 JIT/AOT/线程化、跨后端差分、EIR 二进制/快照、分布式所有权（进程内）、能力、
   池化、关节、软体、结构体、PDE 场、通道、模块系统（RFC-0045）、SSA CFG 表示（RFC-0046）、
   fmt/REPL/LSP/playground/doctest、查看器。
-- 缺口：类型系统（int/bool/数组 → RFC-0043/0044）；GPU 加速（#41 设备常驻）；QUIC 传输与插件宿主
+- 缺口：GPU 加速（#41 设备常驻）；QUIC 传输与插件宿主（类型系统 int/bool/数组已由 RFC-0043/0044 交付）
   （P4）；`funcs` 具名形参。
 
 ### 2.5 易用性
@@ -71,7 +70,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 
 ### 2.8 可扩展性
 - EIR 已有显式 SSA CFG 表示与 wire 形式（RFC-0046）；opcode 元数据单源；RFC↔conformance 25/0。
-- 残留：块参数 SSA 与跨块优化（DCE/GVN）；RFC-0043/0044 覆盖待补。
+- 残留：块参数 SSA 与跨块优化（DCE/GVN）；RFC-0043/0045 已补齐（0044 仅剩运行期下标越界检查）。
 
 ## 3. 路线图
 
@@ -91,8 +90,8 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 
 ### Phase 2 — 类型系统与科学正确性
 - [x] 系统内同步屏障（`Barrier` = 系统边界；committed = start-of-system）
-- [~] 值类型：`let` 类型标注（89）、整型常量语义、显式转换 `i64/f64/bool(…)` 已交付；**int/bool 直达 EIR 寄存器**见 RFC-0043（Proposed）
-- [x] **RFC-0044 具名定长数组**（`array N name`、`name[j]` 读/写/`+=`/`inte`、常量下标越界 detail 52、未知数组 detail 109、内联初始化）；`vecN`/`s[i]` 不变；conformance + 单测（`len()` 与 `for` 边界用法列为 Deferred）
+- [x] 值类型（**RFC-0043 Done**）：`let` 类型标注（89）、整型常量语义、显式转换 `i64/f64/bool(…)`；**int/bool 直达 EIR 寄存器**（`I64ToF64`/`F64ToI64`，精确整数运算，解释器为语义基准），conformance "RFC-0043 typed int/bool values (exact integer arithmetic, cross-backend)" + `lang::tests::int_let_uses_integer_semantics`/`rfc_0043_integer_and_fractional_literals_mix`
+- [x] **RFC-0044 具名定长数组**（`array N name`、`name[j]` 读/写/`+=`/`inte`、常量下标越界 detail 52、未知数组 detail 109、内联初始化、**`for j in 0..len(name)` 编译期长度边界**）；`vecN`/`s[i]` 不变；conformance + 单测（运行期下标越界检查列为 Deferred）
 - [~] 物理合理性运行时：`invariant`/`conserved{tolerance}` 运行时断言与守恒/有界回归测试已交付；**CFL 与 diffuse 稳定性仍是「算出但不检查」，示例未接入**（见 2.3）
 - [ ] 物理 demo 断言纳入 CI
 
@@ -122,7 +121,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
   - [x] **fuzz（依赖无关、CI 可跑）**：`reference/tests/fuzz.rs` 用确定性 PRNG 向所有公开解码边界（EIR/extension/channel）与 parser/compiler/formatter 灌入随机字节/源码，断言**不 panic**、解析返回 `Result`、`format_source` **幂等**。Miri 用法记于 CONTRIBUTING（`cargo +nightly miri test --test fuzz`；`cfg!(miri)` 下自动减迭代）。
   - [ ] 分布式/插件沙箱（更大）——**已排期 P4**：RFC-0006 QUIC 传输 + RFC-0016 同进程能力级插件宿主
 - [~] EIR 升级为显式 SSA CFG；RFC↔conformance ≥80%
-  - [x] RFC↔conformance：冻结集 RFC-0019–0036 全覆盖；**扩展 RFC-0037–0042 各有 conformance 用例**（场扫描/池/关节/软体/struct，cross-backend），**RFC-0045 再增 2 例**，报告 **total=25 failed=0**；`docs/rfc-alignment.md` 增补扩展 RFC 表（0043/0044 为 Proposed）。
+  - [x] RFC↔conformance：冻结集 RFC-0019–0036 全覆盖；**扩展 RFC-0037–0042 各有 conformance 用例**（场扫描/池/关节/软体/struct，cross-backend），**RFC-0043/0045 再增 3 例**，报告 **total=27 failed=0**；`docs/rfc-alignment.md` 增补扩展 RFC 表（0043/0044/0045 均为 Done）。
   - [x] EIR 显式 SSA CFG（RFC-0046，已实现表示层+wire）：`EirModule::blocks`/`verify_cfg`；`verify_linear_dominance` 改用具实块；FUNCTIONS 段对含分支函数编码显式块（`block_count>1`，兼容旧单块），解码确定性拼接、重编码逐字节一致（`eir_cfg_blocks_round_trip`）。残留：块参数 SSA 与跨块优化（DCE/GVN）。
 - [x] ADR/贡献指南/架构文档：`docs/architecture.md`（流水线/边界/执行层）、`CONTRIBUTING.md`（工具链/门禁/特性/流程）、`docs/adr/`（0001–0005：原生 cc 后端、进程内豁免、opt-in 线程化、SIMD 不采用、GPU 实验性）。
 
@@ -138,6 +137,10 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 ## 4b. Phase 3 进展（本次迭代）
 - 解释器读路径 + 调用索引优化；优化层的常量折叠与 FMA 融合（`Fma` opcode）。
 - 真原生后端（纯函数）：C 代码生成 + `cc` + `dlopen`，与解释器逐位一致（差分测试）。
+  - #91：原生编译禁用编译器内建替换（`-fno-builtin`）。clang 会把成对出现的
+    `sin(x)`/`cos(x)` 融合为 `__sincos_stret`，其正弦与 libm `sin`（解释器
+    `f64::sin` 所调用的实现）相差 1 ULP；热升级后 `step_cross` 逐位比较即失败。
+    同时把 `present` 的交叉校验相位对齐到 `run`（两者同为每 16 步的最后一步）。
 - 基准（release，本机，权威记录见 `reference/benches/baseline.txt`，由
   `tools/bench-check.sh --update` 生成）：`compile(nbody 64)` ≈ 93.9 ms、
   `step_interpreter(nbody 64)` ≈ 2.36 ms、`step_cross` ≈ 5.09 ms、

@@ -76,11 +76,20 @@ pub enum LetStmt {
     Continue(Option<Expr>),
     /// `if cond { return a } [else { return b }]` (control-flow branch).
     If(Expr, Expr, Option<Expr>),
+    /// An integer-annotated `let` (RFC-0043): the value is coerced to an exact
+    /// `I64` (wrapping the RHS in a `F64ToI64` when it is not already integer).
+    LetInt(String, Expr),
 }
 /// A parsed scalar expression over state slots (`s0`, `s1`, …).
 #[derive(Clone, Debug)]
 pub enum Expr {
+    /// A numeric literal. `int = true` is an exact integer literal (no decimal
+    /// point / exponent); lowering emits `Immediate::I64` and integer
+    /// arithmetic (RFC-0043). The `f64` is the literal's value (also its exact
+    /// coercion target where a number is required).
     Const(f64),
+    /// An exact integer literal (RFC-0043): `7`, not `7.0`.
+    Int(i64),
     Slot(usize),
     /// A dynamic slot read `s[i]`: the State slot at a runtime index.
     SlotDyn(Box<Expr>),

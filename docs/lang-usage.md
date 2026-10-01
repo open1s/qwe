@@ -576,8 +576,19 @@ System *kinds* and *params* are ordinary identifiers matched at build time (an
 unknown kind is detail 49). Builtins are ordinary calls special-cased in lowering.
 
 Casts: `i64(x)`/`i32(x)`/`u64(x)`/`u32(x)` truncate toward zero,
-`f64(x)` is the identity, `bool(x)` is `x != 0`. They make value-kind
-boundaries explicit (desugared to existing ops).
+`f64(x)` widens an exact integer (identity on a float), `bool(x)` is
+`x != 0`. They make value-kind boundaries explicit.
+
+**Integer values (RFC-0043).** A number literal with no `.`/exponent (`2`, `-7`)
+is an exact **integer**; a literal with a fraction (`2.0`, `1e-3`) is an f64.
+Integer arithmetic is exact and truncating: `7 / 2 == 3`, `7 % 3 == 1`, and
+`1 / 2 == 0`. An expression is integer only when *both* operands are integers —
+a single fractional operand widens the whole expression: `2.5 + 1 == 3.5`,
+`1.0 / 2.0 == 0.5`. `let n: i64 = expr` binds an exact integer (truncating a
+float `expr` toward zero and trapping on a non-finite one, detail 18); `n / 2`
+then stays integer, while writing `n` to a state slot (`slot = n`) widens it to
+f64. This is intentional and documented — old programs that relied on
+`1 / 2 == 0.5` must write `1.0 / 2.0`.
 
 `print(x)` is a debugging builtin: it records `x` in the run log (shown by
 `pwe run` / the live viewer) and returns `x` unchanged — write `let _ = print(x)`.
@@ -799,8 +810,9 @@ systems {
 * `vecN pos` remains the anonymous, length-less vector form; `array` adds the
   length and the bounds check. Both flatten to flat state slots (zero-cost).
 
-`len(name)` (a compile-time length for `for` bounds) is specified in RFC-0044
-but not yet implemented.
+* A `for` bound may be `len(name)` — the declared length of a named array,
+  resolved at compile time (`for j in 0..len(v) { … }`). An unknown array name is
+  detail 109. Bounds on a **runtime** index remain unchecked (like `s[i]`).
 
 ## 2.12 Struct types (records)
 

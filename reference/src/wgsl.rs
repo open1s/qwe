@@ -100,6 +100,10 @@ pub fn eligible(f: &Function) -> bool {
                     | Opcode::Atan
                     | Opcode::Atan2
                     | Opcode::Hypot
+                    // RFC-0043 value conversions stay on the interpreter (the
+                    // GPU field kernels are f32 numeric only).
+                    | Opcode::I64ToF64
+                    | Opcode::F64ToI64
                     | Opcode::Return
             )
     })
@@ -267,6 +271,10 @@ fn emit_instruction(ins: &crate::eir::Instruction) -> Result<String> {
             lit(const_f32(ins.constant.unwrap_or(Immediate::F32(0.0))))
         ),
         Opcode::Fma => format!("  r[{res}] = fma(r[{}], r[{}], r[{}]);\n", o[0], o[1], o[2]),
+        // RFC-0043 conversions are interpreter-only; `eligible` excludes them,
+        // so this arm is unreachable for a compiled kernel.
+        Opcode::I64ToF64 => format!("  r[{res}] = r[{}];\n", o[0]),
+        Opcode::F64ToI64 => format!("  r[{res}] = r[{}];\n", o[0]),
         Opcode::Pow => format!("  r[{res}] = pow(r[{}], r[{}]);\n", o[0], o[1]),
         Opcode::Atan2 => format!("  r[{res}] = atan2(r[{}], r[{}]);\n", o[0], o[1]),
         Opcode::Log10 => format!("  r[{res}] = log(r[{}]) / log(10.0f);\n", o[0]),

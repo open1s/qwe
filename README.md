@@ -277,11 +277,11 @@ Bounded, deliberate gaps behind the kernel boundary — **not** missing contract
   prismatic joints, plus soft bodies (cloth/jelly, RFC-0040) and a ground plane.
   A broader joint family (cone/universal/gear) is still growing — those need
   rotational state the engine does not model yet.
-* **Values are `f64`-only at lowering.** `let` type annotations, integer
-  constant folding (`7 / 2` under `: i64`), and explicit `i64(…)` / `f64(…)` /
-  `bool(…)` casts are in the front end (detail 89), but every lowered register
-  and state slot is a double; `int`/`bool` reaching EIR registers is RFC-0043
-  and typed arrays are RFC-0044 (both Proposed).
+* **Integer/float kinds are explicit at lowering (RFC-0043, Done).** A literal
+  without `.`/exponent is an exact `i64` register (`7 / 2 == 3`, `1 / 2 == 0`);
+  a fractional operand widens the expression, and `f64(x)` widens an exact
+  integer. State slots remain `f64`, so an integer write coerces. Typed arrays
+  are RFC-0044 (Done).
 * **Distribution and plugins are in-process.** Ownership, epochs, split-brain
   rejection, and the wire format are implemented and tested over a loopback
   channel; the RFC-0006 QUIC transport and the RFC-0016 capability-scoped plugin

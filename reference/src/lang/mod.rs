@@ -166,6 +166,24 @@ fn parse_state_field(
 /// RFC-0044: `array N name [{ v0, v1, … }]` — appends N uninitialized (or
 /// partially initialized) state slots named `name.0 … name.{N-1}` and records
 /// the length in `decl.arrays`, so `name[i]` is bounds-checked by name.
+/// Splits the `array N name` head of an [`Rule::array_field`] declaration into
+/// its `(name, N)` parts. `None` when the text is malformed (the caller emits
+/// the diagnostic).
+pub(crate) fn parse_array_head(text: &str) -> Option<(String, usize)> {
+    let body = text.trim().strip_prefix("array").unwrap_or(text).trim();
+    let head = match body.split_once('{') {
+        Some((h, _)) => h.trim(),
+        None => body.trim_end_matches(';').trim(),
+    };
+    let (n_text, name) = head.split_once(char::is_whitespace)?;
+    let n: usize = n_text.trim().parse().ok()?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), n))
+}
+
 fn parse_array_field(field: pest::iterators::Pair<'_, Rule>, decl: &mut EntityDecl) -> Result<()> {
     // Parse from the field text: `array` writes digits/identifiers as anonymous
     // tokens whose pairs are version-sensitive, and the initializer is a

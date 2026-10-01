@@ -43,10 +43,10 @@ Post-v0.2 extensions implemented by the reference slice. Each is covered by a
 | 0040 | soft bodies (mass-spring grids) | Done | `pwe-conformance` "RFC-0040 soft bodies (8x8 grid stays finite)"; `lang::tests::soft_*` |
 | 0041 | self-contained offline viewer (vendored three.js) | Done | `present::tests` (viewer serves only `/vendor/three/…`); RFC-0041 |
 | 0042 | `struct` record types over flat slots | Done | `pwe-conformance` "RFC-0042 struct record types (flatten + cross-backend)"; `lang::tests::struct_record_types_*` |
-| 0043 | value types lowered to EIR (`int`/`bool`) | Proposed | RFC-0043 (not implemented) |
+| 0043 | value types lowered to EIR (`int`/`bool`) | Done | `pwe-conformance` "RFC-0043 typed int/bool values (exact integer arithmetic, cross-backend)"; `lang::tests::int_let_uses_integer_semantics`, `lang::tests::rfc_0043_integer_and_fractional_literals_mix`, `lang::tests::explicit_numeric_casts`; opcodes `I64ToF64`/`F64ToI64` (interpreter oracle; native/WGSL exclude them) |
 | 0045 | semantic module system (stable names+version, export/privacy, deterministic merge) | Done | `pwe-conformance` RFC-0045 cases; `lang::tests::module_*`, `from_import_respects_export_surface`; details 101/102 |
 | 0046 | EIR as an explicit SSA CFG (blocks/edges; explicit wire form) | Done | `eir::tests::eir_cfg_blocks_round_trip`; `EirModule::blocks`/`verify_cfg`; FUNCTIONS section encodes explicit blocks (block_count>1), legacy single-block still decodes; RFC-0021 concrete layout + RFC-0046 reconciled |
-| 0044 | typed arrays / SoA user types | Done | `pwe-conformance` "RFC-0044 typed arrays (static + runtime index, cross-backend)"; `lang::tests::typed_arrays_read_write_and_bounds`, `typed_array_runtime_index_read_matches_static`, `typed_array_constant_index_out_of_range_is_rejected`, `typed_array_initializer_arity_is_checked` (details 52/109); `len()` + `for` bounds deferred |
+| 0044 | typed arrays / SoA user types | Done | `pwe-conformance` "RFC-0044 typed arrays (static + runtime index + len bound, cross-backend)"; `lang::tests::typed_arrays_read_write_and_bounds`, `typed_array_runtime_index_read_matches_static`, `typed_array_constant_index_out_of_range_is_rejected`, `typed_array_initializer_arity_is_checked` (details 52/109), `for_bound_can_be_array_len`, `array_len_unknown_name_is_detail_109`; runtime-index bounds checks still deferred |
 
 ## General-simulation direction (RFC-0047)
 
