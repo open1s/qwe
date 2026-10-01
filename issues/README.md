@@ -1450,4 +1450,31 @@ Review pass 42 (17 commits `f6bfced1`…`3805fed3`, the fix batch for
 6. Open after pass 42: **#86** (gate discipline — evidence comment),
    **#88** (entity-level opacity).
 
+Review pass 43 (2 commits `2ee12aae` + `1083500c`; closed 0086/0088 —
+**zero open issues**):
+
+1. Gates green at tip `1083500c`: fmt, clippy, **439 tests** (+1),
+   conformance **25/25**, release build; CI/Commit-message/Book all
+   success on the push carrying both commits.
+2. **0088 → `2ee12aae` verified by probe:** entity `opacity = 2.5` →
+   `error 105: entity opacity 2.5 is outside 0..1` + `--> line:col`;
+   `-0.1` → same; duplicate `opacity` → `error 107: duplicate 'opacity'
+   entity field`; the fix generalizes (dup `color`/`state` → 107, `tag`
+   still accumulates rc 0, "at most one collider" enforced — dup
+   colliders reject at parse, detail 60 rather than 107, noted as
+   non-blocking); valid `opacity = 0.22` rc 0; part-level 105 and
+   bond/bonds 108 regressions intact; +43 tests, EN/ZH tables updated.
+3. **0086 → `1083500c` verified:** CONTRIBUTING makes `./tools/gate.sh`
+   mandatory before commit *and* push (citing the 19/30-min windows);
+   **branch protection is real** —
+   `GET /repos/open1s/qwe/branches/main/protection` →
+   `["gate","supply-chain","subject"]`; "Rules that bite" gains the
+   struct-field-rename rule (clippy --all-targets covers examples/tests).
+   Live proof the subject lint bites: my own `25cb905f` push **failed**
+   the `Commit message` check (subject >100 chars) — keep future record
+   subjects ≤100.
+4. Note: `2ee12aae`+`1083500c` arrived as one push, so CI runs exist on
+   the head only (both commits covered by the same green head).
+5. Open after pass 43: **none**.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
