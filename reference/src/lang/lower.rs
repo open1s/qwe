@@ -31,6 +31,25 @@ pub(crate) struct LowerCtx<'a> {
     pub(crate) current_entity: u128,
 }
 
+/// Resolves an RFC-0044 array name to `(base_slot, length)` from the entity's
+/// named layout (`name.0 … name.{len-1}`). `None` when `name` is not an array.
+pub(crate) fn resolve_array(ctx: &LowerCtx<'_>, name: &str) -> Option<(usize, usize)> {
+    let base = *ctx.state_names.get(&format!("{name}.0"))?;
+    let mut len = 1usize;
+    while ctx.state_names.contains_key(&format!("{name}.{len}")) {
+        len += 1;
+    }
+    Some((base, len))
+}
+
+/// A non-negative integer constant index, if the expression is one.
+pub(crate) fn const_index(e: &Expr) -> Option<i64> {
+    match e {
+        Expr::Const(c) if c.is_finite() && c.fract() == 0.0 => Some(*c as i64),
+        _ => None,
+    }
+}
+
 /// Lowers an `Expr` into EIR instructions, returning the result register id.
 /// Lowers the `inte(E)` / `deriv(E)` operators.
 ///
@@ -131,6 +150,65 @@ pub(crate) fn lower_expr(
                 )),
             ));
             out_reg
+        }
+        Expr::Index(name, idx) => {
+            // RFC-0044 typed array `name[i]`: resolve the base and length from
+            // the entity's named layout, then a constant index becomes a static
+            // slot read and a runtime index becomes `ReadSlotDyn`.
+            match resolve_array(ctx, name) {
+                Some((base, len)) => {
+                    if let Some(k) = const_index(idx) {
+                        let k = k as usize;
+                        if k >= len {
+                            push_diag(
+                                52,
+                                0,
+                                format!(
+                                    "array `{name}[{k}]` is out of range (length {len}) — reads 0.0"
+                                ),
+                            );
+                            return 0;
+                        }
+                        ctx.slot_regs.get(base + k).copied().unwrap_or(0)
+                    } else {
+                        let ri = lower_expr(idx, ctx, next_id, out);
+                        let base_reg = *next_id;
+                        *next_id += 1;
+                        out.push(crate::physics_eir::instr(
+                            crate::eir::Opcode::Const,
+                            base_reg,
+                            Some(crate::eir::ValueType::F64),
+                            vec![],
+                            Some(crate::eir::Immediate::F64(base as f64)),
+                            None,
+                        ));
+                        let dyn_idx = binary(crate::eir::Opcode::Add, base_reg, ri, next_id, out);
+                        let out_reg = *next_id;
+                        *next_id += 1;
+                        out.push(crate::physics_eir::instr(
+                            crate::eir::Opcode::ReadSlotDyn,
+                            out_reg,
+                            Some(crate::eir::ValueType::F64),
+                            vec![dyn_idx],
+                            None,
+                            Some(crate::physics_eir::cr(
+                                ctx.current_entity,
+                                crate::physics_eir::state_id(),
+                                0,
+                            )),
+                        ));
+                        out_reg
+                    }
+                }
+                None => {
+                    push_diag(
+                        109,
+                        0,
+                        format!("unknown array `{name}` in `{name}[…]` — reads 0.0"),
+                    );
+                    0
+                }
+            }
         }
         Expr::Neg(x) => {
             let rx = lower_expr(x, ctx, next_id, out);
@@ -860,6 +938,11 @@ pub(crate) fn collect_refs(
         Expr::SlotDyn(idx) => {
             collect_refs(idx, out, props, named_refs, entity_map, state_names_by_id)
         }
+        // A typed-array read is an own-slot read by name; only its index can
+        // carry cross-entity references.
+        Expr::Index(_, idx) => {
+            collect_refs(idx, out, props, named_refs, entity_map, state_names_by_id)
+        }
         Expr::Const(_) | Expr::Slot(_) | Expr::Time => {}
     }
 }
@@ -1036,6 +1119,18 @@ pub(crate) fn expr_slot_span(
             *any = true;
         }
         Expr::SlotDyn(idx) => expr_slot_span(idx, sn, max, any),
+        Expr::Index(name, idx) => {
+            // `name[j]` reads the whole array; reserve every element's register.
+            if let Some(&base) = sn.get(&format!("{name}.0")) {
+                let mut len = 1usize;
+                while sn.contains_key(&format!("{name}.{len}")) {
+                    len += 1;
+                }
+                *max = (*max).max(base + len - 1);
+                *any = true;
+            }
+            expr_slot_span(idx, sn, max, any);
+        }
         // Own named slot, including dotted struct fields (`pos.x`). Dotted
         // cross-entity names (`a.x`) are not in `sn` and so are ignored here.
         Expr::Name(n) => {
@@ -1226,7 +1321,7 @@ pub(crate) fn expr_has_query(expr: &Expr) -> bool {
         | Expr::Cmp(_, a, b)
         | Expr::And(a, b)
         | Expr::Or(a, b) => expr_has_query(a) || expr_has_query(b),
-        Expr::Not(a) | Expr::Neg(a) | Expr::SlotDyn(a) => expr_has_query(a),
+        Expr::Not(a) | Expr::Neg(a) | Expr::SlotDyn(a) | Expr::Index(_, a) => expr_has_query(a),
         _ => false,
     }
 }

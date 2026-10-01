@@ -131,14 +131,129 @@ fn parse_state_field(
         )?,
         _ => {}
     }
+    // Merge with any slots already declared by `array N name` on this entity,
+    // so `state = (…)` and `array` compose in either order.
+    if let Some(existing) = decl.state.take() {
+        let mut merged = existing;
+        merged.append(&mut values);
+        values = merged;
+    }
     if values.len() > crate::components::State::MAX_STATE_SLOTS {
         return Err(error(Status::Invalid, 80));
+    }
+    if let Some(existing) = decl.state_names.take() {
+        let mut merged = existing;
+        merged.append(&mut names);
+        names = merged;
+    }
+    if let Some(existing) = decl.state_units.take() {
+        let mut merged = existing;
+        // Pad the existing unit list to the pre-append length if needed.
+        while merged.len() < values.len().saturating_sub(units.len()) {
+            merged.push(None);
+        }
+        merged.append(&mut units);
+        units = merged;
     }
     decl.state = Some(values);
     decl.state_names = Some(names);
     if units.iter().any(|u| u.is_some()) {
         decl.state_units = Some(units);
     }
+    Ok(())
+}
+
+/// RFC-0044: `array N name [{ v0, v1, … }]` — appends N uninitialized (or
+/// partially initialized) state slots named `name.0 … name.{N-1}` and records
+/// the length in `decl.arrays`, so `name[i]` is bounds-checked by name.
+fn parse_array_field(field: pest::iterators::Pair<'_, Rule>, decl: &mut EntityDecl) -> Result<()> {
+    // Parse from the field text: `array` writes digits/identifiers as anonymous
+    // tokens whose pairs are version-sensitive, and the initializer is a
+    // comma-separated `value` list inside braces.
+    let text = field.as_str();
+    let body = text.trim().strip_prefix("array").unwrap_or(text).trim();
+    let (head, init) = match body.split_once('{') {
+        Some((h, rest)) => {
+            let rest = rest.trim_end().strip_suffix('}').unwrap_or(rest).trim();
+            (h.trim(), Some(rest))
+        }
+        None => (body.trim_end_matches(';').trim(), None),
+    };
+    let (n_text, name) = head.split_once(char::is_whitespace).ok_or_else(|| {
+        error_at(
+            Status::Invalid,
+            52,
+            0,
+            format!("malformed array declaration `{text}` (expected `array N name`)"),
+        )
+    })?;
+    let n: usize = n_text
+        .trim()
+        .parse()
+        .map_err(|_| error(Status::Invalid, 52))?;
+    let name = name.trim().to_string();
+    if n == 0 {
+        return Err(error_at(
+            Status::Invalid,
+            52,
+            0,
+            format!("array `{name}` must have a length of at least 1"),
+        ));
+    }
+    let mut values: Vec<f64> = vec![0.0; n];
+    if let Some(init) = init {
+        let mut given: Vec<f64> = Vec::with_capacity(n);
+        for v in init.split(',') {
+            let t = v.trim();
+            // A malformed value must fail loudly, never default to 0.0.
+            let num = parse_scalar_number(t).ok_or_else(|| {
+                error_at(
+                    Status::Invalid,
+                    57,
+                    0,
+                    format!("invalid value `{t}` in the initializer of array `{name}`"),
+                )
+            })?;
+            given.push(num);
+        }
+        if given.len() > n {
+            return Err(error_at(
+                Status::Invalid,
+                52,
+                0,
+                format!(
+                    "array `{name}` has {n} element(s) but its initializer gives {}",
+                    given.len()
+                ),
+            ));
+        }
+        for (i, v) in given.into_iter().enumerate() {
+            values[i] = v;
+        }
+    }
+    let state = decl.state.get_or_insert_with(Vec::new);
+    let names = decl.state_names.get_or_insert_with(Vec::new);
+    let base = state.len();
+    if base + n > crate::components::State::MAX_STATE_SLOTS {
+        return Err(error_at(
+            Status::Invalid,
+            80,
+            0,
+            format!(
+                "array `{name}` needs slots {base}..{} but an entity has at most {} state slots",
+                base + n,
+                crate::components::State::MAX_STATE_SLOTS
+            ),
+        ));
+    }
+    for (k, v) in values.into_iter().enumerate() {
+        names.push(Some(format!("{name}.{k}")));
+        state.push(v);
+        if let Some(units) = decl.state_units.as_mut() {
+            units.push(None);
+        }
+    }
+    decl.arrays.insert(name, n);
     Ok(())
 }
 
@@ -278,13 +393,39 @@ fn expand_state_item(
     Ok(())
 }
 
+/// RFC-0044: an entity's declared state slot names must be unique. This
+/// catches `array` colliding with `state`/`vecN` names in either declaration
+/// order, and two `array` fields with the same name (detail 107).
+fn check_unique_state_names(decl: &EntityDecl) -> Result<()> {
+    let Some(names) = &decl.state_names else {
+        return Ok(());
+    };
+    let mut seen: std::collections::BTreeSet<&str> = Default::default();
+    for n in names.iter().flatten() {
+        if !seen.insert(n.as_str()) {
+            return Err(error_at(
+                Status::Invalid,
+                107,
+                0,
+                format!(
+                    "duplicate state slot name `{n}` (each name may appear once; check \
+`array` / `state` / `vecN` collisions)"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Apply one `entity_field` to its declaration.
 ///
 /// `seen` accumulates the field rules already applied to *this* entity, so a
 /// repeated single-valued field reports detail 107 instead of silently keeping
-/// the last write (`tag` is exempt: it accumulates by design). Every rule is
-/// single-valued here except `tag_field`; `box`/`sphere`/`hull` additionally
-/// share the one `collider` slot.
+/// the last write (`tag` is exempt: it accumulates by design, and `array` is
+/// exempt: an entity may declare several arrays, with name uniqueness checked
+/// by `check_unique_state_names`). Every rule is single-valued here except
+/// `tag_field` / `array_field`; `box`/`sphere`/`hull` additionally share the
+/// one `collider` slot.
 fn apply_entity_field(
     field: pest::iterators::Pair<'_, Rule>,
     decl: &mut EntityDecl,
@@ -300,7 +441,7 @@ fn apply_entity_field(
         .next()
         .unwrap_or("")
         .to_string();
-    if rule != Rule::tag_field {
+    if rule != Rule::tag_field && rule != Rule::array_field {
         if seen.contains(&rule) {
             return Err(error_at(
                 Status::Invalid,
@@ -376,6 +517,7 @@ fn apply_entity_field(
         Rule::camera_field => {
             decl.camera = Some(next_pair(&mut field.into_inner())?.as_str() == "true")
         }
+        Rule::array_field => parse_array_field(field, decl)?,
         Rule::color_field => {
             let hex = next_pair(&mut field.into_inner())?.as_str();
             // `0xRRGGBB` exactly (6 hex digits); only 24 bits are rendered

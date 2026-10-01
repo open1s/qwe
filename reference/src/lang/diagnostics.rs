@@ -120,6 +120,7 @@ pub fn detail_name(detail: u32) -> &'static str {
         106 => "gillespie reaction budget exhausted",
         107 => "duplicate option or field (each may appear at most once)",
         108 => "unknown or invalid option",
+        109 => "unknown array name (RFC-0044: no `name.0 … name.k` state run)",
         4 => "EIR operand/type validation failed (compiler bug)",
         6 => "EIR result type unspecified (compiler bug)",
         _ => "unspecified compile error",

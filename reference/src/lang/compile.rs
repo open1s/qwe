@@ -317,7 +317,7 @@ pub fn build_systems(
                 // Named-slot LHS rules (not `sN`) are kept raw for
                 // per-entity resolution; dynamic LHS rules (`s[i]`) get their
                 // index expressions parsed now.
-                let mut dyn_rules = Vec::new();
+                let mut dyn_rules: Vec<(DynIndex, Expr)> = Vec::new();
                 let numeric_slot = |key: &str| {
                     key.strip_prefix('s')
                         .map(|d| {
@@ -328,28 +328,120 @@ pub fn build_systems(
                         .unwrap_or(false)
                 };
                 for (key, text) in &s.update {
-                    if key.starts_with('s') && key.contains('[') {
+                    if key.starts_with("s[") {
                         let inner = key
                             .trim_start_matches('s')
                             .trim_start_matches('[')
                             .trim_end_matches(']');
                         let idx = parse_expr_str(inner)?;
                         let expr = parse_expr_str(text)?;
-                        dyn_rules.push((idx, expr));
+                        dyn_rules.push((DynIndex::Slot(idx), expr));
+                    } else if let Some((arr, idx)) = parse_array_lhs(key)? {
+                        // RFC-0044: `name[i]` / `inte name[i] = …`. Validate the
+                        // name here (detail 109) and bounds (detail 52), then
+                        // keep the *name* — lowering resolves `base` against
+                        // each target entity's own layout.
+                        if !state_names_by_id
+                            .values()
+                            .any(|m| m.contains_key(&format!("{arr}.0")))
+                        {
+                            return Err(error_at(
+                                Status::Invalid,
+                                109,
+                                s.byte_offset,
+                                format!("unknown array `{arr}` in `{key}`"),
+                            ));
+                        }
+                        let len = state_names_by_id
+                            .values()
+                            .filter_map(|m| {
+                                if !m.contains_key(&format!("{arr}.0")) {
+                                    return None;
+                                }
+                                let mut l = 1usize;
+                                while m.contains_key(&format!("{arr}.{l}")) {
+                                    l += 1;
+                                }
+                                Some(l)
+                            })
+                            .max()
+                            .unwrap_or(0);
+                        match const_index(&idx) {
+                            Some(k) if k < 0 || (k as usize) >= len => {
+                                return Err(error_at(
+                                    Status::Invalid,
+                                    52,
+                                    s.byte_offset,
+                                    format!("array `{arr}[{k}]` is out of range (length {len})"),
+                                ));
+                            }
+                            Some(k) => rules.push((format!("{arr}.{k}"), parse_expr_str(text)?)),
+                            None => dyn_rules.push((
+                                DynIndex::Array(arr.clone(), Box::new(idx)),
+                                parse_expr_str(text)?,
+                            )),
+                        }
                     } else if !numeric_slot(key) {
                         let expr = parse_expr_str(text)?;
                         rules.push((key.clone(), expr));
                     }
                 }
                 let mut assigns: Vec<(String, Expr)> = Vec::new();
-                let mut dyn_assigns: Vec<(Expr, Expr)> = Vec::new();
+                let mut dyn_assigns: Vec<(DynIndex, Expr)> = Vec::new();
                 for (key, text) in &s.assigns {
-                    if key.starts_with('s') && key.contains('[') {
+                    if key.starts_with("s[") {
                         let inner = key
                             .trim_start_matches('s')
                             .trim_start_matches('[')
                             .trim_end_matches(']');
-                        dyn_assigns.push((parse_expr_str(inner)?, parse_expr_str(text)?));
+                        dyn_assigns.push((
+                            DynIndex::Slot(parse_expr_str(inner)?),
+                            parse_expr_str(text)?,
+                        ));
+                    } else if let Some((arr, idx)) = parse_array_lhs(key)? {
+                        // RFC-0044: keep the array *name* (const key or
+                        // `DynIndex::Array`) so lowering resolves `base` against
+                        // the *target* entity's layout, not the first one.
+                        if !state_names_by_id
+                            .values()
+                            .any(|m| m.contains_key(&format!("{arr}.0")))
+                        {
+                            return Err(error_at(
+                                Status::Invalid,
+                                109,
+                                s.byte_offset,
+                                format!("unknown array `{arr}` in `{key}`"),
+                            ));
+                        }
+                        let len = state_names_by_id
+                            .values()
+                            .filter_map(|m| {
+                                if !m.contains_key(&format!("{arr}.0")) {
+                                    return None;
+                                }
+                                let mut l = 1usize;
+                                while m.contains_key(&format!("{arr}.{l}")) {
+                                    l += 1;
+                                }
+                                Some(l)
+                            })
+                            .max()
+                            .unwrap_or(0);
+                        match const_index(&idx) {
+                            Some(k) if k < 0 || (k as usize) >= len => {
+                                return Err(error_at(
+                                    Status::Invalid,
+                                    52,
+                                    s.byte_offset,
+                                    format!("array `{arr}[{k}]` is out of range (length {len})"),
+                                ));
+                            }
+                            Some(k) => assigns.push((format!("{arr}.{k}"), parse_expr_str(text)?)),
+                            None => dyn_assigns.push((
+                                DynIndex::Array(arr.clone(), Box::new(idx)),
+                                parse_expr_str(text)?,
+                            )),
+                        }
                     } else {
                         // Enforce the slot bound for `sN` assignments too (the
                         // `+=`/`inte` path already checks it, detail 52).
@@ -372,6 +464,22 @@ pub fn build_systems(
                         }
                         assigns.push((key.clone(), parse_expr_str(text)?));
                     }
+                }
+                // RFC-0044: constant array indices are bounds-checked here,
+                // before lowering (a runtime index stays unchecked, like `s[i]`).
+                for (_, e) in &rules {
+                    check_array_index(e, state_names_by_id, s.byte_offset)?;
+                }
+                for (_, e) in &assigns {
+                    check_array_index(e, state_names_by_id, s.byte_offset)?;
+                }
+                for (i, e) in &dyn_rules {
+                    check_array_index(&i.as_expr(), state_names_by_id, s.byte_offset)?;
+                    check_array_index(e, state_names_by_id, s.byte_offset)?;
+                }
+                for (i, e) in &dyn_assigns {
+                    check_array_index(&i.as_expr(), state_names_by_id, s.byte_offset)?;
+                    check_array_index(e, state_names_by_id, s.byte_offset)?;
                 }
                 if rules.is_empty()
                     && dyn_rules.is_empty()
@@ -402,6 +510,11 @@ side-effecting `let`/call"
                     Some(text) => Some(parse_expr_str(text)?),
                     None => None,
                 };
+                // RFC-0044: `let` bodies and the `when` gate may read arrays too.
+                check_let_array_index(&lets, state_names_by_id, s.byte_offset)?;
+                if let Some(w) = &when {
+                    check_array_index(w, state_names_by_id, s.byte_offset)?;
+                }
                 out.push(Box::new(UpdateSystem {
                     rules,
                     dyn_rules,
@@ -440,8 +553,66 @@ side-effecting `let`/call"
                             "dynamic slot LHS is update-only (rk4 stages need compile-time slots)"
                                 .to_string(),
                         ));
+                    } else if let Some((arr, idx)) = parse_array_lhs(key)? {
+                        // RFC-0044: `inte name[k] = rate` — a constant index is
+                        // a compile-time slot (rk4 can integrate it); a runtime
+                        // index is rejected like `s[…]` (detail 73).
+                        if !state_names_by_id
+                            .values()
+                            .any(|m| m.contains_key(&format!("{arr}.0")))
+                        {
+                            return Err(error_at(
+                                Status::Invalid,
+                                109,
+                                s.byte_offset,
+                                format!("unknown array `{arr}` in `{key}`"),
+                            ));
+                        }
+                        let len = state_names_by_id
+                            .values()
+                            .filter_map(|m| {
+                                if !m.contains_key(&format!("{arr}.0")) {
+                                    return None;
+                                }
+                                let mut l = 1usize;
+                                while m.contains_key(&format!("{arr}.{l}")) {
+                                    l += 1;
+                                }
+                                Some(l)
+                            })
+                            .max()
+                            .unwrap_or(0);
+                        match const_index(&idx) {
+                            Some(k) if k < 0 || (k as usize) >= len => {
+                                return Err(error_at(
+                                    Status::Invalid,
+                                    52,
+                                    s.byte_offset,
+                                    format!("array `{arr}[{k}]` is out of range (length {len})"),
+                                ));
+                            }
+                            Some(k) => {
+                                rules.push((format!("{arr}.{k}"), parse_expr_str(text)?));
+                            }
+                            None => {
+                                return Err(error_at(
+                                    Status::Invalid,
+                                    73,
+                                    s.byte_offset,
+                                    format!(
+                                        "dynamic array LHS `{arr}[…]` is update-only (rk4 stages \
+need compile-time slots)"
+                                    ),
+                                ));
+                            }
+                        }
+                        continue;
                     }
                     rules.push((key.clone(), parse_expr_str(text)?));
+                }
+                // RFC-0044: bounds-check array reads in rule bodies too.
+                for (_, e) in &rules {
+                    check_array_index(e, state_names_by_id, s.byte_offset)?;
                 }
                 // `rk4` integrates derivatives (`inte slot = rate`); a plain
                 // assignment (`slot = expr`) has no rk4 meaning and was silently
@@ -478,6 +649,11 @@ side-effecting `let`/call"
                     Some(text) => Some(parse_expr_str(text)?),
                     None => None,
                 };
+                // RFC-0044: `let` bodies and the `when` gate may read arrays too.
+                check_let_array_index(&lets, state_names_by_id, s.byte_offset)?;
+                if let Some(w) = &when {
+                    check_array_index(w, state_names_by_id, s.byte_offset)?;
+                }
                 out.push(Box::new(Rk4System {
                     rules,
                     lets,
@@ -2238,6 +2414,19 @@ impl DimEnv<'_> {
             Expr::Time => Some(Dim::seconds()),
             Expr::Slot(i) => self.slot_dims.get(*i).copied().flatten(),
             Expr::SlotDyn(_) => None,
+            // A typed array element is unit-checked against its first element.
+            Expr::Index(name, idx) => {
+                self.of_expr(idx)?;
+                self.slot_dims
+                    .get(
+                        *self
+                            .name_to_slot
+                            .get(&format!("{name}.0"))
+                            .unwrap_or(&usize::MAX),
+                    )
+                    .copied()
+                    .flatten()
+            }
             Expr::Name(n) => {
                 if let Some(d) = self.locals.get(n.as_str()) {
                     *d
@@ -2747,7 +2936,7 @@ fn strict_names(
     };
     match e {
         Expr::Const(_) | Expr::Slot(_) | Expr::Time => Ok(()),
-        Expr::SlotDyn(a) | Expr::Neg(a) | Expr::Not(a) => {
+        Expr::SlotDyn(a) | Expr::Neg(a) | Expr::Not(a) | Expr::Index(_, a) => {
             strict_names(a, allowed, entity_map, state_names_by_id, sys_off)
         }
         Expr::Add(a, b)
@@ -2825,6 +3014,136 @@ sets the parameter, not the slot",
                 ),
             );
         }
+    }
+}
+
+/// Parses an RFC-0044 array LHS `name[i]` (e.g. `samples[j]`) into the array
+/// name and the index expression. `None` when `key` is not an array access.
+fn parse_array_lhs(key: &str) -> Result<Option<(String, Expr)>> {
+    let Some(open) = key.find('[') else {
+        return Ok(None);
+    };
+    if !key.ends_with(']') {
+        return Ok(None);
+    }
+    let name = key[..open].trim();
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Ok(None);
+    }
+    let idx = parse_expr_str(&key[open + 1..key.len() - 1])?;
+    Ok(Some((name.to_string(), idx)))
+}
+
+/// RFC-0044: rejects an `name[i]` access with a **constant** index whose array
+/// does not exist (detail 109) or is out of range on every layout that declares
+/// it (detail 52). Runtime indices stay the caller's responsibility, exactly as
+/// for `s[i]`.
+fn check_array_index(
+    expr: &Expr,
+    state_names_by_id: &std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
+    sys_off: usize,
+) -> Result<()> {
+    match expr {
+        Expr::Index(name, idx) => {
+            // The array's length is the number of `name.<k>` slots in a layout.
+            let lengths: Vec<usize> = state_names_by_id
+                .values()
+                .filter_map(|m| {
+                    if !m.contains_key(&format!("{name}.0")) {
+                        return None;
+                    }
+                    let mut len = 1usize;
+                    while m.contains_key(&format!("{name}.{len}")) {
+                        len += 1;
+                    }
+                    Some(len)
+                })
+                .collect();
+            if lengths.is_empty() {
+                return Err(error_at(
+                    Status::Invalid,
+                    109,
+                    sys_off,
+                    format!("unknown array `{name}` in `{name}[…]`"),
+                ));
+            }
+            if let Some(k) = crate::lang::lower::const_index(idx) {
+                // Valid if **some** layout that declares the array is long
+                // enough: a system may target only that body (lowering resolves
+                // the base per target entity), so a stricter "min across all
+                // layouts" would reject a program that runs fine.
+                let ok = k >= 0 && lengths.iter().any(|&l| (k as usize) < l);
+                if !ok {
+                    let len = *lengths.iter().max().unwrap_or(&0);
+                    return Err(error_at(
+                        Status::Invalid,
+                        52,
+                        sys_off,
+                        format!("array `{name}[{k}]` is out of range (length {len})"),
+                    ));
+                }
+            }
+            check_array_index(idx, state_names_by_id, sys_off)
+        }
+        Expr::SlotDyn(a) | Expr::Neg(a) | Expr::Not(a) => {
+            check_array_index(a, state_names_by_id, sys_off)
+        }
+        Expr::Add(a, b)
+        | Expr::Sub(a, b)
+        | Expr::Mul(a, b)
+        | Expr::Div(a, b)
+        | Expr::Rem(a, b)
+        | Expr::Cmp(_, a, b)
+        | Expr::And(a, b)
+        | Expr::Or(a, b) => {
+            check_array_index(a, state_names_by_id, sys_off)?;
+            check_array_index(b, state_names_by_id, sys_off)
+        }
+        Expr::Call(_, args) => {
+            for a in args {
+                check_array_index(a, state_names_by_id, sys_off)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// RFC-0044: runs `check_array_index` over every expression of a `let`/loop
+/// body — `repeat`/`for` nest statements, `if` carries condition and branches.
+fn check_let_array_index(
+    stmts: &[LetStmt],
+    state_names_by_id: &std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
+    sys_off: usize,
+) -> Result<()> {
+    for s in stmts {
+        match s {
+            LetStmt::Let(_, e) => check_array_index(e, state_names_by_id, sys_off)?,
+            LetStmt::If(c, a, b) => {
+                check_array_index(c, state_names_by_id, sys_off)?;
+                check_array_index(a, state_names_by_id, sys_off)?;
+                if let Some(b) = b {
+                    check_array_index(b, state_names_by_id, sys_off)?;
+                }
+            }
+            LetStmt::Break(e) | LetStmt::Continue(e) => {
+                if let Some(e) = e {
+                    check_array_index(e, state_names_by_id, sys_off)?;
+                }
+            }
+            LetStmt::Repeat(_, inner) | LetStmt::For(_, _, _, inner) => {
+                check_let_array_index(inner, state_names_by_id, sys_off)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether an expression is a non-negative integer constant.
+fn const_index(e: &Expr) -> Option<i64> {
+    match e {
+        Expr::Const(c) if c.is_finite() && c.fract() == 0.0 => Some(*c as i64),
+        _ => None,
     }
 }
 

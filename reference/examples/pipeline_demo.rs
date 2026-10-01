@@ -41,6 +41,7 @@ fn main() -> pwe_api::Result<()> {
         tags: Vec::new(),
         state_units: None,
         render: None,
+        arrays: Default::default(),
     });
     model.entities.push(pwe_reference::dsl::EntityDecl {
         name: "ground".into(),
@@ -63,6 +64,7 @@ fn main() -> pwe_api::Result<()> {
         tags: Vec::new(),
         state_units: None,
         render: None,
+        arrays: Default::default(),
     });
     println!("== 1. world (dsl WorldModel) ==");
     println!(

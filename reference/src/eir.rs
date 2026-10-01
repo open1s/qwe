@@ -851,7 +851,8 @@ impl EirModule {
                 | Opcode::Div
                 | Opcode::Rem
                 | Opcode::Pow => {
-                    // arithmetic: operands must be a consistent numeric type.
+                    // arithmetic: operands must be a consistent numeric type
+                    // (a mixed integer/float pair widens to f64).
                     let ty = numeric_type(&reg_types, &instruction.operands, index)?;
                     Some(ty)
                 }

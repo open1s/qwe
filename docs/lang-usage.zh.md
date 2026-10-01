@@ -522,8 +522,8 @@ ODE 视角在总量上一致，在单个分子上不一致。见 `cli/examples/k
 
 * 段 `world` `funcs` `systems`
 * world `gravity` `title` `params` `chan` `value` `entity` `field` `pool` `soft`
-  `struct` `width` `height` `depth` `dx` `nx` `ny` `nz` `spacing` `origin` `shape`
-  `part`
+  `struct` `array` `width` `height` `depth` `dx` `nx` `ny` `nz` `spacing` `origin`
+  `shape` `part`
 * 实体 `position` `velocity` `state` `vec` `mass` `dynamic` `nbody` `parent`
   `restitution` `friction` `box` `sphere` `hull` `rotation` `camera` `color`
   `size` `opacity` `glow` `label` `orient` `vector`
@@ -548,7 +548,7 @@ ODE 视角在总量上一致，在单个分子上不一致。见 `cli/examples/k
 | `chan <name> { value = v }` | 通道实体（`state[0]`）。 |
 | `entity <name> { … }` | 一个物体。 |
 | `shape <name> { part … }` | 自定义渲染形状。 |
-| `struct <name> { field = <默认值> … }` | 具名记录类型（§2.11）。 |
+| `struct <name> { field = <默认值> … }` | 具名记录类型（§2.12）。 |
 | `field <name> { width; height; dx; depth? }` | 标量网格。 |
 | `pool <name>[N] { … }` | N 个未激活槽，用于动态实体。 |
 | `soft <name> { nx; ny; nz?; spacing; origin; mass }` | 质量-弹簧网格。 |
@@ -686,7 +686,38 @@ asin acos atan`；2 元：`pow atan2 hypot min max`；`if(c,a,b)`；`random()`�
   （`break if (…)`），降级期展开（≤10000 条语句）。循环体仅含 `let`、嵌套循环、
   `break`/`continue`。
 
-## 2.11 结构体类型（记录）
+## 2.11 数组（定长、具名）
+
+`array N name [{ v0, … }]` 声明 N 个连续状态槽 `name.0 … name.{N-1}` 并记录长度，
+因此 `name[j]` 会被**检查**而不是裸槽下标；可与 `state = (…)` 以任意顺序组合。
+
+```pwe
+world {
+  gravity = (0, 0, 0)
+  entity swarm { state = (x = 0.0) array 4 samples { 1.0, 2.0, 3.0, 4.0 } }
+}
+systems {
+  update { on = swarm; dt = 0.5
+    samples[0] = samples[0] + dt*(1.0)   # 常量下标 → 静态槽
+    samples[1] += 2.0                    # `+=` 按 dt 积分
+    inte samples[2] = 4.0                # `inte name[j] = rate`
+    x = samples[x]                        # 运行期下标（x 存 0..3）
+  }
+}
+```
+
+* `name[j]` 读：**常量** `j` 下降为静态槽；**运行期** `j` 下降为运行期索引读
+  （`s[base + j]`），与 `s[i]` 一样不做越界检查。
+* 写形式：`name[j] = expr`、`name[j] += expr`、`inte name[j] = rate`（读值在系统
+  开始时采样，与所有规则一致）。
+* 常量 `j` 超出 `[0, N)` 为 **detail 52**；未知数组名为 **detail 109**；初始化值多于
+  `N` 也是 detail 52。以上都不会静默读 0.0。
+* `vecN pos` 仍是无长度的匿名向量形式；`array` 增加了长度与越界检查。两者都摊平为
+  扁平状态槽（零开销）。
+
+`len(name)`（作为 `for` 边界的编译期长度）已在 RFC-0044 规定但尚未实现。
+
+## 2.12 结构体类型（记录）
 
 `struct` 给一组字段命名；在 `state = …` 中使用它会把这些字段铺成**点分标量槽**：
 
@@ -842,6 +873,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 106 | `gillespie` 一步超出反应预算（`events`）—— 调大 `events` 或调小 `dt`。 |
 | 107 | 重复的选项或字段：部件 / `bond` / `bonds` 的每个选项，以及 `entity` / `pool` 体内除 `tag` 外的每个字段，最多只能出现一次。 |
 | 108 | `bond` / `bonds` 选项未知或非法（键拼错、数值不合法、缺 `tag`/`within`、范围颠倒）。 |
+| 109 | `name[j]` 中数组名未知（RFC-0044）：该 entity 没有 `name.0 … name.k` 这段状态槽。 |
 
 **调试流程**：缩减到一个实体 + 一个系统；核对模型（§0.6）；核对积分/赋值陷阱；加
 `invariant`；`run … --steps N` 读打印状态。

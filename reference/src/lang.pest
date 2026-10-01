@@ -146,12 +146,18 @@ orient_field = { "orient" ~ "=" ~ boolean ~ ";"? }
 vector_field = { "vector" ~ "=" ~ boolean ~ ";"? }
 glow_field = { "glow" ~ "=" ~ value ~ ";"? }
 label_field = { "label" ~ "=" ~ boolean ~ ";"? }
+// `array N name` declares N consecutive f64 slots (`name.0` … `name.{N-1}`)
+// with a recorded length (RFC-0044), unlike `vecN` which records none.
+array_field = { "array" ~ ASCII_DIGIT+ ~ ident ~ array_init? ~ ";"? }
+// Optional inline initializer for an `array`: `array 3 samples { 1.0, 2.0, 3.0 }`
+// (fewer than N values leaves the rest 0.0; more than N is an error).
+array_init = { "{" ~ value ~ ("," ~ value)* ~ "}" }
 entity_field = _{ position_field | velocity_field | state_field | mass_field | dynamic_field
                  | nbody_field | parent_field | restitution_field | friction_field | box_field
                  | rotation_field
                  | sphere_field | hull_field | camera_field | color_field
                  | shape_field | size_field | opacity_field | glow_field | label_field
-                 | orient_field | vector_field | tag_field }
+                 | orient_field | vector_field | tag_field | array_field }
 
 hull_list = { "[" ~ vec3 ~ ("," ~ vec3)* ~ "]" }
 vec3 = { "(" ~ value ~ "," ~ value ~ "," ~ value ~ ")" }
@@ -179,14 +185,14 @@ channel_assign = { ident ~ "=" ~ expr }
 // `slot += rate`), an assignment rule (`slot = expr`), a bare call, or a
 // system parameter (`ident = value|vecN|ident`).
 param = { (let_stmt | repeat_stmt | for_stmt | ode_stmt | add_stmt
-         | slot_lhs ~ "=" ~ expr | dot_lhs ~ "=" ~ expr | call
+         | slot_lhs ~ "=" ~ expr | dot_lhs ~ "=" ~ expr | arr_index ~ "=" ~ expr | call
          | ident ~ "=" ~ (vecN | expr | ident) ~ unit_expr?) ~ ";"? }
 // ODE rule: the RHS is the derivative/rate (integrated as slot += dt·rate).
 // `inte`/`integrate` read as integration; `deriv` as a derivative declaration.
 ode_kw = @{ ("integrate" | "inte") ~ !(ASCII_ALPHANUMERIC | "_") }
-ode_stmt = { ode_kw ~ (dot_lhs | slot_lhs | ident) ~ "=" ~ expr }
+ode_stmt = { ode_kw ~ (dot_lhs | slot_lhs | arr_index | ident) ~ "=" ~ expr }
 // Sugar for an ODE rule: `slot += rate`.
-add_stmt = { (dot_lhs | slot_lhs | ident) ~ "+=" ~ expr }
+add_stmt = { (dot_lhs | slot_lhs | arr_index | ident) ~ "+=" ~ expr }
 // Dynamic slot LHS: `s[i] = expr` writes the State slot at a runtime index.
 slot_lhs = { "s" ~ "[" ~ expr ~ "]" }
 // Dotted rule LHS for struct fields: `pos.x = expr`.
@@ -234,9 +240,11 @@ additive = { term ~ (add_op ~ term)* }
 add_op = { "+" | "-" }
 term = { factor ~ (term_op ~ factor)* }
 term_op = { "*" | "/" | "%" }
-factor = { unary | number | call | "(" ~ expr ~ ")" | slot | slot_dyn | entity_ref | time | constant | namespaced | state_name }
+factor = { unary | number | call | "(" ~ expr ~ ")" | slot | slot_dyn | arr_index | entity_ref | time | constant | namespaced | state_name }
 // Dynamic slot read: `s[i]` reads the State slot at a runtime index.
 slot_dyn = { "s" ~ "[" ~ expr ~ "]" }
+// Typed array access `name[i]` (RFC-0044): a named, length-aware slot run.
+arr_index = { ident ~ "[" ~ expr ~ "]" }
 unary = { "-" ~ factor | not_op ~ factor }
 not_op = @{ "not" ~ !(ASCII_ALPHANUMERIC | "_") | "!" }
 call = { func_name ~ "(" ~ expr? ~ ("," ~ expr)* ~ ")" }

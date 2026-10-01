@@ -125,6 +125,11 @@ pub struct EntityDecl {
     pub state_units: Option<Vec<Option<crate::units::Dim>>>,
     /// Presentation-only render overrides (`shape`/`size`/`opacity`/`glow`/`label`).
     pub render: Option<crate::components::RenderStyle>,
+    /// RFC-0044: named fixed-length arrays (`array N name`), mapping the array
+    /// name to its length. Each element `name.j` is the flat state slot whose
+    /// name is `name.j` (also registered in `state_names`), so `name[j]` is
+    /// bounds-checked by name rather than by raw slot index.
+    pub arrays: std::collections::BTreeMap<String, usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -155,6 +160,7 @@ impl EntityDecl {
             tags: Vec::new(),
             state_units: None,
             render: None,
+            arrays: std::collections::BTreeMap::new(),
         }
     }
 }

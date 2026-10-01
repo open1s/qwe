@@ -1,7 +1,25 @@
 # RFC-0044: Typed arrays / SoA user types
-**Status:** Proposed. This RFC specifies first-class **fixed-length arrays** in
-world state, generalizing today's `vecN name` and raw `s[i]` indexing into a
-bounds-checked, named array type.
+**Status:** Accepted (implemented). First-class **fixed-length arrays** in world
+state, generalizing `vecN name` and raw `s[i]` indexing into a bounds-checked,
+named array type. Shipped surface (this build):
+`array N name [{ v0, … }]` in an entity body (composes with `state = (…)` in
+either order; an entity may declare several `array` fields);
+`name[j]` read (constant index → static slot; runtime index → `ReadSlotDyn`);
+`name[j] = expr`, `name[j] += expr`, and `inte name[j] = rate` writes;
+constant indices are bounds-checked at compile time (detail 52) and an unknown
+array name is detail 109 — both fail loudly instead of silently reading 0.0.
+`vecN` and `s[i]` are unchanged. Conformance: `pwe-conformance` "RFC-0044 typed
+arrays (static + runtime index, cross-backend)"; tests
+`lang::tests::typed_arrays_read_write_and_bounds`,
+`typed_array_runtime_index_read_matches_static`,
+`typed_array_constant_index_out_of_range_is_rejected`,
+`typed_array_initializer_arity_is_checked`, `typed_array_fields_compose_and_allow_several_per_entity`,
+`typed_array_dynamic_write_lands_on_the_target_layout`,
+`typed_array_unknown_array_in_ode_rule_is_rejected`.
+
+Deferred (future, see **Deferred** below): a `len(name)` builtin usable as a
+`for` bound, dynamic-index bounds checks, and array element unit annotations.
+The `EntityDecl.arrays` map records each array's length, so these are additive.
 
 ## Motivation
 
@@ -34,35 +52,47 @@ the name (`EntityDecl.arrays: BTreeMap<String, usize>`), which `vecN` does not.
   documented; a future revision may add a checked variant).
 - `name[j] = expr` — write, same rule (constant index → static slot write;
   runtime index → `WriteSlotDyn`).
-- `len(name)` — a compile-time integer literal `N` (usable in `for` bounds).
+- `len(name)` — **deferred** (see below): a compile-time integer literal `N`,
+  usable in `for` bounds.
 
 ### Lowering
 
-A new `Expr::Index(String, Box<Expr>)` resolves at lowering against the entity's
-layout (`ctx.state_names` gives `name.0`; the length comes from `ctx.arrays`):
-- constant index → `Expr::Slot(base + j)` (with a 0≤j<N check, detail 52);
-- dynamic index → `Expr::SlotDyn(base + index)` (reusing `ReadSlotDyn` /
-  `WriteSlotDyn`).
-
-`for` ranges already accept literals, so `for j in 0..len(name)` unrolls with a
-compile-time bound.
+A new `Expr::Index(String, Box<Expr>)` resolves at lowering against the target
+entity's layout (`ctx.state_names` carries the run `name.0 … name.k`; the
+compile-time check re-derives the length from that run, which equals the `N`
+recorded in `EntityDecl.arrays`):
+- constant index → the static slot `name.j` (0≤j<N checked at compile time,
+  detail 52);
+- dynamic index → `base + index` (reusing `ReadSlotDyn` / `WriteSlotDyn`),
+  with `base` taken from the layout of the entity the system targets.
 
 ### Diagnostics
 
 - constant index out of range → detail 52 (slot index out of range);
-- `len(name)` on a non-array name → detail 95 (unknown array).
+- unknown array name (no `name.0 … name.k` run on the entity) → detail 109.
 
 ## Validation
 
 - Cross-backend (`step_cross`) equality for `name[j]` static and dynamic forms.
-- Determinism: unrolled `for j in 0..len(arr)` matches a hand-written sequence.
 - Diagnostics for out-of-range constant indices and unknown array names.
 - Conformance case exercising arrays on both backends.
 
+## Deferred
+
+Specified here but **not** part of this revision; `EntityDecl.arrays` already
+records the length, so each item is additive:
+
+- `len(name)` — a compile-time integer literal `N`, usable in `for` bounds
+  (`for j in 0..len(arr)`), with an unrolled body matching a hand-written
+  sequence. On a non-array name it is detail 109.
+- Bounds checks on **runtime** indices (today unchecked, exactly like `s[i]`).
+- Per-element unit annotations.
+
 ## Backward compatibility
 
-Additive: `vecN` and `s[i]` continue to work; `array`/`name[j]`/`len` are new
-surface. `name[j]` with `name` a plain scalar is a compile error (detail 95).
+Additive: `vecN` and `s[i]` continue to work; `array`/`name[j]` are new
+surface (`len` is deferred). `name[j]` with `name` a plain scalar is a compile
+error (detail 109).
 
 ## Alternatives
 

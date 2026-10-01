@@ -92,6 +92,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 ### Phase 2 — 类型系统与科学正确性
 - [x] 系统内同步屏障（`Barrier` = 系统边界；committed = start-of-system）
 - [~] 值类型：`let` 类型标注（89）、整型常量语义、显式转换 `i64/f64/bool(…)` 已交付；**int/bool 直达 EIR 寄存器**见 RFC-0043（Proposed）
+- [x] **RFC-0044 具名定长数组**（`array N name`、`name[j]` 读/写/`+=`/`inte`、常量下标越界 detail 52、未知数组 detail 109、内联初始化）；`vecN`/`s[i]` 不变；conformance + 单测（`len()` 与 `for` 边界用法列为 Deferred）
 - [~] 物理合理性运行时：`invariant`/`conserved{tolerance}` 运行时断言与守恒/有界回归测试已交付；**CFL 与 diffuse 稳定性仍是「算出但不检查」，示例未接入**（见 2.3）
 - [ ] 物理 demo 断言纳入 CI
 

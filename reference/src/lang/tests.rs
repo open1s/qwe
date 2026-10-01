@@ -2780,6 +2780,159 @@ fn let_type_annotations_are_checked() {
     }
 }
 
+/// RFC-0044: a named fixed-length array (`array N name`) supports static and
+/// runtime-indexed reads/writes, the `+=` / `inte name[i] = …` forms, bounds
+/// checks on constant indices, and an inline initializer. Interpreter == JIT.
+#[test]
+fn typed_arrays_read_write_and_bounds() {
+    let src = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (x = 0.0, k = 2.0) array 4 v { 1.0, 2.0, 3.0, 4.0 } } }
+        systems { update { on = e; dt = 1.0
+            v[0] = v[0] + 10.0
+            v[1] += 20.0
+            inte v[2] = 30.0
+            x = v[k] + v[3]
+            v[k] = v[k] + 100.0
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross().unwrap();
+    let st = rt
+        .scene
+        .get(EntityId(1))
+        .unwrap()
+        .state
+        .as_ref()
+        .unwrap()
+        .values
+        .clone();
+    // slots: x, k, v.0, v.1, v.2, v.3
+    assert_eq!(st[2], 11.0, "v[0] = v[0] + 10.0: {st:?}");
+    assert_eq!(st[3], 22.0, "v[1] += 20.0 (dt=1): {st:?}");
+    assert_eq!(st[4], 133.0, "inte v[2] = 30 then v[k] += 100: {st:?}");
+    assert_eq!(st[5], 4.0, "v[3] untouched: {st:?}");
+    // Rule reads are sampled at system start, so `x = v[k] + v[3]` sees the
+    // pre-write array (2.0 + 4.0 = 6.0); the later `v[k]` write does not affect it.
+    assert_eq!(
+        st[0], 37.0,
+        "x = v[k] + v[3] (read at system start): {st:?}"
+    );
+}
+
+#[test]
+fn typed_array_runtime_index_read_matches_static() {
+    // A runtime index held in a named state slot reads the same element as the
+    // equivalent constant index.
+    let src = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (x = 0.0, k = 1.0) array 2 v { 5.0, 7.0 } } }
+        systems { update { on = e; dt = 1.0
+            x = v[k] - v[1]
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross().unwrap();
+    let st = rt
+        .scene
+        .get(EntityId(1))
+        .unwrap()
+        .state
+        .clone()
+        .unwrap()
+        .values;
+    assert_eq!(st[0], 0.0, "v[k] == v[1]: {st:?}");
+}
+
+#[test]
+fn typed_array_composes_with_state_in_either_order() {
+    let src = r#"
+        world { gravity=(0,0,0)
+            entity a { state = (x = 1.0) array 2 w { 5.0, 6.0 } }
+            entity b { array 2 v { 1.0, 2.0 } state = (y = 2.0) } }
+        systems { update { on=e; dt = 1.0
+            on = a; dt = 1.0  x = w[1]
+            on = b; dt = 1.0  y = y
+        } }
+    "#;
+    // `on = a; … on = b; …` are two systems, not two clauses in one.
+    let two = r#"
+        world { gravity=(0,0,0)
+            entity a { state = (x = 1.0) array 2 w { 5.0, 6.0 } }
+            entity b { array 2 v { 1.0, 2.0 } state = (y = 2.0) } }
+        systems {
+            update { on = a; dt = 1.0  x = w[1] }
+            update { on = b; dt = 1.0  v[0] = v[0] + 10.0 }
+        }
+    "#;
+    let _ = src;
+    let mut rt = LangRuntime::compile(two).unwrap();
+    rt.step_cross().unwrap();
+    let a = rt
+        .scene
+        .get(EntityId(1))
+        .unwrap()
+        .state
+        .clone()
+        .unwrap()
+        .values;
+    let b = rt
+        .scene
+        .get(EntityId(2))
+        .unwrap()
+        .state
+        .clone()
+        .unwrap()
+        .values;
+    // a: x, w.0, w.1 → w is appended after `state = (x = …)`.
+    assert_eq!(a[0], 6.0, "a.x = w[1]: {a:?}");
+    assert_eq!(a[1], 5.0, "a.w.0: {a:?}");
+    assert_eq!(a[2], 6.0, "a.w.1: {a:?}");
+    // b: `array` first, then `state = (y = …)` → y is slot 2.
+    assert_eq!(b[0], 11.0, "b.v.0: {b:?}");
+    assert_eq!(b[1], 2.0, "b.v.1: {b:?}");
+    assert_eq!(b[2], 2.0, "b.y appended after the array: {b:?}");
+}
+
+#[test]
+fn typed_array_constant_index_out_of_range_is_rejected() {
+    // Constant-index reads are compile errors (not "reads 0.0" warnings), so
+    // the `lang::compile` path rejects them; the CLI downgrades them to a
+    // diagnostic on the legacy path. A runtime index stays unchecked.
+    match LangRuntime::compile(
+        "world { gravity=(0,0,0) entity e { state=(x=0.0) array 2 v } }\n\
+systems { update { on = e; dt = 1.0 x = v[5] } }",
+    ) {
+        Ok(_) => panic!("out-of-range constant read must be rejected"),
+        Err(e) => assert_eq!(e.detail, 52, "detail = {}", e.detail),
+    }
+    match LangRuntime::compile(
+        "world { gravity=(0,0,0) entity e { state=(x=0.0) array 2 v } }\n\
+systems { update { on = e; dt = 1.0 v[5] = 1.0 } }",
+    ) {
+        Ok(_) => panic!("out-of-range constant write must be rejected"),
+        Err(e) => assert_eq!(e.detail, 52, "detail = {}", e.detail),
+    }
+    match LangRuntime::compile(
+        "world { gravity=(0,0,0) entity e { state=(x=0.0) } }\n\
+systems { update { on = e; dt = 1.0 x = nope[0] } }",
+    ) {
+        Ok(_) => panic!("unknown array name must be rejected"),
+        Err(e) => assert_eq!(e.detail, 109, "detail = {}", e.detail),
+    }
+}
+
+#[test]
+fn typed_array_initializer_arity_is_checked() {
+    match LangRuntime::compile(
+        "world { gravity=(0,0,0) entity e { state=(x=0.0) array 2 v { 1.0, 2.0, 3.0 } } }\n\
+systems { update { on = e; dt = 1.0 x = v[0] } }",
+    ) {
+        Ok(_) => panic!("too many initializer values must be rejected"),
+        Err(e) => assert_eq!(e.detail, 52, "detail = {}", e.detail),
+    }
+}
+
 #[test]
 fn func_signature_units_are_checked() {
     // `func f(x: [m]) : [m/s]` — arguments and the result are checked at calls.

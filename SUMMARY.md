@@ -73,6 +73,7 @@
 * [RFC-0044: Typed Arrays / SoA](rfc/RFC-0044-typed-arrays.md)
 * [RFC-0045: Semantic Module System](rfc/RFC-0045-semantic-module-system.md)
 * [RFC-0046: EIR as an Explicit SSA CFG](rfc/RFC-0046-eir-ssa-cfg.md)
+* [RFC-0047: Toward a General-Purpose Simulation Language](rfc/RFC-0047-general-simulation-language.md)
 * [RFC alignment](docs/rfc-alignment.md)
 * [RFC supersession](docs/rfc-supersession.md)
 

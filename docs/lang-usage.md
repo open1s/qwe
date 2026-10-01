@@ -557,8 +557,8 @@ unambiguous.
 
 * sections `world` `funcs` `systems`
 * world `gravity` `title` `params` `chan` `value` `entity` `field` `pool` `soft`
-  `struct` `width` `height` `depth` `dx` `nx` `ny` `nz` `spacing` `origin` `shape`
-  `part`
+  `struct` `array` `width` `height` `depth` `dx` `nx` `ny` `nz` `spacing` `origin`
+  `shape` `part`
 * entity `position` `velocity` `state` `vec` `mass` `dynamic` `nbody` `parent`
   `restitution` `friction` `box` `sphere` `hull` `rotation` `camera` `color`
   `size` `opacity` `glow` `label` `orient` `vector`
@@ -595,7 +595,7 @@ Precedence (high → low): unary `-`, `not`/`!` → `* / %` → `+ -` → compar
 | `chan <name> { value = v }` | a channel entity (`state[0]`). |
 | `entity <name> { … }` | a body. |
 | `shape <name> { part … }` | a custom render shape. |
-| `struct <name> { field = <default> … }` | a named record type (§2.11). |
+| `struct <name> { field = <default> … }` | a named record type (§2.12). |
 | `field <name> { width; height; dx; depth? }` | a scalar grid. |
 | `pool <name>[N] { … }` | N inactive slots for dynamic entities. |
 | `soft <name> { nx; ny; nz?; spacing; origin; mass }` | a mass-spring grid. |
@@ -768,7 +768,41 @@ tanh asin acos atan`; 2-arg: `pow atan2 hypot min max`; `if(c,a,b)`; `random()`,
   (`break if (…)`), unrolled (≤10000 statements). Loop bodies: `let`, nested
   loops, `break`/`continue` only.
 
-## 2.11 Struct types (records)
+## 2.11 Arrays (fixed-length, named)
+
+`array N name [{ v0, … }]` declares N consecutive state slots named
+`name.0 … name.{N-1}` and records the length, so `name[j]` is checked rather
+than a raw slot index. It composes with `state = (…)` in either order.
+
+```pwe
+world {
+  gravity = (0, 0, 0)
+  entity swarm { state = (x = 0.0) array 4 samples { 1.0, 2.0, 3.0, 4.0 } }
+}
+systems {
+  update { on = swarm; dt = 0.5
+    samples[0] = samples[0] + dt*(1.0)   # constant index → static slot
+    samples[1] += 2.0                    # `+=` integrates with dt
+    inte samples[2] = 4.0                # `inte name[j] = rate`
+    x = samples[x]                        # runtime index (x holds 0..3)
+  }
+}
+```
+
+* `name[j]` read: a **constant** `j` lowers to a static slot; a **runtime** `j`
+  lowers to a runtime-indexed read (`s[base + j]`), unchecked like `s[i]`.
+* `name[j] = expr`, `name[j] += expr`, and `inte name[j] = rate` are the write
+  forms (the read set is sampled at system start, like every rule).
+* A constant `j` outside `[0, N)` is **detail 52**; an unknown array name is
+  **detail 109**; an initializer with more than `N` values is also detail 52.
+  None of these silently read 0.0.
+* `vecN pos` remains the anonymous, length-less vector form; `array` adds the
+  length and the bounds check. Both flatten to flat state slots (zero-cost).
+
+`len(name)` (a compile-time length for `for` bounds) is specified in RFC-0044
+but not yet implemented.
+
+## 2.12 Struct types (records)
 
 A `struct` names a group of fields; using it in `state = …` lays the fields out
 as dotted scalar slots:
@@ -940,6 +974,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 106 | A `gillespie` step exceeded its reaction budget (`events`) — raise `events` or lower `dt`. |
 | 107 | A duplicate option or field: each option of a part, `bond` or `bonds`, and each non-`tag` field of an `entity` / `pool` body, may appear at most once. |
 | 108 | An unknown or invalid `bond` / `bonds` option (bad key, non-numeric value, missing `tag`/`within`, inverted range). |
+| 109 | An unknown array name in `name[j]` (RFC-0044): the entity declares no `name.0 … name.k` state run. |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the

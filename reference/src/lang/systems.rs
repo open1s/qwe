@@ -7,12 +7,12 @@ use super::*;
 pub struct UpdateSystem {
     /// Slot rules, with raw LHS (`sN` or a named slot) resolved per-entity.
     pub rules: Vec<(String, Expr)>,
-    /// Dynamic ODE rules `s[idx] += dt·expr`.
-    pub dyn_rules: Vec<(Expr, Expr)>,
+    /// Dynamic ODE rules `s[idx] += dt·expr` (index may be a named array).
+    pub dyn_rules: Vec<(DynIndex, Expr)>,
     /// Assignment rules (`slot = expr`).
     pub assigns: Vec<(String, Expr)>,
-    /// Dynamic assignments `s[idx] = expr`.
-    pub dyn_assigns: Vec<(Expr, Expr)>,
+    /// Dynamic assignments `s[idx] = expr` (index may be a named array).
+    pub dyn_assigns: Vec<(DynIndex, Expr)>,
     /// `let name = expr` local bindings, computed sequentially before the rules.
     pub lets: Vec<LetStmt>,
     /// Fallback slot count (max positional `sN` index + 1) when no named layout.
@@ -47,6 +47,7 @@ impl EirSystem for UpdateSystem {
     fn name(&self) -> &'static str {
         "physics.update"
     }
+
     fn lower_entity(&self, entity: u128, out: &mut Vec<crate::eir::Instruction>) {
         if let Some(only) = &self.only {
             if !only.contains(&entity) {
@@ -132,8 +133,8 @@ impl EirSystem for UpdateSystem {
         if let Some(w) = &self.when {
             expr_slot_span(w, &sn, &mut let_max, &mut let_any);
         }
-        for (idx_expr, _) in &self.dyn_rules {
-            expr_slot_span(idx_expr, &sn, &mut let_max, &mut let_any);
+        for (idx, _) in &self.dyn_rules {
+            expr_slot_span(&idx.span_expr(), &sn, &mut let_max, &mut let_any);
         }
         for (_, expr) in &self.rules {
             expr_slot_span(expr, &sn, &mut let_max, &mut let_any);
@@ -144,8 +145,8 @@ impl EirSystem for UpdateSystem {
             }
             expr_slot_span(expr, &sn, &mut let_max, &mut let_any);
         }
-        for (idx_expr, expr) in &self.dyn_assigns {
-            expr_slot_span(idx_expr, &sn, &mut let_max, &mut let_any);
+        for (idx, expr) in &self.dyn_assigns {
+            expr_slot_span(&idx.span_expr(), &sn, &mut let_max, &mut let_any);
             expr_slot_span(expr, &sn, &mut let_max, &mut let_any);
         }
         if let_any {
@@ -379,8 +380,12 @@ impl EirSystem for UpdateSystem {
                 ));
             }
             // Dynamic slot rules: `s[idx] += dt·expr` via a runtime read and a
-            // runtime-index write; the index may use slots and locals.
-            for (idx_expr, expr) in &self.dyn_rules {
+            // runtime-index write; the index may use slots and locals. A named
+            // array index resolves its base against *this* entity's layout.
+            for (idx, expr) in &self.dyn_rules {
+                let Some(idx_expr) = idx.resolve(&sn) else {
+                    continue;
+                };
                 let expr_reg = lower_expr(expr, &ctx, &mut next_id, out);
                 let dt_reg = next_id;
                 next_id += 1;
@@ -406,7 +411,7 @@ impl EirSystem for UpdateSystem {
                     Some(g) => binary(crate::eir::Opcode::Mul, scaled, g, &mut next_id, out),
                     None => scaled,
                 };
-                let ri = lower_expr(idx_expr, &ctx, &mut next_id, out);
+                let ri = lower_expr(&idx_expr, &ctx, &mut next_id, out);
                 let cur = next_id;
                 next_id += 1;
                 out.push(crate::physics_eir::instr(
@@ -482,8 +487,11 @@ impl EirSystem for UpdateSystem {
                     )),
                 ));
             }
-            for (idx_expr, expr) in &self.dyn_assigns {
-                let ri = lower_expr(idx_expr, &ctx, &mut next_id, out);
+            for (idx, expr) in &self.dyn_assigns {
+                let Some(idx_expr) = idx.resolve(&sn) else {
+                    continue;
+                };
+                let ri = lower_expr(&idx_expr, &ctx, &mut next_id, out);
                 let val = lower_expr(expr, &ctx, &mut next_id, out);
                 let val = match gate_reg {
                     Some(g) => {

@@ -588,6 +588,30 @@ fn extensions(report: &mut Report) {
         "RFC-0042 struct record types (flatten + cross-backend)",
         if struct_ok { Case::Pass } else { Case::Fail },
     );
+
+    // RFC-0044: typed arrays (`array N name`) read/write statically and at a
+    // runtime index, on both backends.
+    let arrays = r#"
+        world { gravity = (0,0,0)
+            entity e { state = (x = 0.0, k = 2.0) array 4 v { 1.0, 2.0, 3.0, 4.0 } } }
+        systems { update { on=e; dt = 1.0
+            v[0] = v[0] + 10.0
+            v[1] += 20.0
+            v[k] = v[k] + 100.0
+            x = v[k] + v[3] } }
+    "#;
+    let arrays_ok = run(arrays, 1)
+        .map(|rt| {
+            let st = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+            st.map(|s| s.values.get(2) == Some(&11.0) && s.values.get(4) == Some(&103.0))
+                .unwrap_or(false)
+                && finite(&rt, 1)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0044 typed arrays (static + runtime index, cross-backend)",
+        if arrays_ok { Case::Pass } else { Case::Fail },
+    );
 }
 
 /// RFC-0045: the semantic module system — a two-module program compiles, runs

@@ -84,6 +84,11 @@ pub enum Expr {
     Slot(usize),
     /// A dynamic slot read `s[i]`: the State slot at a runtime index.
     SlotDyn(Box<Expr>),
+    /// A typed-array element access `name[i]` (RFC-0044): a named, length-aware
+    /// run of consecutive State slots. Resolved at lowering against the entity's
+    /// layout (base slot + compile-time length) into a static slot or a
+    /// runtime-indexed `ReadSlotDyn`.
+    Index(String, Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
@@ -111,6 +116,59 @@ pub enum Expr {
     PropRef(String, PropKind),
     /// The global simulation clock: `t`.
     Time,
+}
+/// The index half of a runtime-indexed **write** target (update-system
+/// `dyn_rules` / `dyn_assigns`).
+///
+/// A write target must keep the array *name* until lowering, because the base
+/// slot differs per entity layout: `v[j] = …` on a system that may target
+/// several bodies resolves `base` against each target's own `state_names`.
+/// A raw `s[expr]` index is already absolute and stays a `Slot`.
+#[derive(Clone, Debug)]
+pub enum DynIndex {
+    /// `s[expr]` — an absolute runtime slot index.
+    Slot(Expr),
+    /// `name[j]` — RFC-0044 array write; lowered to `base(sn) + j`.
+    Array(String, Box<Expr>),
+}
+impl DynIndex {
+    /// The index as a checkable expression (`check_array_index`): an
+    /// `Array(name, j)` validates exactly like the read `name[j]`.
+    pub fn as_expr(&self) -> Expr {
+        match self {
+            DynIndex::Slot(e) => e.clone(),
+            DynIndex::Array(name, j) => Expr::Index(name.clone(), j.clone()),
+        }
+    }
+    /// Resolves the absolute slot index against the target entity's layout.
+    /// `None` when the layout declares no such array (a detail-109 diagnostic
+    /// is recorded); the write is then skipped for that entity.
+    pub fn resolve(&self, sn: &std::collections::BTreeMap<String, usize>) -> Option<Expr> {
+        match self {
+            DynIndex::Slot(e) => Some(e.clone()),
+            DynIndex::Array(name, j) => {
+                let base = sn.get(&format!("{name}.0")).copied();
+                match base {
+                    Some(base) => Some(Expr::Add(Box::new(Expr::Const(base as f64)), j.clone())),
+                    None => {
+                        super::diagnostics::push_diag(
+                            109,
+                            0,
+                            format!("array `{name}` is not in this entity's state — write skipped"),
+                        );
+                        None
+                    }
+                }
+            }
+        }
+    }
+    /// The index expression used for slot-span bookkeeping.
+    pub fn span_expr(&self) -> Expr {
+        match self {
+            DynIndex::Slot(e) => e.clone(),
+            DynIndex::Array(name, j) => Expr::Index(name.clone(), j.clone()),
+        }
+    }
 }
 /// A cross-entity property path (`@name.<kind>`), lowering to a read of the
 /// corresponding physics component field.

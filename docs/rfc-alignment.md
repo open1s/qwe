@@ -30,7 +30,7 @@ only when its required behavior is implemented and covered by a named test.
 | 0035 | canonical artifact identity/compatibility | Done | `artifact::tests::artifact_identity_hash_is_stable_and_order_insensitive_for_features`, `artifact::tests::artifact_requires_fails_closed_on_abi_mismatch`, `artifact::tests::artifact_requires_rejects_format_minor_and_feature_mismatch` |
 | 0036 | extension envelope and bounded compression metadata | Done | `extension::tests::extension_envelope_round_trips_sorted`, `extension::tests::extension_required_unknown_fails_optional_skipped`, `extension::tests::compression_metadata_round_trips_and_is_bounded` |
 
-## Extension RFCs (0037-0044)
+## Extension RFCs (0037-0046)
 
 Post-v0.2 extensions implemented by the reference slice. Each is covered by a
 `pwe-conformance` case (cross-backend) and/or a named test.
@@ -46,7 +46,14 @@ Post-v0.2 extensions implemented by the reference slice. Each is covered by a
 | 0043 | value types lowered to EIR (`int`/`bool`) | Proposed | RFC-0043 (not implemented) |
 | 0045 | semantic module system (stable names+version, export/privacy, deterministic merge) | Done | `pwe-conformance` RFC-0045 cases; `lang::tests::module_*`, `from_import_respects_export_surface`; details 101/102 |
 | 0046 | EIR as an explicit SSA CFG (blocks/edges; explicit wire form) | Done | `eir::tests::eir_cfg_blocks_round_trip`; `EirModule::blocks`/`verify_cfg`; FUNCTIONS section encodes explicit blocks (block_count>1), legacy single-block still decodes; RFC-0021 concrete layout + RFC-0046 reconciled |
-| 0044 | typed arrays / SoA user types | Proposed | RFC-0044 (not implemented) |
+| 0044 | typed arrays / SoA user types | Done | `pwe-conformance` "RFC-0044 typed arrays (static + runtime index, cross-backend)"; `lang::tests::typed_arrays_read_write_and_bounds`, `typed_array_runtime_index_read_matches_static`, `typed_array_constant_index_out_of_range_is_rejected`, `typed_array_initializer_arity_is_checked` (details 52/109); `len()` + `for` bounds deferred |
+
+## General-simulation direction (RFC-0047)
+
+RFC-0047 is a direction document (no frozen-contract change): it defines what
+"general-purpose, top-tier simulation language" means for PWE as a capability
+matrix and a dependency-ordered plan. Domain rows there move to **Done** only
+with a named fixture + conformance case, on the same rule as the tables above.
 
 ## Language front end
 

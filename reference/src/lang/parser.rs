@@ -426,6 +426,17 @@ pub(crate) fn store_param(param: Pair<'_, Rule>, decl: &mut SystemDecl) -> Resul
         decl.assigns.insert(key, rhs.as_str().trim().to_string());
         return Ok(());
     }
+    // RFC-0044: an array element LHS (`name[i] = expr`), classified as a rule /
+    // assignment by the same `s[i]`-style paths in `compile.rs`.
+    if first.as_rule() == Rule::arr_index {
+        let key = first.as_str().trim().to_string();
+        let rhs = next_pair(&mut inner)?;
+        if rhs.as_rule() != Rule::expr {
+            return Err(error(Status::Invalid, 55));
+        }
+        decl.assigns.insert(key, rhs.as_str().trim().to_string());
+        return Ok(());
+    }
     if first.as_rule() == Rule::slot_lhs {
         let key = first.as_str().trim().to_string();
         let rhs = next_pair(&mut inner)?;
@@ -959,6 +970,15 @@ pub(crate) fn build_factor(pair: Pair<'_, Rule>) -> Result<Expr> {
                 .next()
                 .ok_or(error(Status::Invalid, 58))?;
             Ok(Expr::SlotDyn(Box::new(build_expr(idx)?)))
+        }
+        Rule::arr_index => {
+            // `name[i]` — a typed-array element access (RFC-0044). The base
+            // slot and length are resolved at lowering against the entity's
+            // `array`/`vecN` layout.
+            let mut ai = inner.into_inner();
+            let name = next_pair(&mut ai)?.as_str().to_string();
+            let idx = next_pair(&mut ai)?;
+            Ok(Expr::Index(name, Box::new(build_expr(idx)?)))
         }
         Rule::entity_ref => build_ref(inner),
         Rule::time => Ok(Expr::Time),
@@ -1950,6 +1970,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             for field in inner {
                                 apply_entity_field(field, &mut decl, &structs, &mut seen_fields)?;
                             }
+                            check_unique_state_names(&decl)?;
                             model.entities.push(decl);
                         }
                         Rule::soft_stmt => {
@@ -2018,6 +2039,7 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             for field in inner {
                                 apply_entity_field(field, &mut decl, &structs, &mut seen_fields)?;
                             }
+                            check_unique_state_names(&decl)?;
                             model.pools.push(crate::dsl::PoolDecl { name, count, decl });
                         }
                         _ => {}
