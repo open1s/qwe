@@ -8,7 +8,7 @@ merges its atoms and bonds into the scene, so it renders directly:
 ```pwe
 import "std/molecules/water"
 
-world { title = "Water (H2O)"; gravity = (0, 0, 0) }
+world { title = "Water (H2O)" gravity = (0, 0, 0) }
 ```
 
 Each module also exposes pure data functions, composed from the element modules

@@ -9,7 +9,12 @@ Each module declares two shapes you can attach to an entity:
 ```pwe
 import "std/atoms/O"
 world { gravity = (0, 0, 0) entity Oxygen { shape = O_atom; size = 2.5 } }
-# or, nucleus only:
+```
+
+For the nucleus alone, import the same module and use the `_nucleus` shape:
+
+```pwe
+import "std/atoms/O"
 world { gravity = (0, 0, 0) entity Core { shape = O_nucleus; size = 2.5 } }
 ```
 

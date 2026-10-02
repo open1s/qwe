@@ -65,7 +65,7 @@ fn usage() {
            pwe present <out.pweb> [--port P] [--param K=V]...\n  \
            pwe playground [--port P]              # browser editor + live viewer\n  \
            pwe repl                               # interactive compile/run/step\n  \
-           pwe doctest [FILES...]                 # compile runnable code blocks in docs\n  \
+           pwe doctest [FILES...]                 # compile runnable doc blocks (default: all *.md with a fence)\n  \
            pwe lsp                                # Language Server over stdio (diagnostics/format)\n  \
            pwe fmt <src.pwe> [--check] [-w]       # format source (stdout by default)\n  \
            pwe migrate <src.pwe> [-o <out.pwe>]   # upgrade a pre-v0.3 source\n\
@@ -399,12 +399,19 @@ fn cmd_lsp() -> i32 {
 // doctest
 // ---------------------------------------------------------------------------
 
-/// Compiles the runnable ```` ```pwe ```` blocks in the given Markdown files
-/// (default `docs/lang-usage.md`). Exits non-zero on any failure.
+/// Compiles the runnable ```` ```pwe ```` blocks in the given Markdown files.
+/// With no file arguments it scans every Markdown file under the current
+/// directory that carries a ```` ```pwe ```` fence (`issues/**` archives are
+/// skipped). Exits non-zero on any failure.
 fn cmd_doctest(args: &[String]) -> i32 {
     let strict = args.iter().any(|a| a == "--strict");
     let files: Vec<String> = if args.is_empty() {
-        vec!["docs/lang-usage.md".to_string()]
+        let docs = pwe_reference::doctest::discover_docs(std::path::Path::new("."));
+        if docs.is_empty() {
+            eprintln!("pwe doctest: no Markdown file with a ```pwe fence under .");
+            return 1;
+        }
+        docs.into_iter().map(|p| p.display().to_string()).collect()
     } else {
         args.iter()
             .filter(|a| !a.starts_with('-'))

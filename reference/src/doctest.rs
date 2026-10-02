@@ -67,6 +67,63 @@ pub fn fenced_blocks(markdown: &str) -> Vec<Block> {
     extract(markdown).blocks
 }
 
+/// Whether `markdown` contains at least one ```` ```pwe ```` fence.
+pub fn has_pwe_fence(markdown: &str) -> bool {
+    extract(markdown)
+        .blocks
+        .iter()
+        .any(|b| b.info.starts_with("pwe"))
+}
+
+/// Every Markdown file under `root` that contains a ```` ```pwe ```` fence,
+/// found by a depth-first walk and returned **sorted** (deterministic).
+///
+/// Directories that hold no shipped docs are skipped: VCS/build output
+/// (`.git`, `target`, `book`), generated artifacts, and `issues/` — whose
+/// archives intentionally contain failing repros. Used as the default scan set
+/// of `pwe doctest` and by the `shipped_docs_compile` regression, so a doc
+/// example cannot rot silently (#93).
+pub fn discover_docs(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    const SKIP_DIRS: &[&str] = &[
+        ".git",
+        "target",
+        "book",
+        "_probe_out",
+        "node_modules",
+        "gpu-verify",
+        "graphify-out",
+        ".workbuddy",
+        "issues",
+    ];
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_dir() {
+                let name = entry.file_name();
+                if SKIP_DIRS.contains(&name.to_string_lossy().as_ref()) {
+                    continue;
+                }
+                walk(&path, out);
+            } else if path.extension().is_some_and(|x| x == "md") {
+                let Ok(md) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                if has_pwe_fence(&md) {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, &mut out);
+    out.sort();
+    out
+}
+
 /// Whether a block is a runnable program: a `pwe` block that starts with `world`
 /// and is not marked illustrative (`ignore` / `no-run`). Blocks that use
 /// namespaced `std` calls without an import belong here as `ignore`.
@@ -111,8 +168,20 @@ pub struct Warning {
 }
 
 /// Compiles every runnable block, returning failures and warnings. Unclosed
-/// fences are failures.
+/// fences are failures. `import` directives resolve relative to the current
+/// directory (see [`check_document_full_at`]).
 pub fn check_document_full(markdown: &str) -> (Vec<Failure>, Vec<Warning>) {
+    check_document_full_at(markdown, std::path::Path::new("."))
+}
+
+/// Like [`check_document_full`], but resolves a block's `import` directives
+/// relative to `base_dir`. Std-library examples import project-root-relative
+/// specifiers (`import "std/thermal"`), so a doc compiled from a crate
+/// subdirectory must pass the project root here (#92).
+pub fn check_document_full_at(
+    markdown: &str,
+    base_dir: &std::path::Path,
+) -> (Vec<Failure>, Vec<Warning>) {
     let ex = extract(markdown);
     let mut failures: Vec<Failure> = ex
         .unclosed
@@ -128,7 +197,7 @@ pub fn check_document_full(markdown: &str) -> (Vec<Failure>, Vec<Warning>) {
             continue;
         }
         crate::lang::clear_diagnostics();
-        match crate::lang::LangRuntime::compile(&block.code) {
+        match crate::lang::LangRuntime::compile_with_base(&block.code, base_dir) {
             Ok(_) => {
                 for d in crate::lang::take_diagnostics() {
                     warnings.push(Warning {
@@ -212,20 +281,41 @@ mod tests {
 
     #[test]
     fn shipped_docs_compile() {
-        for rel in [
-            "../docs/lang-usage.md",
-            "../README.md",
-            "../docs/lang-usage.zh.md",
-            "../README-ZH.md",
-        ] {
-            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/").to_string() + rel;
-            let md = std::fs::read_to_string(&path).unwrap_or_default();
-            if md.is_empty() {
-                continue;
-            }
-            let (failures, warnings) = check_document_full(&md);
+        // Every Markdown file in the repo that carries a ```pwe fence must
+        // compile cleanly (imports resolved from the repo root). This is what
+        // catches the std/ example rot of #93 — and, via #92, an unresolved
+        // `import` in the text path.
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
+        let docs = discover_docs(root);
+        assert!(
+            docs.iter().any(|p| p.ends_with("std/atoms/README.md")),
+            "discover_docs must reach std/**; got {docs:?}"
+        );
+        for path in &docs {
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            let md = std::fs::read_to_string(path).unwrap_or_default();
+            let (failures, warnings) = check_document_full_at(&md, root);
             assert!(failures.is_empty(), "{rel}: failures {failures:?}");
             assert!(warnings.is_empty(), "{rel}: warnings {warnings:?}");
         }
+    }
+
+    /// #92: a doc block that `import`s a std module and calls it qualified must
+    /// pass — the text path used to strip the import and then report error 59
+    /// ("is not a builtin function") on the perfectly valid call.
+    #[test]
+    fn doc_block_with_import_resolves() {
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
+        let md = "```pwe\nimport \"std/thermal\"\nworld { gravity=(0,0,0) entity e { state=(t=300.0) } }\nsystems { update { on=e; dt=1.0 t = thermal.celsius(300.0) + 0.0 } }\n```\n";
+        let (failures, warnings) = check_document_full_at(md, root);
+        assert!(
+            failures.is_empty(),
+            "import-using block must compile: {failures:?}"
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 }
