@@ -1588,4 +1588,59 @@ untested surfaces — `pwe doctest`, std/** doc examples, `pwe repl`; filed
    excluded from any doctest glob).
 6. Open after pass 46: **#89, #90, #91, #92, #93**.
 
+Review pass 47 (fix batch — the five issues open after pass 46 are all fixed;
+#89 #90 #91 #92 #93):
+
+1. **#92 (Medium) — the text path now resolves imports.** `compile()` delegates
+   to a new `compile_with_base(source, base_dir)` and passes `.` (CWD), so
+   `pwe doctest` and the REPL `:run` resolve `import "std/…"` instead of
+   dropping the directives; `collect_module` accepts a non-canonicalizable root
+   only when a `root_override` is present (the in-memory buffer case, #62).
+   Verified end to end: the pass-46 `std/README` + `std/elements/README` doctest
+   false-fails now compile, and the REPL repro (`import "std/thermal"` +
+   `thermal.celsius`) runs 5 steps. Regression:
+   `doctest::tests::doc_block_with_import_resolves`.
+2. **#93 (Low) — std doc examples repaired + doctest coverage grown.**
+   `std/atoms/README.md`'s two-`world` fence split into two runnable blocks;
+   `std/molecules/README.md`'s world-level `;` dropped (the generators write
+   only `*.pwe`, so the READMEs are hand-edited safely). New
+   `doctest::discover_docs` walks the tree for every `*.md` carrying a ```pwe
+   fence (skipping `issues/**`, `target/`, `book/`, …); it is now the **default**
+   `pwe doctest` scan set (37 runnable blocks, all compile) and drives
+   `shipped_docs_compile`, which now covers `std/**`. `pwe doctest` added to
+   `tools/gate.sh` and the `gate` CI job.
+3. **#89 (Low) — counts refreshed and made self-checking.** README/README-ZH
+   439/25 → **456/27** (lib row 381 → 397, integration 25 → 26; the zh prose
+   said 17). New `tools/check-readme-counts.sh` runs the suite + the conformance
+   report, derives every documented number (both badges, the quick-start
+   comment, prose, all six table rows, both totals) and fails on any mismatch —
+   it caught its own batch's +1 test during development. Wired into `gate.sh`
+   (replacing the separate test/conformance steps, so nothing runs twice) and
+   the `gate` CI job.
+4. **#91 (Medium) — already fixed in `84c01330`, now guarded.** The 1-ULP
+   divergence was clang fusing the forward-kinematics `sin`/`cos` pair into
+   `__sincos_stret`, whose sine differs from libm's `sin` — the function the
+   interpreter calls. `84c01330` added `-fno-builtin` to the native `cc`
+   invocation (beside the existing `-ffp-contract=off`). Re-verified on the
+   current tip: every-step cross over the real artifact path passes 1500 steps
+   with `CROSS_BATCH=1`, for the current robot.pwe **and** the pre-`24a3a314`
+   one; `pwe present` runs clean; `--no-native-jit` and native agree. New
+   regression `reference/tests/jit_equiv.rs` steps robot.pwe under promotion
+   with an every-step cross for 25×`NATIVE_PROMOTE` steps and asserts the native
+   backend actually ran. (The `run`/`present` phase mismatch the issue also
+   flagged was fixed in the same commit.)
+5. **#90 (Low) — pre-push subject lint.** New
+   `tools/check-commit-subjects.sh` applies the `commit-lint.yml` regex to the
+   commits a push would carry (`main@origin..main` via jj, else
+   `origin/main..HEAD`) and is the first step of `gate.sh`, so a bad subject
+   fails locally instead of turning the required check red. The two historical
+   offenders (`8388c3d7 lang:` → `feat(lang):`, `84cd89bb present:` →
+   `feat(present):`) were reworded in a history rewrite.
+6. Gates: the local Rust was 1.82, which cannot build the pinned deps at all
+   (`pest` 2.9.1 needs rustc 1.83, `indexmap` 2.14.2 needs edition2024), so the
+   gate was run against an isolated `rustup` stable (1.99.0). `./tools/gate.sh`
+   green: fmt, clippy `-D warnings`, **456 tests**, **27/27** conformance,
+   37 doctest blocks, README counts, examples, bench.
+7. Open after pass 47: **none**.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).

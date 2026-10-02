@@ -16,10 +16,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: Test
-        run: cargo test --workspace
-      - name: Conformance
-        run: cargo run -q -p pwe-conformance
+      - name: Test, conformance & README counts
+        run: ./tools/check-readme-counts.sh
+      - name: Doctest (runnable doc examples)
+        run: cargo run -q -p pwe-cli -- doctest
       - name: Build examples
         run: cargo build --examples -p pwe-reference
   supply-chain:

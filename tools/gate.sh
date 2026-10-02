@@ -4,11 +4,14 @@
 #
 # Struct/field additions are covered: `clippy --all-targets` compiles
 # `examples/` and `tests/` too, which is what catches a missed initializer.
-# The other CI jobs are separate: `supply-chain` (`cargo deny check`),
-# `subject` (commit-message lint) and `bench` (`tools/bench-check.sh --ci`,
-# cross-machine ceilings — this script uses the tighter local thresholds).
+# The other CI jobs are separate: `supply-chain` (`cargo deny check`) and
+# `bench` (`tools/bench-check.sh --ci`, cross-machine ceilings — this script
+# uses the tighter local thresholds).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+echo "==> tools/check-commit-subjects.sh (subjects this push would carry)"
+./tools/check-commit-subjects.sh
 
 echo "==> cargo fmt --all -- --check"
 cargo fmt --all -- --check
@@ -16,11 +19,11 @@ cargo fmt --all -- --check
 echo "==> cargo clippy --workspace --all-targets --all-features -- -D warnings"
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-echo "==> cargo test --workspace"
-cargo test --workspace
+echo "==> cargo test --workspace + conformance (README counts checked)"
+./tools/check-readme-counts.sh
 
-echo "==> cargo run -q -p pwe-conformance"
-cargo run -q -p pwe-conformance
+echo "==> pwe doctest (runnable doc examples)"
+cargo run -q -p pwe-cli -- doctest
 
 echo "==> cargo build --examples -p pwe-reference"
 cargo build --examples -p pwe-reference

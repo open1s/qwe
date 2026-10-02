@@ -6,8 +6,8 @@ of a 4D world — 3D space, plus time.**
 [中文](README-ZH.md)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.81%2B-orange.svg)](https://www.rust-lang.org)
-[![tests](https://img.shields.io/badge/tests-439%20passing-brightgreen.svg)](#tests--conformance)
-[![conformance](https://img.shields.io/badge/conformance-25%2F25%20%C2%B7%200%20skips-brightgreen.svg)](#tests--conformance)
+[![tests](https://img.shields.io/badge/tests-456%20passing-brightgreen.svg)](#tests--conformance)
+[![conformance](https://img.shields.io/badge/conformance-27%2F27%20%C2%B7%200%20skips-brightgreen.svg)](#tests--conformance)
 [![RFCs](https://img.shields.io/badge/frozen%20contract-37%20RFCs-purple.svg)](#the-frozen-contract)
 [![repo](https://img.shields.io/badge/github-open1s%2Fqwe-181717.svg)](https://github.com/open1s/qwe)
 
@@ -19,7 +19,7 @@ sound, waves, robot arms, and machines that walk.
 
 And it is **deterministic you can prove**: the interpreter is the semantic
 oracle, the JIT must agree with it **byte-for-byte on every step**, and 300+
-tests plus 25 conformance checks enforce it — with zero skips.
+tests plus 27 conformance checks enforce it — with zero skips.
 
 ```
 World Model → WIR → Domain IR → EIR → Interpreter / JIT / AOT → Runtime → CPU / GPU / NPU / Edge / Cloud
@@ -220,7 +220,7 @@ Inside `pwe-reference`:
 git clone git@github.com:open1s/qwe.git && cd qwe
 
 cargo build --workspace
-cargo test  --workspace          # 439 tests
+cargo test  --workspace          # 456 tests
 cargo run -p pwe-conformance     # RFC-0029: all PASS, no skips
 
 # the language, end to end:
@@ -236,15 +236,15 @@ cargo run -p pwe-reference --example language_demo
 
 | Suite | Count |
 | --- | --- |
-| Runtime / language unit tests | 381 |
+| Runtime / language unit tests | 397 |
 | Analytic law-conformance | 21 |
 | Property tests | 4 |
 | Standard-library tests | 6 |
 | Fuzzing (deterministic) | 2 |
-| Integration / other | 25 |
-| **Total** | **439** |
+| Integration / other | 26 |
+| **Total** | **456** |
 
-Plus `pwe-conformance`: **25 / 25, zero skips**. The `no_std` check:
+Plus `pwe-conformance`: **27 / 27, zero skips**. The `no_std` check:
 `cargo check -p pwe-api --no-default-features`.
 
 ---
