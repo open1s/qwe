@@ -66,9 +66,9 @@ pub(crate) use lower::*;
 
 mod compile;
 pub use compile::{
-    build_systems, compile, compile_file, compile_program, load_error_source, load_program,
-    load_program_sources, load_program_sources_with_root, merge_sources, CompiledProgram,
-    ProgramSources, LANG_VERSION, SUPPORTED_LANG_VERSIONS,
+    build_systems, compile, compile_file, compile_program, compile_with_base, load_error_source,
+    load_program, load_program_sources, load_program_sources_with_root, merge_sources,
+    CompiledProgram, ProgramSources, LANG_VERSION, SUPPORTED_LANG_VERSIONS,
 };
 
 mod systems;

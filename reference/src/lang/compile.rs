@@ -1800,14 +1800,22 @@ pub(crate) fn collect_module(
     out: &mut Vec<ModuleInfo>,
     root_override: Option<&str>,
 ) -> Result<()> {
-    let canon = path.canonicalize().map_err(|e| {
-        error_at(
-            Status::Invalid,
-            76,
-            0,
-            format!("cannot import {}: {e}", path.display()),
-        )
-    })?;
+    let canon = match path.canonicalize() {
+        Ok(c) => c,
+        // An in-memory root (a doctest/REPL buffer, or an unsaved editor
+        // buffer) has no on-disk file to canonicalize: key it on the path as
+        // given. Only the `root_override` caller may do this; a missing
+        // *imported* file is still an error (#92).
+        Err(_) if root_override.is_some() => path.to_path_buf(),
+        Err(e) => {
+            return Err(error_at(
+                Status::Invalid,
+                76,
+                0,
+                format!("cannot import {}: {e}", path.display()),
+            ))
+        }
+    };
     // A module already loaded (e.g. a cycle, or another alias) only gains an
     // alias; its definitions are merged once and reachable by every alias.
     if let Some(&idx) = seen.get(&canon) {
@@ -2775,10 +2783,31 @@ right-hand side has `{rhs_name}`"
 }
 
 /// Compiles PWE source end-to-end: parse → build systems → lower to EIR.
+///
+/// `module`/`export` directive lines are stripped (they are metadata, not
+/// source). `import` directives are **resolved** relative to the process's
+/// current directory — the text path has no source file of its own, and both
+/// callers (`pwe doctest`, the REPL) run from the project root. Use
+/// [`compile_with_base`] to resolve against an explicit directory; before
+/// #92 these lines were stripped and dropped, so a qualified call failed with
+/// the misleading "is not a builtin function" (detail 59).
 pub fn compile(source: &str) -> Result<CompiledProgram> {
-    // Strip directive lines (`module`/`export`/`import`) so the in-memory path
-    // (LSP, `LangRuntime::compile`) parses module-declaring sources too.
-    compile_program(parse(&strip_directives(source).source)?)
+    compile_with_base(source, std::path::Path::new("."))
+}
+
+/// Like [`compile`], but resolves `import` directives relative to `base_dir`.
+pub fn compile_with_base(source: &str, base_dir: &std::path::Path) -> Result<CompiledProgram> {
+    let strip = strip_directives(source);
+    if strip.imports.is_empty() {
+        return compile_program(parse(&strip.source)?);
+    }
+    // Reuse the file path: give the buffer a synthetic path inside `base_dir`
+    // so its imports resolve from disk relative to `base_dir`, exactly as a
+    // file at that location would (`load_program_sources_inner` reads the
+    // in-memory root from `root_override` and ignores the on-disk file).
+    let synthetic = base_dir.join("__pwe_in_memory__.pwe");
+    let (parsed, _) = load_program_sources_inner(&synthetic, Some(source))?;
+    compile_program(parsed)
 }
 
 /// The language semantics this build implements (frozen at v0.3). A model may

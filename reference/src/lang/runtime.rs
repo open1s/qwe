@@ -132,8 +132,19 @@ impl LangRuntime {
     }
 
     /// Compiles source and boots a runtime with an executable scene.
+    ///
+    /// `import` directives resolve relative to the current directory; see
+    /// [`LangRuntime::compile_with_base`] for an explicit base (#92).
     pub fn compile(source: &str) -> Result<Self> {
         let compiled = compile(source)?;
+        let scene = compiled.parsed.model.build_scene();
+        Self::from_compiled_region(compiled, scene, RegionId(1))
+    }
+
+    /// Like [`LangRuntime::compile`], resolving `import` directives relative to
+    /// `base_dir` (the doctest/REPL text path has no source file of its own).
+    pub fn compile_with_base(source: &str, base_dir: &std::path::Path) -> Result<Self> {
+        let compiled = compile_with_base(source, base_dir)?;
         let scene = compiled.parsed.model.build_scene();
         Self::from_compiled_region(compiled, scene, RegionId(1))
     }
