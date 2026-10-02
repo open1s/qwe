@@ -1634,8 +1634,16 @@ Review pass 47 (fix batch — the five issues open after pass 46 are all fixed;
    commits a push would carry (`main@origin..main` via jj, else
    `origin/main..HEAD`) and is the first step of `gate.sh`, so a bad subject
    fails locally instead of turning the required check red. The two historical
-   offenders (`8388c3d7 lang:` → `feat(lang):`, `84cd89bb present:` →
-   `feat(present):`) were reworded in a history rewrite.
+   offenders the issue named were reworded in a history rewrite (`8388c3d7
+   lang:` → `28bcbb3f feat(lang):`; `84cd89bb present:` → `d6fdbad1
+   feat(present):`). A full-history sweep still finds ~46 non-conforming
+   subjects, but they are the deliberate older style (`fix(#70): …`,
+   `feat(RFC-0045): …`, >100-char `docs(issues):` logs) plus the bootstrap
+   commits (`initial`, `v0.0.1`, the empty root); rewriting them all means
+   rewriting the repository, and the job lints only the push range, so they are
+   accepted as history and left alone. (The issue's other suggestion — require a
+   review and block force-pushes on `main` — is a repository setting, not a
+   commit.)
 6. Gates: the local Rust was 1.82, which cannot build the pinned deps at all
    (`pest` 2.9.1 needs rustc 1.83, `indexmap` 2.14.2 needs edition2024), so the
    gate was run against an isolated `rustup` stable (1.99.0). `./tools/gate.sh`
