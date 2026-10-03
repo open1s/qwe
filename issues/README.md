@@ -1651,4 +1651,58 @@ Review pass 47 (fix batch — the five issues open after pass 46 are all fixed;
    37 doctest blocks, README counts, examples, bench.
 7. Open after pass 47: **none**.
 
+Review pass 48 (dev fix batch landed — reviewed, black-boxed, verified,
+closed; no new issues filed):
+
+1. **Landed since pass 46** (history rewritten on the way, so earlier
+   docs commits carry new SHAs): `df286e1e` RFC-0043 int/bool value
+   types + RFC-0044 `len(name)` for-bounds; `be592c84` text-path
+   imports (#92); `3ed054a7` std doc repairs + doctest discovery (#93);
+   `868158d1` jit_equiv promotion test (#91); `af6750e0` pre-push
+   subject lint (#90); `42ab81fc` README counts + enforcement (#89);
+   dev's own pass-47 record (`93f25fb6`).
+2. **CI-red incident diagnosed, no issue filed**: tip `93f25fb6` went
+   red on the brand-new `tools/check-readme-counts.sh` (CARGO_TERM_COLOR
+   always in Actions colorizes `Running` headers, parser matched nothing,
+   every suite fell into `other=456`, six table checks failed). The dev
+   had the fix (`--color=never` + ANSI strip) written locally and pushed
+   it within the session as part of `b31f9aee` — all three required
+   checks green on current tip — so filing #94 would have been noise;
+   recorded here instead.
+3. **RFC-0043/0044 black-box** (A/B against the pre-feature binary from
+   `/tmp/pwe-v10`): component initializer `velocity=(7/2,…)` → 3.5 in
+   both builds; `integrate { dt = 1/60 }` → sim time 1.000000 s after
+   60 steps (both); `update { dt = 1/2 }` → 1.0 s after 2 steps (both);
+   `bounce.pwe` positions byte-identical. Traps are graceful:
+   `7 / 0` and `i64(0.0/0.0)` both fail `step 0 … EirInvalid (18)`
+   (RFC-0021/detail-18, no panic). Diagnostics verified: `let n: i64 =
+   1.5` → detail 89 with a clear caret; `len(x)` on a scalar → detail
+   109; non-const `let n: i64 = m + 1` compiles (let-kind tracking
+   works); `(1 < 2) * 5.0` still compiles and yields 5.0 (f64
+   compatible); i64 overflow constant compiles without panic; `for j in
+   0..len(v) + 1` is rejected at parse (bound grammar = literal | len
+   only, as the RFC specifies).
+4. **Fix verifications** (evidence comments on each issue):
+   - #89 — counts 456/27 match reality; table sums; enforcement in
+     gate.sh + CI (green run).
+   - #90 — offenders reworded (`28bcbb3f`, `d6fdbad1`);
+     `check-commit-subjects.sh` is gate.sh's first step ("nothing to
+     push" → rc 0); Commit message green on tip.
+   - #91 — `-ffp-contract=off` + `-fno-builtin` at
+     `native.rs:376,381`; new `jit_equiv` (every-step cross under
+     promotion) passes; **E2E: `pwe present robot.pweb` ran >120 s
+     (≈1800 steps, far past the old death at 1376) with zero
+     failures**.
+   - #92 — no-arg `pwe doctest` compiles 37 blocks (std examples
+     included); REPL `import "std/thermal"` + `thermal.celsius` runs.
+   - #93 — atoms fence split, molecules `;` dropped;
+     `discover_docs` + `shipped_docs_compile` cover every tracked *.md
+     with pwe fences (issues/** excluded).
+5. Gates this pass: tip's CI/Book/Commit message all green on
+   `b31f9aee`; local `pwe doctest` 37/37, `jit_equiv` 1/1,
+   `check-commit-subjects.sh` rc 0. (Dev reports full `gate.sh` green
+   under rust 1.99: 456 tests, 27/27 conformance.)
+6. **Open after pass 48: none** (0 open issues — #89–#93 all closed
+   this pass with verification comments).
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
