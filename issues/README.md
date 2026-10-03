@@ -1705,4 +1705,30 @@ closed; no new issues filed):
 6. **Open after pass 48: none** (0 open issues — #89–#93 all closed
    this pass with verification comments).
 
+Review pass 49 (no new dev commits — tip still `d61cf807`, 0 open
+issues; second-round edge probes on the newest feature surface, RFC-0043
+casts/annotations and `pwe fmt` integrity — nothing fired):
+
+1. **Casts**: `i32(…)`, `u32(…)`, `u64(…)`, `bool(…)` all compile
+   (the RFC's named `i64`/`f64`/`bool` plus the width kinds from the
+   motivation — full coverage, no missing-cast gap).
+2. **Annotations**: `let b: bool = 1 < 2`, `let n: u32 = 5`,
+   `let n: i32 = 5` compile; `let b: bool = 5` is rejected with
+   `error 89: let b: bool but the expression is a number` + caret —
+   the diagnostic the RFC promises, on the right case.
+3. **`pwe fmt` vs the new syntax** (formatter rewriting `let n: i64 =
+   7 / 2` into float division would be a silent semantic change):
+   stdout output keeps `7 / 2`, `0..len(v)` and array decls verbatim
+   and only re-indents; `--check` on the real formatted output → rc 0;
+   formatted output compiles; second pass is idempotent; shipped
+   `bounce.pwe` check rc 0. (`fmt <file>` prints to stdout and leaves
+   the file untouched; `--check` → rc 1 when unformatted.)
+4. Remaining gaps from pass 48 noted but not observable black-box:
+   i64 overflow *value* (wrap vs fold) — no panic observed, covered by
+   interpreter semantics tests; int-state edge values are pinned by the
+   dev's unit tests.
+5. Gates: pass-48 push `d61cf807` Commit message ✓ (CI doc-run green
+   pattern); tip checks unchanged otherwise. No issues filed; no issue
+   changes — **open after pass 49: none**.
+
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
