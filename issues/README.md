@@ -121,6 +121,9 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 | [0092](https://github.com/open1s/qwe/issues/92) | Medium | text-path `compile()` (`compile.rs:2774`) strips `import` lines and drops them un-resolved: `pwe doctest` false-fails valid std examples (same text compiles via `pwe compile`), REPL `:run` rejects any import program with bogus error 59; LSP/file paths unaffected | reference/src/lang/compile.rs:2774, cli/src/main.rs:540 (REPL), doctest |
 | [0093](https://github.com/open1s/qwe/issues/93) | Low | std doc examples that do not parse: `std/atoms/README.md` fence holds two `world` programs (error 60), `std/molecules/README.md` uses `;` after `title` at world level (error 60); doctest default set = lang-usage.md only and CI runs no doctest → std/** docs unguarded | std/*/README.md, cli cmd_doctest default set, gate.sh |
 
+| [0094](https://github.com/open1s/qwe/issues/94) | Medium | `ExecEnv.hist`/`cross_time` keyed by a per-function `HistRead` count with no function namespace: `deriv` in two systems silently corrupts each other (s=-7 vs 1, t=10 vs 3, matches shared-key model); `--check` passes (both backends err identically); pre-existing on origin/main, RFC-0048 widens it to `cross_time` and claims false "per-entity" sites | lower.rs:88/147 (site = count of HistReads in own out), eir.rs hist/cross_time global maps |
+| [0095](https://github.com/open1s/qwe/issues/95) | Medium | `cross(deriv(x))` computes its hist site **before** lowering the argument (lower.rs:147→148) so the nested deriv shares the site: over constant deriv (+1/step) unrolled `cross(v)` never fires, nested form fires at steps 4 and 7 in 8; `--check` passes; reverse nesting `deriv(cross(x))` fine; RFC-0048 WIP, its "never collide" claim false for nesting | lower.rs:147-148 vs deriv's 78→88 ordering, RFC-0048 |
+
 ## Suggested order
 
 1. 0011 + 0012 — silent state corruption / silent loss of dimensional
@@ -1730,5 +1733,56 @@ casts/annotations and `pwe fmt` integrity — nothing fired):
 5. Gates: pass-48 push `d61cf807` Commit message ✓ (CI doc-run green
    pattern); tip checks unchanged otherwise. No issues filed; no issue
    changes — **open after pass 49: none**.
+
+Review pass 50 (tip unchanged at `84ddce96`; the dev has an
+**uncommitted 14-file WIP: RFC-0048 Slice A, zero-crossing detection** —
+reviewed the WIP directly as the current code; filed 0094 and 0095):
+
+1. **WIP scope reviewed**: new `rfc/RFC-0048-discrete-event-hybrid-core.md`;
+   `eir.rs` (opcodes 236–239 `CrossDown`/`RiseEdge`/`FallEdge`/`LastCross`,
+   new `ExecEnv.cross_time`, interpreter semantics, validator shapes);
+   `lower.rs` `lower_zero_crossing`; `parser.rs` (`is_builtin_call` +
+   new `builtin_arity`); `tests.rs` (+123 lines, 4 named RFC-0048 tests);
+   conformance case; docs/README/SUMMARY edits. WIP compiles, reference
+   tests green (401 lib + integration), conformance **28/28**.
+2. **0094 (Medium) filed** — history sites are per-function counts but
+   `hist`/`cross_time` are global maps keyed by the bare count, so the
+   first hist-op of every system×entity function shares key 0. Controls:
+   two-system program, `a`-only `s=1` ✓, `b`-only `t=3` ✓, together
+   `s=-7, t=10` ✗ (matches the shared-key model exactly: step5
+   `5-12=-7`, `15-5=10`). `pwe run --check` passes — both backends make
+   the identical mistake, so no cross-backend guard can see it.
+   Provenance: pre-existing on `origin/main` (count scheme lower.rs:88 +
+   global hist already there; existing deriv tests are all
+   single-hist-function). RFC-0048 extends the scheme to `cross_time`
+   and its "history sites are automatically per-entity" claim is false.
+3. **0095 (Medium) filed** — `lower_zero_crossing` computes `site`
+   before lowering its argument (lower.rs:147→148), unlike `deriv`
+   (78→88), so `cross(deriv(x))`'s nested deriv shares the site. Over a
+   constant velocity (`deriv` ≡ +1/step, never changes sign): unrolled
+   `cross(v)` fires 0 times in 8 steps ✓, nested form fires at steps 4
+   and 7 ✗. `--check` passes. Reverse nesting `deriv(cross(x))` is safe
+   by construction. The four new unit tests + conformance case cover
+   only non-nested forms.
+4. **WIP defect caught mid-session, fixed by the dev during review**:
+   `cross()` with 0 args panicked at lower.rs:148 (index OOB, rc 101)
+   while `deriv()`/`sin()` gave clean error 59 — `builtin_arity` had
+   been added but not wired; the dev wired it (compile.rs:3213) while I
+   was probing; re-probe now yields `error 59: cross expects 1
+   argument(s), got 0`. No issue filed (transient WIP state).
+5. Reviewed-and-clean: native `eligible()` does not whitelist
+   `HistRead`/`HistWrite`/the new opcodes → history-using functions
+   never native-promote → no #91-class native divergence for Slice A;
+   `reset_to` rebuilds `ExecEnv::default()` so `cross_time` clears;
+   strictness (exact-zero touch is not a crossing) and fire-once match
+   the RFC; `builtin_arity` covers all four new names; opcode validator
+   arities/shapes match the design (site id rides in `constant`).
+6. Guard note for the slice: `step_cross` compares writes, events,
+   queue and field overlays but **not** `hist`/`cross_time`, contrary to
+   RFC-0048's "compares the history maps" sentence — moot for 0094/0095
+   (both backends err identically) but the RFC sentence should be
+   corrected when the slice lands.
+7. Gates: no pushes this pass except this record. Open after pass 50:
+   **#94, #95**.
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
