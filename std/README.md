@@ -5,7 +5,7 @@ domains a general simulation language needs: mathematics, point kinematics,
 forces, rigid-body mechanics, chemistry, thermal physics, acoustics, optics,
 electromagnetism, robotics, the **periodic table** (`std/periodic` lookup by
 atomic number, plus one module per element in `std/elements/`), and
-**atomic structure** (`std/atoms/`, nucleus + orbiting electron shells) and
+**atomic structure** (`std/atoms/`, nucleus + orbiting electron shells), **signal processing / DSP** (`std/signal`, decibels, one-pole filters, RBJ biquads, envelope followers), **molecular dynamics** (`std/md`, periodic boundary conditions, kinetic temperature, the Berendsen thermostat/barostat), and
 **molecules** (`std/molecules/`, renderable atoms + `bond` lines).
 
 ## How modules are used
@@ -53,7 +53,10 @@ A composing example lives at `cli/examples/domains.pwe`.
 | `std/units` | `kmh_to_ms ms_to_kmh mph_to_ms knot_to_ms fahrenheit_to_celsius celsius_to_fahrenheit celsius_to_kelvin kelvin_to_celsius kwh_to_j cal_to_j kcal_to_j ev_to_j btu_to_j atm_to_pa bar_to_pa psi_to_pa mmhg_to_pa angstrom_to_m nm_to_m au_to_m ly_to_m parsec_to_m mile_to_m nautical_mile_to_m foot_to_m inch_to_m lb_to_kg oz_to_kg tonne_to_kg deg_to_rad rad_to_deg arcmin_to_rad arcsec_to_rad g_to_ms2 lbf_to_n` |
 | `std/atoms` | Schematic atomic internal structure: `shape <Sym>_atom` (nucleus + one `ring` per shell + orbiting electrons) and `shape <Sym>_nucleus` (nucleus only) to attach to an entity |
 | `std/molecules` | Renderable molecules: each module declares one entity per atom (CPK colour, size) with `bond` lines and exposes `molar_mass()` / `atom_count()` composed from `std/elements/` |
+| `std/des` | Discrete-event statistics over the priority event calendar: `utilization availability throughput wait_time queue_length mean variance ewma littles_law` (all pure, trap-free — zero denominators yield a finite fallback) |
 | `std/control` | `first_order second_order low_pass complementary integrate derivative pid pid_clamped feedforward state_feedback bang_bang hysteresis rate_limit_delta lead within slew` |
+| `std/md` | Molecular-dynamics scaffolding: `wrap wrap_signed min_image min_image_dist min_image_dist2 number_density box_from_density lattice_sc lattice_bcc lattice_fcc nn_dist_sc nn_dist_bcc nn_dist_fcc degrees_of_freedom temperature kinetic_energy temperature_from_velocity berendsen_lambda tau_from_steps heat_to_apply berendsen_baro_lambda compressibility rdf_bin rdf msd diffusion half_kick drift reduced_length reduced_energy` (periodic boundary conditions + temperature + Berendsen thermostat/barostat; pure, trap-free) |
+| `std/signal` | Sampled-data / DSP: `db from_db power_db alpha_from_tau one_pole alpha_from_fc lowpass_rc highpass_rc dc_block integrate_trap derivative w0 bq_alpha bq_a0 lowpass_b0 lowpass_b1 lowpass_b2 lowpass_a1 lowpass_a2 biquad biquad_dc_gain envelope rms crest_factor zcr midband midi_to_hz hz_to_midi phase_inc osc_sin soft_clip quantize` (all pure, trap-free — filter memory is the caller's state) |
 
 ## Field solver system kinds
 

@@ -2447,6 +2447,194 @@ fn last_event_reads_within_the_step_and_clears() {
     );
 }
 
+/// RFC-0048 slice B: the event calendar is a first-class read surface over
+/// the pending scheduled-event queue — `event_count`, `next_event_time`,
+/// `next_event_kind`, `next_event_payload` — and `pop_event` removes the
+/// earliest entry. All are deterministic, so `step_cross` (interpreter ≡ JIT)
+/// guards them.
+#[test]
+fn rfc_0048_calendar_reads_and_pop_the_pending_queue() {
+    // `update` assignment lowering is ordered by LHS name, so the names below
+    // are chosen to make the intended read/pop sequence explicit.
+    let src = "world { gravity=(0,0,0) entity e { state=(a_left=0.0,b_k=0.0,c_n=0.0,d_p=0.0,e_popped=0.0,f_tt=0.0,g_left=0.0) } } \
+                   systems { update { on = e; dt = 1.0 \
+                     schedule(at(0.0), 2.0, 5.0, 50.0) \
+                     schedule(at(0.0), 3.0, 6.0, 60.0) \
+                     a_left = event_count() \
+                     b_k = next_event_kind() \
+                     c_n = event_count() \
+                     d_p = next_event_payload() \
+                     e_popped = pop_event() \
+                     f_tt = next_event_time() \
+                     g_left = event_count() } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    // At t=0 the two entries are scheduled for t=2 and t=3 (delay from t=0).
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 2.0, "two pending entries before the pop");
+    assert_eq!(st.values[1], 5.0, "earliest kind");
+    assert_eq!(st.values[2], 2.0, "pure read does not consume");
+    assert_eq!(st.values[3], 50.0, "earliest payload");
+    assert_eq!(st.values[4], 50.0, "pop returns the earliest payload");
+    assert_eq!(st.values[5], 3.0, "next pending time after the pop");
+    assert_eq!(st.values[6], 1.0, "pop removed exactly one entry");
+}
+
+/// RFC-0048 slice B: equal-time entries are delivered in insertion order
+/// (`(time, seq)`), never by an unstable float comparison.
+#[test]
+fn rfc_0048_calendar_equal_time_ties_use_insertion_order() {
+    let src = "world { gravity=(0,0,0) entity e { state=(a=0.0,b=0.0) } } \
+                   systems { update { on = e; dt = 1.0 \
+                     schedule(at(0.0), 2.0, 5.0, 50.0) \
+                     schedule(at(0.0), 2.0, 6.0, 60.0) \
+                     a = pop_event() \
+                     b = pop_event() } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(
+        st.values[0], 50.0,
+        "first scheduled at the tied time pops first"
+    );
+    assert_eq!(st.values[1], 60.0, "second scheduled pops second");
+}
+
+/// RFC-0048 slice C1: the calendar orders by `(time, priority, seq)` — lower
+/// priority first at the same time; the plain `schedule` uses priority 0 (so
+/// it keeps the Slice-B `(time, seq)` order).
+#[test]
+fn rfc_0048_priority_calendar_orders_by_time_priority_seq() {
+    // `update` assignment lowering is ordered by LHS name (a, b, c, d).
+    let src =
+        "world { gravity=(0,0,0) entity e { state=(a_n=0.0,b_kind=0.0,c_prio=0.0,d_pop=0.0) } } \
+                   systems { update { on = e; dt = 1.0 \
+                     schedule_at(at(0.0), 2.0, 5.0, 50.0, 10.0) \
+                     schedule_at(at(0.0), 2.0, 6.0, 60.0, 1.0) \
+                     schedule(at(0.0), 2.0, 7.0, 70.0) \
+                     a_n = event_count() \
+                     b_kind = next_event_kind() \
+                     c_prio = next_event_priority() \
+                     d_pop = pop_event() } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 3.0, "three entries at the same time");
+    assert_eq!(st.values[1], 7.0, "priority 0 (plain schedule) is earliest");
+    assert_eq!(st.values[2], 0.0, "its priority is 0");
+    assert_eq!(st.values[3], 70.0, "and it pops first");
+}
+
+/// RFC-0048 slice C1: at equal time and priority, insertion order decides — a
+/// second pop returns the next-inserted priority-1 entry.
+#[test]
+fn rfc_0048_priority_ties_use_insertion_order() {
+    let src = "world { gravity=(0,0,0) entity e { state=(a=0.0,b=0.0) } } \
+                   systems { update { on = e; dt = 1.0 \
+                     schedule_at(at(0.0), 1.0, 5.0, 50.0, 3.0) \
+                     schedule_at(at(0.0), 1.0, 6.0, 60.0, 3.0) \
+                     a = pop_event() \
+                     b = pop_event() } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 50.0, "the first-inserted priority-3 entry");
+    assert_eq!(st.values[1], 60.0, "then the second");
+}
+
+/// RFC-0048 slice C2: `seize`/`release` over a capacity-2 resource. The two
+/// slots of a capacity-2 server fill, the third seize is refused (0.0), a
+/// release frees one, and the next seize succeeds — with `resource_busy` /
+/// `resource_capacity` reporting the running counts, all cross-backend.
+#[test]
+fn rfc_0048_resource_seize_release_respects_capacity() {
+    let src = "world { gravity=(0,0,0) \
+                     resource server { capacity = 2 } \
+                     entity e { state=(a=0.0,b=0.0,c=0.0,d=0.0,e2=0.0,g=0.0,h=0.0) } } \
+                   systems { update { on = e; dt = 1.0 \
+                     a = seize(server, 2.0) \
+                     b = seize(server, 2.0) \
+                     c = seize(server, 2.0) \
+                     d = resource_busy(server) \
+                     e2 = resource_capacity(server) \
+                     g = release(server) \
+                     h = seize(server, 2.0) } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 1.0, "first seize succeeds");
+    assert_eq!(st.values[1], 1.0, "second seize succeeds");
+    assert_eq!(st.values[2], 0.0, "third seize is refused (full)");
+    assert_eq!(st.values[3], 2.0, "two busy during the reads");
+    assert_eq!(st.values[4], 2.0, "capacity is the declared 2");
+    assert_eq!(
+        st.values[5], 1.0,
+        "release returns the remaining busy count"
+    );
+    assert_eq!(st.values[6], 1.0, "a freed unit can be seized again");
+}
+
+/// RFC-0048 slice C2: the capacity is fixed by the first seize; a later call
+/// cannot widen it, and releasing below zero saturates. (Both are the spec's
+/// determinism guardrails, not incidental.)
+#[test]
+fn rfc_0048_resource_capacity_is_fixed_and_release_saturates() {
+    let src = "world { gravity=(0,0,0) \
+                     resource r { capacity = 1 } \
+                     entity e { state=(a=0.0,b=0.0,c=0.0,d=0.0) } } \
+                   systems { update { on = e; dt = 1.0 \
+                     a = seize(r, 1.0) \
+                     b = seize(r, 5.0) \
+                     c = release(r) \
+                     d = release(r) } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(3).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 1.0, "the lone slot is seized");
+    assert_eq!(st.values[1], 0.0, "a larger capacity is ignored");
+    assert_eq!(st.values[2], 0.0, "release frees the slot");
+    assert_eq!(st.values[3], 0.0, "an empty release stays at 0");
+}
+
+/// RFC-0048 slice B: calendar reads on an empty calendar are safe sentinels —
+/// count 0, kind 0, payload 0, and a *finite* `f64::MAX` time (so storing it in
+/// a state slot cannot trip the detail-88 non-finite check).
+#[test]
+fn rfc_0048_empty_calendar_reads_are_finite_sentinels() {
+    let src = "world { gravity=(0,0,0) entity e { state=(a=0.0,b=0.0,c=0.0,d=0.0) } } \
+                   systems { update { on = e; dt = 1.0 \
+                     a = event_count() \
+                     b = next_event_time() \
+                     c = next_event_kind() \
+                     d = pop_event() } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 0.0, "no pending entries");
+    assert_eq!(st.values[1], f64::MAX, "finite empty time sentinel");
+    assert!(st.values[1].is_finite(), "the sentinel must stay finite");
+    assert_eq!(st.values[2], 0.0, "empty kind");
+    assert_eq!(st.values[3], 0.0, "popping an empty calendar yields 0");
+}
+
+/// RFC-0048 slice B: `events_seen(kind)` counts the events already delivered
+/// (drained) in the current step, by kind.
+#[test]
+fn rfc_0048_events_seen_counts_delivered_events_by_kind() {
+    let src = "world { gravity=(0,0,0) entity e { state=(a=0.0,b=0.0) } } \
+                   systems { update { on = e; dt = 1.0 \
+                     emit(7.0, 1.0) \
+                     emit(7.0, 2.0) \
+                     emit(9.0, 3.0) \
+                     a = events_seen(7.0) \
+                     b = events_seen(9.0) } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 2.0, "two kind-7 events delivered");
+    assert_eq!(st.values[1], 1.0, "one kind-9 event delivered");
+}
+
 /// `every = n` runs the system only when step % n == 0.
 #[test]
 fn every_runs_only_on_matching_steps() {
@@ -2611,6 +2799,94 @@ fn rfc_0048_zero_crossing_gates_when_for_reinit() {
     assert_eq!(k(&rt), 1.0, "step 2: rise opens the gate exactly once");
     rt.step_cross_n(3).unwrap();
     assert_eq!(k(&rt), 1.0, "no further rises, no further reinit");
+}
+
+/// #94: history sites must be namespaced by function, or two systems that both
+/// use `deriv`/`cross` alias the same key and corrupt each other's previous
+/// value. With the fix, a two-system program matches the stand-alone results.
+#[test]
+fn history_sites_are_namespaced_per_function() {
+    let body = |a: &str, b: &str| {
+        format!(
+            "world {{ gravity=(0,0,0) \
+                     entity a {{ state=(x=0.0,s=0.0) }} \
+                     entity b {{ state=(x=0.0,t=0.0) }} }} \
+             systems {{ {a} {b} }}"
+        )
+    };
+    let run = |src: &str| {
+        let mut rt = LangRuntime::compile(src).unwrap();
+        rt.step_cross_n(5).unwrap();
+        let a = rt
+            .scene
+            .get(EntityId(1))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[1];
+        let b = rt
+            .scene
+            .get(EntityId(2))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[1];
+        (a, b)
+    };
+    let a_only = "update { on=a; dt=1.0 x=x+1.0 s=deriv(x) }";
+    let b_only = "update { on=b; dt=1.0 x=x+1.0 t=deriv(x) }";
+    let (sa, _) = run(&body(a_only, ""));
+    let (_, sb) = run(&body("", b_only));
+    let (sa2, sb2) = run(&body(a_only, b_only));
+    assert_eq!(
+        (sa2, sb2),
+        (sa, sb),
+        "both systems must match their isolated deriv values"
+    );
+    assert_eq!(
+        (sa, sb),
+        (1.0, 1.0),
+        "x grows by 1, so deriv(x) = 1 on both sides"
+    );
+}
+
+/// #95: `cross(deriv(x))` must give the nested `deriv` its own history site, so
+/// it agrees with the equivalent un-nested `cross(v)` over `v = deriv(x)`.
+/// (Computing the crossing's site before lowering its argument made the two
+/// share a key, so the nested form fired spuriously.)
+#[test]
+fn nested_history_operators_do_not_share_a_site() {
+    let plain = "world { gravity=(0,0,0) entity e { state=(x=0.0,v=0.0,c=0.0) } } \
+                 systems { update { on=e; dt=1.0 \
+                   x = x + 1.0 v = deriv(x) c = cross(v) } }";
+    let nested = "world { gravity=(0,0,0) entity e { state=(x=0.0,v=0.0,c=0.0) } } \
+                  systems { update { on=e; dt=1.0 \
+                    x = x + 1.0 v = deriv(x) c = cross(deriv(x)) } }";
+    let fired = |src: &str| {
+        let mut rt = LangRuntime::compile(src).unwrap();
+        let mut total = 0.0;
+        for _ in 0..8 {
+            rt.step_cross().unwrap();
+            total += rt
+                .scene
+                .get(EntityId(1))
+                .unwrap()
+                .state
+                .as_ref()
+                .unwrap()
+                .values[2];
+        }
+        total
+    };
+    // `deriv(x)` is a constant +1/step, so neither form ever crosses zero.
+    assert_eq!(fired(plain), 0.0, "a constant signal never crosses");
+    assert_eq!(
+        fired(nested),
+        fired(plain),
+        "nesting must not change the result"
+    );
 }
 
 /// A builtin called with the wrong number of arguments is a clean
@@ -3046,7 +3322,8 @@ fn typed_array_composes_with_state_in_either_order() {
 fn typed_array_constant_index_out_of_range_is_rejected() {
     // Constant-index reads are compile errors (not "reads 0.0" warnings), so
     // the `lang::compile` path rejects them; the CLI downgrades them to a
-    // diagnostic on the legacy path. A runtime index stays unchecked.
+    // diagnostic on the legacy path. A runtime index is bound-checked at
+    // execution time (RFC-0044) and traps rather than reading an arbitrary slot.
     match LangRuntime::compile(
         "world { gravity=(0,0,0) entity e { state=(x=0.0) array 2 v } }\n\
 systems { update { on = e; dt = 1.0 x = v[5] } }",
@@ -3067,6 +3344,126 @@ systems { update { on = e; dt = 1.0 x = nope[0] } }",
     ) {
         Ok(_) => panic!("unknown array name must be rejected"),
         Err(e) => assert_eq!(e.detail, 109, "detail = {}", e.detail),
+    }
+}
+
+/// RFC-0044: a runtime array index is bound-checked; an out-of-range read or
+/// write is a load-class trap (detail 18) instead of a silent read/write of an
+/// arbitrary State slot.
+#[test]
+fn typed_array_runtime_index_out_of_range_traps() {
+    let read_oob = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (x = 0.0, k = 4.0) array 2 v { 5.0, 7.0 } } }
+        systems { update { on = e; dt = 1.0
+            x = v[k]
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(read_oob).unwrap();
+    match rt.step_cross() {
+        Ok(_) => panic!("v[4] on a length-2 array must trap (RFC-0044)"),
+        Err(e) => assert_eq!(e.detail, 18, "detail = {}", e.detail),
+    }
+
+    let write_oob = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (k = 4.0) array 2 v { 5.0, 7.0 } } }
+        systems { update { on = e; dt = 1.0
+            v[k] = 1.0
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(write_oob).unwrap();
+    match rt.step_cross() {
+        Ok(_) => panic!("v[4] = 1.0 on a length-2 array must trap (RFC-0044)"),
+        Err(e) => assert_eq!(e.detail, 18, "detail = {}", e.detail),
+    }
+
+    // A fractional index is not a valid slot: trap as well.
+    let frac = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (x = 0.0) array 2 v { 5.0, 7.0 } } }
+        systems { update { on = e; dt = 1.0
+            x = v[0.5]
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(frac).unwrap();
+    match rt.step_cross() {
+        Ok(_) => panic!("a fractional array index must trap (RFC-0044)"),
+        Err(e) => assert_eq!(e.detail, 18, "detail = {}", e.detail),
+    }
+}
+
+/// RFC-0044 follow-up: array reductions over a named array (`sum`/`mean`/
+/// `norm`/`asum`/`prod`/`min_of`/`max_of`, and two-array `dot`). They unroll to
+/// native EIR over the compile-time length, so they run cross-backend and add no
+/// new opcode.
+#[test]
+fn array_reductions_fold_named_arrays() {
+    let src = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (s = 0.0, m = 0.0, n = 0.0, d = 0.0,
+                                 lo = 0.0, hi = 0.0, p = 0.0, a = 0.0)
+                array 3 v { 3.0, 4.0, 12.0 }
+                array 3 w { 1.0, 2.0, 3.0 } } }
+        systems { update { on = e; dt = 1.0
+            s  = sum(v)
+            m  = mean(v)
+            n  = norm(v)
+            d  = dot(v, w)
+            lo = min_of(v)
+            hi = max_of(v)
+            p  = prod(w)
+            a  = asum(v)
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross().unwrap();
+    let st = rt
+        .scene
+        .get(EntityId(1))
+        .unwrap()
+        .state
+        .clone()
+        .unwrap()
+        .values;
+    // slots: s m n d lo hi p a v.0 v.1 v.2 w.0 w.1 w.2
+    assert_eq!(st[0], 19.0, "sum(v) = {}", st[0]);
+    assert!((st[1] - 19.0 / 3.0).abs() < 1e-12, "mean(v) = {}", st[1]);
+    assert_eq!(st[2], 13.0, "norm(v) = sqrt(9+16+144) = {}", st[2]);
+    assert_eq!(st[3], 3.0 + 8.0 + 36.0, "dot(v,w) = {}", st[3]);
+    assert_eq!(st[4], 3.0, "min_of(v) = {}", st[4]);
+    assert_eq!(st[5], 12.0, "max_of(v) = {}", st[5]);
+    assert_eq!(st[6], 6.0, "prod(w) = {}", st[6]);
+    assert_eq!(st[7], 19.0, "asum(v) = {}", st[7]);
+}
+
+#[test]
+fn array_reduction_unknown_array_is_detail_109() {
+    match LangRuntime::compile(
+        "world { gravity=(0,0,0) entity e { state=(x=0.0) array 2 v { 1.0, 2.0 } } }\n\
+systems { update { on = e; dt = 1.0 x = sum(nope) } }",
+    ) {
+        Ok(_) => panic!("`sum` of an unknown array must be rejected"),
+        Err(e) => assert_eq!(e.detail, 109, "detail = {}", e.detail),
+    }
+}
+
+#[test]
+fn array_dot_needs_two_array_names() {
+    // A non-name argument and unequal lengths are both rejected.
+    match LangRuntime::compile(
+        "world { gravity=(0,0,0) entity e { state=(x=0.0) array 2 v { 1.0, 2.0 } } }\n\
+systems { update { on = e; dt = 1.0 x = dot(1.0, 2.0) } }",
+    ) {
+        Ok(_) => panic!("`dot` of scalars must be rejected"),
+        Err(e) => assert_eq!(e.detail, 59, "detail = {}", e.detail),
+    }
+    match LangRuntime::compile(
+        "world { gravity=(0,0,0) entity e { state=(x=0.0) array 2 v { 1.0, 2.0 } } }\n\
+systems { update { on = e; dt = 1.0 x = dot(v, 1.0) } }",
+    ) {
+        Ok(_) => panic!("`dot(v, scalar)` must be rejected"),
+        Err(e) => assert_eq!(e.detail, 59, "detail = {}", e.detail),
     }
 }
 
@@ -3718,6 +4115,47 @@ fn module_declaration_and_collision() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// RFC-0045 + bare sibling calls: two imported modules may each define a
+/// same-named function with *different* arities; a bare call inside module `m`
+/// must resolve to `m`'s own function (not the other module's), so per-module
+/// resolution — not a global short-name table — is what arity checking uses.
+#[test]
+fn module_bare_sibling_calls_resolve_per_namespace() {
+    let dir = std::env::temp_dir().join(format!("pwe_nscollide_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let w = |name: &str, body: &str| std::fs::write(dir.join(name), body).unwrap();
+
+    w(
+        "m1.pwe",
+        "module m1\nworld { }\nfuncs { f(x) { x + 1.0 }  use1(x) { f(x) } }\n",
+    );
+    w(
+        "m2.pwe",
+        "module m2\nworld { }\nfuncs { f(x, y) { x + y }  use2(x) { f(x, 1.0) } }\n",
+    );
+    w(
+        "root.pwe",
+        "import \"m1\"\nimport \"m2\"\nworld { gravity=(0,0,0) entity e { state=(a=1.0, b=0.0) } }\nsystems { update { on=e; dt=1.0 a = m1.use1(a) + 0.0  b = m2.use2(a) + 0.0 } }\n",
+    );
+    assert!(
+        crate::lang::compile_file(&dir.join("root.pwe")).is_ok(),
+        "same-named functions in different modules must not collide"
+    );
+    // A genuinely wrong arity still fails (detail 59).
+    w(
+        "bad.pwe",
+        "import \"m1\"\nworld { gravity=(0,0,0) entity e { state=(a=1.0) } }\nsystems { update { on=e; dt=1.0 a = m1.use1(a, a) + 0.0 } }\n",
+    );
+    assert_eq!(
+        crate::lang::compile_file(&dir.join("bad.pwe"))
+            .err()
+            .map(|e| e.detail),
+        Some(59),
+        "a wrong arity is still a diagnostic"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn module_export_privacy() {
     let dir = std::env::temp_dir().join(format!("pwe_exp_{}", std::process::id()));
@@ -3744,6 +4182,32 @@ fn module_export_privacy() {
             .err()
             .map(|e| e.detail),
         Some(102)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn module_funcs_can_call_a_sibling_by_bare_name() {
+    // `outer` calls its sibling `inner` by bare name (not `mod.inner`). The
+    // arity checker must resolve the unqualified call to the same module's
+    // declaration instead of reporting "not a builtin".
+    let dir = std::env::temp_dir().join(format!("pwe_sib_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(
+        dir.join("m.pwe"),
+        "module mod\nworld { }\nfuncs {\n  inner(x) { x + 1.0 }\n  outer(x) { inner(x) * 2.0 }\n}\nexport inner\nexport outer\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("root.pwe"),
+        "import \"m\" as mod\nworld { gravity=(0,0,0) entity e { state=(x=1.0) } }\nsystems { update { on = e; dt = 1.0 x = mod.outer(x) } }\n",
+    )
+    .unwrap();
+    let compiled = crate::lang::compile_file(&dir.join("root.pwe"));
+    assert!(
+        compiled.is_ok(),
+        "a sibling bare-name call must compile: {:?}",
+        compiled.err().map(|e| e.detail)
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

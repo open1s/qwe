@@ -137,7 +137,8 @@ pub enum Expr {
 pub enum DynIndex {
     /// `s[expr]` — an absolute runtime slot index.
     Slot(Expr),
-    /// `name[j]` — RFC-0044 array write; lowered to `base(sn) + j`.
+    /// `name[j]` — RFC-0044 array write; bound-checked against the target
+    /// entity's declared length at lowering (`base(sn) + j`, or a trap).
     Array(String, Box<Expr>),
 }
 impl DynIndex {
@@ -147,28 +148,6 @@ impl DynIndex {
         match self {
             DynIndex::Slot(e) => e.clone(),
             DynIndex::Array(name, j) => Expr::Index(name.clone(), j.clone()),
-        }
-    }
-    /// Resolves the absolute slot index against the target entity's layout.
-    /// `None` when the layout declares no such array (a detail-109 diagnostic
-    /// is recorded); the write is then skipped for that entity.
-    pub fn resolve(&self, sn: &std::collections::BTreeMap<String, usize>) -> Option<Expr> {
-        match self {
-            DynIndex::Slot(e) => Some(e.clone()),
-            DynIndex::Array(name, j) => {
-                let base = sn.get(&format!("{name}.0")).copied();
-                match base {
-                    Some(base) => Some(Expr::Add(Box::new(Expr::Const(base as f64)), j.clone())),
-                    None => {
-                        super::diagnostics::push_diag(
-                            109,
-                            0,
-                            format!("array `{name}` is not in this entity's state — write skipped"),
-                        );
-                        None
-                    }
-                }
-            }
         }
     }
     /// The index expression used for slot-span bookkeeping.

@@ -19,6 +19,9 @@ const MODULES: &[&str] = &[
     "robotics",
     "units",
     "control",
+    "des",
+    "signal",
+    "md",
     "periodic",
     "micro",
     "atoms/O",
@@ -151,6 +154,157 @@ fn std_modules_compute_data() {
     assert!(close(v[9], 5.0), "first_order = {}", v[9]);
     assert!(close(v[10], 1.0), "pid_clamped = {}", v[10]);
     assert!(close(v[11], 1.0), "within = {}", v[11]);
+}
+
+/// RFC-0047 step 5 / RFC-0048: the sampled-data (signal/DSP) library — decibel
+/// conversions, first-order filters, trapezoidal integration, RBJ biquad
+/// coefficients, envelope/measurement helpers, and tone/pitch conversion. All
+/// pure, trap-free, and evaluated cross-backend.
+#[test]
+fn signal_module_computes_dsp_primitives() {
+    let v = eval(
+        "signal",
+        &[
+            ("db0", "signal.db(1.0)"),
+            ("dbm", "signal.db(0.001)"),
+            ("fdb", "signal.from_db(20.0)"),
+            ("pdb", "signal.power_db(100.0)"),
+            ("a_tau", "signal.alpha_from_tau(1.0, 1.0)"),
+            ("a_fc", "signal.alpha_from_fc(0.0, 1.0)"),
+            ("onepole", "signal.one_pole(0.0, 10.0, 0.5)"),
+            ("trapr", "signal.integrate_trap(0.0, 2.0, 0.0, 1.0)"),
+            ("ders", "signal.safe_div(6.0, -2.0)"),
+            ("quant", "signal.quantize(2.3, 1.0)"),
+            (
+                "bq_b0",
+                "signal.lowpass_b0(1000.0, 0.7071067811865476, 48000.0)",
+            ),
+            ("midi", "signal.midi_to_hz(69.0)"),
+            ("midi2", "signal.hz_to_midi(880.0)"),
+            ("wrap", "signal.osc_sin(0.25)"),
+            ("clip", "signal.soft_clip(0.5, 3.0)"),
+            ("env", "signal.envelope(0.0, 1.0, 0.5, 0.1)"),
+        ],
+    );
+    assert!(close(v[0], 0.0), "db(1) = {}", v[0]);
+    assert!(close(v[1], -60.0), "db(0.001) = {}", v[1]);
+    assert!(close(v[2], 10.0), "from_db(20) = {}", v[2]);
+    assert!(close(v[3], 20.0), "power_db(100) = {}", v[3]);
+    assert!(close(v[4], 0.5), "alpha_from_tau(1,1) = {}", v[4]);
+    assert!(close(v[5], 1.0), "alpha_from_fc(0,1) = {}", v[5]);
+    assert!(close(v[6], 5.0), "one_pole = {}", v[6]);
+    assert!(close(v[7], 1.0), "integrate_trap = {}", v[7]);
+    assert!(close(v[8], -3.0), "safe_div(6,-2) = {}", v[8]);
+    assert!(close(v[9], 2.0), "quantize(2.3,1) = {}", v[9]);
+    assert!(close(v[10], 0.003916), "biquad b0 = {}", v[10]);
+    assert!(close(v[11], 440.0), "midi_to_hz(69) = {}", v[11]);
+    assert!(close(v[12], 81.0), "hz_to_midi(880) = {}", v[12]);
+    assert!(close(v[13], 1.0), "osc_sin(0.25) = {}", v[13]);
+    assert!(close(v[14], 0.909646), "soft_clip(0.5,3) = {}", v[14]);
+    assert!(close(v[15], 0.5), "envelope (attack) = {}", v[15]);
+}
+
+/// RFC-0047 step 5: the biquad *difference equation* is a stable one-step
+/// recurrence — a low-pass driven by a DC input settles to the DC gain, proving
+/// the coefficient set and `biquad` agree. Cross-backend.
+#[test]
+fn signal_biquad_settles_to_dc_gain() {
+    // Canonical direct-form-I low-pass driven by a unit DC step. Every next
+    // value is computed in a `let` (reading old state) before any slot is
+    // written, so the result is independent of rule-ordering: the output
+    // settles to the filter's DC gain, which is 1 for an RBJ low-pass.
+    let src = format!(
+        r#"
+        import "{}/signal"
+        world {{ gravity = (0, 0, 0)
+            entity f {{ state = (y = 0.0, x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0) }} }}
+        systems {{ update {{ on = f; dt = 0.001
+            let b0 = signal.lowpass_b0(100.0, 0.7071067811865476, 1000.0)
+            let b1 = signal.lowpass_b1(100.0, 0.7071067811865476, 1000.0)
+            let b2 = signal.lowpass_b2(100.0, 0.7071067811865476, 1000.0)
+            let a1 = signal.lowpass_a1(100.0, 0.7071067811865476, 1000.0)
+            let a2 = signal.lowpass_a2(100.0, 0.7071067811865476, 1000.0)
+            let xn = 1.0
+            let yn = signal.biquad(b0, b1, b2, a1, a2, xn, x1, x2, y1, y2)
+            let x1n = xn
+            let x2n = x1
+            let y1n = yn
+            let y2n = y1
+            x1 = x1n
+            x2 = x2n
+            y = yn
+            y1 = y1n
+            y2 = y2n }}
+        }}
+    "#,
+        std_dir()
+    );
+    let path = std::env::temp_dir().join("pwe_stdlib_signal_biquad.pwe");
+    std::fs::write(&path, src).unwrap();
+    let mut rt = LangRuntime::compile_file(&path).unwrap();
+    for _ in 0..256 {
+        rt.step_cross().unwrap();
+    }
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert!(
+        close(st.values[0], 1.0),
+        "biquad low-pass DC gain = {}, want 1.0",
+        st.values[0]
+    );
+    assert!(st.values.iter().all(|v| v.is_finite()), "stable: {st:?}");
+}
+
+/// RFC-0047 step 6: the molecular-dynamics library — periodic boundary
+/// conditions (minimum image / wrapping), lattice + density helpers, kinetic
+/// temperature, and Berendsen thermostat/barostat scale factors. Pure,
+/// trap-free, evaluated cross-backend.
+#[test]
+fn md_module_computes_pbc_and_thermostat() {
+    let v = eval(
+        "md",
+        &[
+            ("wrap", "md.wrap(0.0 - 1.0, 10.0)"),
+            ("wrap_s", "md.wrap_signed(7.0, 10.0)"),
+            ("mi", "md.min_image(7.0, 10.0)"),
+            ("mid", "md.min_image_dist(11.0, 0.0, 0.0, 10.0)"),
+            ("mid2", "md.min_image_dist2(11.0, 0.0, 0.0, 10.0)"),
+            ("rho", "md.number_density(100.0, 10.0)"),
+            ("lfcc", "md.lattice_fcc(0.1)"),
+            ("nnbcc", "md.nn_dist_bcc(0.1)"),
+            ("dof", "md.degrees_of_freedom(2.0, 1.0)"),
+            ("temp", "md.temperature_from_velocity(3.0e-23, 2.0, 1.0)"),
+            ("bke", "md.kinetic_energy(300.0, 2.0, 1.0)"),
+            ("blam", "md.berendsen_lambda(100.0, 120.0, 0.001, 0.1)"),
+            ("half", "md.half_kick(1.0, 10.0, 2.0, 0.5)"),
+            ("drift", "md.drift(0.0, 2.0, 0.5)"),
+            ("msd", "md.msd(1.0, 2.0, 2.0)"),
+            ("diff", "md.diffusion(6.0, 1.0, 3.0)"),
+        ],
+    );
+    assert!(close(v[0], 9.0), "wrap(-1,10) = {}", v[0]);
+    assert!(close(v[1], -3.0), "wrap_signed(7,10) = {}", v[1]);
+    assert!(close(v[2], -3.0), "min_image(7,10) = {}", v[2]);
+    assert!(close(v[3], 1.0), "min_image_dist(11,0,0,10) = {}", v[3]);
+    assert!(close(v[4], 1.0), "min_image_dist2 = {}", v[4]);
+    assert!(close(v[5], 0.1), "number_density(100,10) = {}", v[5]);
+    assert!(close(v[6], 3.419952), "lattice_fcc(0.1) = {}", v[6]);
+    assert!(close(v[7], 2.350755), "nn_dist_bcc(0.1) = {}", v[7]);
+    assert!(close(v[8], 3.0), "dof(2, remove_com) = {}", v[8]);
+    assert!(
+        close(v[9], 0.724297),
+        "temperature_from_velocity = {}",
+        v[9]
+    );
+    assert!(
+        close(v[10], 6.2129205e-21),
+        "kinetic_energy(300) = {}",
+        v[10]
+    );
+    assert!(close(v[11], 1.001), "berendsen_lambda = {}", v[11]);
+    assert!(close(v[12], 2.25), "half_kick = {}", v[12]);
+    assert!(close(v[13], 1.0), "drift = {}", v[13]);
+    assert!(close(v[14], 9.0), "msd = {}", v[14]);
+    assert!(close(v[15], 1.0), "diffusion = {}", v[15]);
 }
 
 /// RFC: the full periodic table (`std/periodic.pwe` + one module per element)

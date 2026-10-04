@@ -40,6 +40,21 @@ pub(crate) struct LowerCtx<'a> {
     pub(crate) current_entity: u128,
 }
 
+/// RFC-0048 slice C2: a stable 64-bit key for a resource name. The resource's
+/// capacity/busy live in `ExecEnv.resources` keyed by this id, so the id must
+/// be identical across the interpreter and both compilation paths — a plain
+/// FNV-1a of the name is deterministic and does not depend on the scene layout.
+/// The high bit is set so a resource id can never collide with the low ids the
+/// calendar uses for `seq`-only state.
+pub(crate) fn resource_id(name: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in name.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    0x8000_0000_0000_0000 | (h & 0x7fff_ffff_ffff_ffff)
+}
+
 /// Resolves an RFC-0044 array name to `(base_slot, length)` from the entity's
 /// named layout (`name.0 … name.{len-1}`). `None` when `name` is not an array.
 pub(crate) fn resolve_array(ctx: &LowerCtx<'_>, name: &str) -> Option<(usize, usize)> {
@@ -49,6 +64,84 @@ pub(crate) fn resolve_array(ctx: &LowerCtx<'_>, name: &str) -> Option<(usize, us
         len += 1;
     }
     Some((base, len))
+}
+
+/// RFC-0044 follow-up: the register of each element of a named array, or `None`
+/// when `name` is not an array on the current entity's layout (a detail-109
+/// diagnostic is recorded). Used by the `sum`/`mean`/`dot`/… reductions, which
+/// unroll over the compile-time length.
+pub(crate) fn array_element_regs(
+    ctx: &LowerCtx<'_>,
+    name: &str,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> Option<Vec<u32>> {
+    let (base, len) = resolve_array(ctx, name)?;
+    let mut regs = Vec::with_capacity(len);
+    for k in 0..len {
+        // A runtime-indexed read of a *constant* index is just the static slot;
+        // read it through a slot register so the reduction sees the same value
+        // the equivalent `name[k]` would.
+        let r = *ctx.slot_regs.get(base + k)?;
+        regs.push(r);
+    }
+    let _ = out;
+    Some(regs)
+}
+
+/// The compile-time length of a named array on the current layout, or 0.
+pub(crate) fn len_of(ctx: &LowerCtx<'_>, name: &str) -> usize {
+    resolve_array(ctx, name).map(|(_, len)| len).unwrap_or(0)
+}
+
+/// RFC-0044: absolute-slot register for a runtime write index (`dyn_rules` /
+/// `dyn_assigns`). A named array index (`name[j]`) is bound-checked against the
+/// array's declared length against the *target entity's* layout; a raw `s[j]`
+/// has no declared length and stays unchecked.
+pub(crate) fn lower_dyn_index(
+    idx: &super::ast::DynIndex,
+    ctx: &LowerCtx<'_>,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> Option<u32> {
+    use crate::eir::{Immediate, Opcode, ValueType};
+    match idx {
+        super::ast::DynIndex::Slot(e) => Some(lower_expr_f64(e, ctx, next_id, out)),
+        super::ast::DynIndex::Array(name, j) => {
+            let (base, len) = resolve_array(ctx, name)?;
+            let ri = lower_expr_f64(j, ctx, next_id, out);
+            let base_reg = *next_id;
+            *next_id += 1;
+            out.push(crate::physics_eir::instr(
+                Opcode::Const,
+                base_reg,
+                Some(ValueType::F64),
+                vec![],
+                Some(Immediate::F64(base as f64)),
+                None,
+            ));
+            let len_reg = *next_id;
+            *next_id += 1;
+            out.push(crate::physics_eir::instr(
+                Opcode::Const,
+                len_reg,
+                Some(ValueType::F64),
+                vec![],
+                Some(Immediate::F64(len as f64)),
+                None,
+            ));
+            let checked = *next_id;
+            *next_id += 1;
+            out.push(crate::physics_eir::instr(
+                Opcode::BoundsCheck,
+                checked,
+                Some(ValueType::F64),
+                vec![ri, base_reg, len_reg],
+                None,
+                None,
+            ));
+            Some(checked)
+        }
+    }
 }
 
 /// A non-negative integer constant index, if the expression is one.
@@ -144,8 +237,11 @@ pub(crate) fn lower_zero_crossing(
     out: &mut Vec<crate::eir::Instruction>,
 ) -> u32 {
     use crate::eir::{Immediate, Opcode, ValueType};
-    let site = out.iter().filter(|i| i.opcode == Opcode::HistRead).count() as u64;
+    // Lower the argument FIRST, then take the site id: a nested history operator
+    // inside `e` (e.g. `cross(deriv(x))`) must claim its own site first, or
+    // the two would share a key (issue #95). `deriv` orders it the same way.
     let e = lower_expr_f64(&args[0], ctx, next_id, out);
+    let site = out.iter().filter(|i| i.opcode == Opcode::HistRead).count() as u64;
     // prev = history[site] (0.0 before the first step), has = history exists.
     let prev = *next_id;
     *next_id += 1;
@@ -298,7 +394,30 @@ pub(crate) fn lower_expr(
                             Some(crate::eir::Immediate::F64(base as f64)),
                             None,
                         ));
-                        let dyn_idx = binary(crate::eir::Opcode::Add, base_reg, ri, next_id, out);
+                        let len_reg = *next_id;
+                        *next_id += 1;
+                        out.push(crate::physics_eir::instr(
+                            crate::eir::Opcode::Const,
+                            len_reg,
+                            Some(crate::eir::ValueType::F64),
+                            vec![],
+                            Some(crate::eir::Immediate::F64(len as f64)),
+                            None,
+                        ));
+                        // RFC-0044: a runtime index is bound-checked before the
+                        // slot is touched; out-of-range traps (detail 18)
+                        // instead of reading an arbitrary slot.
+                        let checked = *next_id;
+                        *next_id += 1;
+                        out.push(crate::physics_eir::instr(
+                            crate::eir::Opcode::BoundsCheck,
+                            checked,
+                            Some(crate::eir::ValueType::F64),
+                            vec![ri, base_reg, len_reg],
+                            None,
+                            None,
+                        ));
+                        let dyn_idx = checked;
                         let out_reg = *next_id;
                         *next_id += 1;
                         out.push(crate::physics_eir::instr(
@@ -782,22 +901,75 @@ pub(crate) fn lower_expr(
                     ));
                     out_reg
                 }
-                "at" | "periodic" | "schedule" => {
+                // RFC-0048 slice B: the event calendar as a first-class value.
+                // `event_count`/`next_event_*` read the pending queue with no
+                // side effect; `pop_event` removes the earliest entry. All are
+                // deterministic reads of the execution context's calendar.
+                "event_count"
+                | "next_event_time"
+                | "next_event_kind"
+                | "next_event_payload"
+                | "next_event_priority"
+                | "pop_event" => {
+                    let op = match *name {
+                        "event_count" => crate::eir::Opcode::EventCount,
+                        "next_event_time" => crate::eir::Opcode::NextEventTime,
+                        "next_event_kind" => crate::eir::Opcode::NextEventKind,
+                        "next_event_payload" => crate::eir::Opcode::NextEventPayload,
+                        "next_event_priority" => crate::eir::Opcode::NextEventPriority,
+                        _ => crate::eir::Opcode::PopEvent,
+                    };
+                    let out_reg = *next_id;
+                    *next_id += 1;
+                    out.push(crate::physics_eir::instr(
+                        op,
+                        out_reg,
+                        Some(crate::eir::ValueType::F64),
+                        vec![],
+                        None,
+                        None,
+                    ));
+                    out_reg
+                }
+                "events_seen" => {
+                    // Count of events already delivered (drained) this step whose
+                    // kind matches the argument.
+                    let kind = lower_expr_f64(&args[0], ctx, next_id, out);
+                    let out_reg = *next_id;
+                    *next_id += 1;
+                    out.push(crate::physics_eir::instr(
+                        crate::eir::Opcode::EventSeenCount,
+                        out_reg,
+                        Some(crate::eir::ValueType::F64),
+                        vec![kind],
+                        None,
+                        None,
+                    ));
+                    out_reg
+                }
+                "at" | "periodic" | "schedule" | "schedule_at" => {
                     // Scheduled events: `at`/`periodic` probe the step's time
                     // window; `schedule(gate, delay, kind, payload)` pushes an
-                    // event into the queue when `gate` is nonzero.
+                    // event into the queue when `gate` is nonzero;
+                    // `schedule_at(gate, delay, kind, payload, priority)` also
+                    // sets the entry's queue priority.
                     let op = match *name {
                         "at" => crate::eir::Opcode::FiredAt,
                         "periodic" => crate::eir::Opcode::FiredEvery,
+                        "schedule_at" => crate::eir::Opcode::ScheduleEventAt,
                         _ => crate::eir::Opcode::ScheduleEvent,
                     };
                     let operands: Vec<u32> = args
                         .iter()
                         .map(|a| lower_expr_f64(a, ctx, next_id, out))
                         .collect();
-                    // `schedule` yields nothing (a void opcode) — emit with no
-                    // result so the validator accepts it; its value is discarded.
-                    if op == crate::eir::Opcode::ScheduleEvent {
+                    // `schedule`/`schedule_at` yield nothing (void opcodes) —
+                    // emit with no result so the validator accepts them; their
+                    // value is discarded.
+                    if matches!(
+                        op,
+                        crate::eir::Opcode::ScheduleEvent | crate::eir::Opcode::ScheduleEventAt
+                    ) {
                         out.push(crate::physics_eir::instr(op, 0, None, operands, None, None));
                         return 0;
                     }
@@ -916,6 +1088,158 @@ pub(crate) fn lower_expr(
                     } else {
                         unary(crate::eir::Opcode::Sqrt, total, next_id, out)
                     }
+                }
+                // RFC-0048 slice C2: capacity-gated resources.
+                // `seize(r, cap)` / `release(r)` / `resource_busy(r)` /
+                // `resource_capacity(r)`. The first argument is a literal
+                // resource name; its id keys `ExecEnv.resources` (execution-
+                // context state, parallel to the event calendar). Busy/capacity
+                // are not stored in the world, so a `step_cross` comparison of
+                // the maps is what guarantees interpreter ≡ JIT.
+                "seize" | "release" | "resource_busy" | "resource_capacity" => {
+                    let Expr::Name(rname) = &args[0] else {
+                        // The parse requires a literal resource name.
+                        return 0;
+                    };
+                    #[allow(clippy::cast_possible_truncation)]
+                    let rid = resource_id(rname);
+                    let (op, operand) = match *name {
+                        "release" => (crate::eir::Opcode::ReleaseResource, None),
+                        "resource_busy" => (crate::eir::Opcode::ResourceBusy, None),
+                        "resource_capacity" => (crate::eir::Opcode::ResourceCapacity, None),
+                        _ => {
+                            let cap = lower_expr_f64(&args[1], ctx, next_id, out);
+                            (crate::eir::Opcode::SeizeResource, Some(cap))
+                        }
+                    };
+                    let out_reg = *next_id;
+                    *next_id += 1;
+                    out.push(crate::physics_eir::instr(
+                        op,
+                        out_reg,
+                        Some(crate::eir::ValueType::F64),
+                        operand.into_iter().collect(),
+                        Some(crate::eir::Immediate::U64(rid)),
+                        None,
+                    ));
+                    out_reg
+                }
+                // RFC-0044 follow-up: array reductions over a named array. The
+                // length is compile-time, so these unroll to the existing
+                // arithmetic/comparison opcodes (no new opcode, no runtime
+                // support needed, and they stay eligible for every backend).
+                "sum" | "mean" | "norm" | "asum" | "prod" | "min_of" | "max_of" => {
+                    let Expr::Name(aname) = &args[0] else {
+                        return 0;
+                    };
+                    let Some(elems) = array_element_regs(ctx, aname, out) else {
+                        push_diag(
+                            109,
+                            0,
+                            format!("array `{aname}` is not in this entity's state"),
+                        );
+                        return 0;
+                    };
+                    match *name {
+                        "prod" => {
+                            let mut acc = const_reg(1.0, next_id, out);
+                            for e in elems {
+                                acc = binary(crate::eir::Opcode::Mul, acc, e, next_id, out);
+                            }
+                            acc
+                        }
+                        "min_of" | "max_of" => {
+                            let cmp = if *name == "min_of" {
+                                crate::eir::Opcode::Lt
+                            } else {
+                                crate::eir::Opcode::Gt
+                            };
+                            let mut acc = elems[0];
+                            for e in elems.into_iter().skip(1) {
+                                let b = *next_id;
+                                *next_id += 1;
+                                out.push(crate::physics_eir::instr(
+                                    cmp,
+                                    b,
+                                    Some(crate::eir::ValueType::Bool),
+                                    vec![e, acc],
+                                    None,
+                                    None,
+                                ));
+                                let sel = *next_id;
+                                *next_id += 1;
+                                out.push(crate::physics_eir::instr(
+                                    crate::eir::Opcode::Select,
+                                    sel,
+                                    Some(crate::eir::ValueType::F64),
+                                    vec![b, e, acc],
+                                    None,
+                                    None,
+                                ));
+                                acc = sel;
+                            }
+                            acc
+                        }
+                        "norm" => {
+                            let mut acc = const_reg(0.0, next_id, out);
+                            for e in elems {
+                                let sq = binary(crate::eir::Opcode::Mul, e, e, next_id, out);
+                                acc = binary(crate::eir::Opcode::Add, acc, sq, next_id, out);
+                            }
+                            unary(crate::eir::Opcode::Sqrt, acc, next_id, out)
+                        }
+                        "asum" => {
+                            let mut acc = const_reg(0.0, next_id, out);
+                            for e in elems {
+                                let a = unary(crate::eir::Opcode::Abs, e, next_id, out);
+                                acc = binary(crate::eir::Opcode::Add, acc, a, next_id, out);
+                            }
+                            acc
+                        }
+                        _ => {
+                            // `sum` and `mean` share the sum; `mean` divides by
+                            // the (compile-time) length.
+                            let mut acc = const_reg(0.0, next_id, out);
+                            for e in elems {
+                                acc = binary(crate::eir::Opcode::Add, acc, e, next_id, out);
+                            }
+                            if *name == "mean" {
+                                let len = const_reg(len_of(ctx, aname) as f64, next_id, out);
+                                acc = binary(crate::eir::Opcode::Div, acc, len, next_id, out);
+                            }
+                            acc
+                        }
+                    }
+                }
+                "dot" => {
+                    let (Expr::Name(a), Expr::Name(b)) = (&args[0], &args[1]) else {
+                        return 0;
+                    };
+                    let (Some(ea), Some(eb)) = (
+                        array_element_regs(ctx, a, out),
+                        array_element_regs(ctx, b, out),
+                    ) else {
+                        push_diag(109, 0, "`dot` needs two declared arrays");
+                        return 0;
+                    };
+                    if ea.len() != eb.len() {
+                        push_diag(
+                            52,
+                            0,
+                            format!(
+                                "`dot({a}, {b})` needs equal lengths ({} vs {})",
+                                ea.len(),
+                                eb.len()
+                            ),
+                        );
+                        return 0;
+                    }
+                    let mut acc = const_reg(0.0, next_id, out);
+                    for (x, y) in ea.into_iter().zip(eb) {
+                        let p = binary(crate::eir::Opcode::Mul, x, y, next_id, out);
+                        acc = binary(crate::eir::Opcode::Add, acc, p, next_id, out);
+                    }
+                    acc
                 }
                 "fget" | "flap" | "fset" => {
                     // Grid field access: the field's canonical component id and
@@ -1501,7 +1825,26 @@ pub(crate) fn expr_slot_span(
             expr_slot_span(b, sn, max, any);
         }
         Expr::Not(a) | Expr::Neg(a) => expr_slot_span(a, sn, max, any),
-        Expr::Call(_, args) => {
+        Expr::Call(name, args) => {
+            // An array reduction (`sum(v)`, `dot(a, b)`, …) names the whole
+            // array, so reserve every element's register — not just the base.
+            if matches!(
+                *name,
+                "sum" | "mean" | "norm" | "asum" | "prod" | "min_of" | "max_of" | "dot"
+            ) {
+                for a in args {
+                    if let Expr::Name(n) = a {
+                        if let Some(&base) = sn.get(&format!("{n}.0")) {
+                            let mut len = 1usize;
+                            while sn.contains_key(&format!("{n}.{len}")) {
+                                len += 1;
+                            }
+                            *max = (*max).max(base + len - 1);
+                            *any = true;
+                        }
+                    }
+                }
+            }
             for a in args {
                 expr_slot_span(a, sn, max, any);
             }

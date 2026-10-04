@@ -352,6 +352,63 @@ systems {
   `schedule(gate, delay, kind, payload)` 排入未来事件。
 * 事件及其队列属于确定性的跨后端契约。
 
+**事件日历（RFC-0048）。** 待处理的 `schedule(...)` 队列可作为一等日历读取，按
+`(time, seq)` 排序（`time` 相同时按插入顺序，绝不比较浮点）：`event_count()`
+返回待处理条目数；`next_event_time()` / `next_event_kind()` /
+`next_event_payload()` 读取最早的一条，`pop_event()` 取出并删除它（返回其
+payload），于是过程流规则可以「消费」事件，而不只是探测 `last_event`。
+`events_seen(kind)` 统计本步已投递的该 kind 事件数。读取是纯操作；只有
+`pop_event` 修改日历，且顺序确定，因此两个后端逐步一致。
+
+```pwe
+world { gravity = (0, 0, 0)
+  entity q { state = (served = 0.0, last_kind = 0.0, last_payload = 0.0) } }
+systems {
+  update { on = q; dt = 1.0
+    # 每步若队列有作业，消费最早的一个
+    schedule(at(0.0), 0.0, 1.0, 10.0)      # 此刻到达的一个作业
+    let due = event_count() > 0.0
+    last_kind = next_event_kind()
+    last_payload = pop_event()
+    served = served + due
+  }
+}
+```
+
+**资源（`seize`/`release`，RFC-0048 C2）。** 容量受限的服务器 = 一个 world 声明
+加四个内建函数：
+
+```pwe
+world { gravity = (0, 0, 0)
+  resource server { capacity = 2 }            # 最多 2 个并发持有者
+  entity job { state = (got = 0.0, busy = 0.0, cap = 0.0, done = 0.0) } }
+systems { update { on = job; dt = 1.0
+  got  = seize(server, 2.0)                   # 成功 1.0，占满 0.0
+  busy = resource_busy(server)                # 当前持有数
+  cap  = resource_capacity(server)            # 声明的容量
+  done = release(server)                      # 释放一个；返回释放后的持有数
+} }
+```
+
+`seize` 是**非阻塞**的：资源占满时返回 0.0，由模型自行决定（例如把作业重新排进
+事件日历、稍后重试——即 DES 的“等待”模式）。容量由**第一次** `seize` 固定为声明
+值，因此规则的执行顺序无法把资源“撑大”。持有数/释放计数存放在运行时的执行上下文
+中（与事件日历并列），会做跨后端校验，释放时在 0 处饱和。
+
+**排队规则（RFC-0048 C1）。** `schedule_at(gate, delay, kind, payload, priority)`
+就是 `schedule(...)` 再加一个优先级：日历按 `(time, priority, seq)` 排序，同一
+时刻优先级**更低**者先出队，优先级相同则按插入顺序。`next_event_priority()`
+读取队首优先级。普通 `schedule(...)` 的优先级为 0（FIFO）。这正是 DES 所需的
+排队原语：优先级 0 是 FIFO，`priority = -t` 是 LIFO/EDF，`priority = 作业时长`
+是最短作业优先。
+
+**DES 统计（`std/des`）。** `import "std/des"` 提供确定性的过程流统计——
+`des.utilization(busy_time, t)`、`des.availability`、`des.throughput(served, t)`、
+`des.wait_time(total, served)`、`des.queue_length(area, t)`、`des.mean(sum, n)`、
+`des.variance(sum, sum_sq, n)`、`des.ewma(prev, x, alpha)`、
+`des.littles_law(rate, time)`——全部为纯函数且不会触发除零陷阱（分母为零时
+返回 0）。
+
 **过零检测（RFC-0048）。** `cross(e)`、`rise(e)`、`fall(e)` 在 `e` 发生严格变号的
 （子）步返回 `1.0`；`last_cross(e)` 返回最近一次过零的时刻（未发生过为 `0.0`）。
 前值与时间戳存放在运行时按调用点维护的历史里——不占用状态槽，且每个
@@ -541,9 +598,9 @@ ODE 视角在总量上一致，在单个分子上不一致。见 `cli/examples/k
 ## 2.2 关键字（保留）
 
 * 段 `world` `funcs` `systems`
-* world `gravity` `title` `params` `chan` `value` `entity` `field` `pool` `soft`
-  `struct` `array` `width` `height` `depth` `dx` `nx` `ny` `nz` `spacing` `origin`
-  `shape` `part`
+* world `gravity` `title` `params` `chan` `resource` `capacity` `value` `entity`
+  `field` `pool` `soft` `struct` `array` `width` `height` `depth` `dx` `nx` `ny`
+  `nz` `spacing` `origin` `shape` `part`
 * 实体 `position` `velocity` `state` `vec` `mass` `dynamic` `nbody` `parent`
   `restitution` `friction` `box` `sphere` `hull` `rotation` `camera` `color`
   `size` `opacity` `glow` `label` `orient` `vector`
@@ -577,6 +634,7 @@ ODE 视角在总量上一致，在单个分子上不一致。见 `cli/examples/k
 | `title = "…"` | 查看器标题。 |
 | `params { K = v }` | 模型参数（可用 `--param` 覆盖）。 |
 | `chan <name> { value = v }` | 通道实体（`state[0]`）。 |
+| `resource <name> { capacity = n }` | 容量受限资源（`seize`/`release`，见 §L8）。 |
 | `entity <name> { … }` | 一个物体。 |
 | `shape <name> { part … }` | 自定义渲染形状。 |
 | `struct <name> { field = <默认值> … }` | 具名记录类型（§2.12）。 |
@@ -737,18 +795,23 @@ systems {
 }
 ```
 
-* `name[j]` 读：**常量** `j` 下降为静态槽；**运行期** `j` 下降为运行期索引读
-  （`s[base + j]`），与 `s[i]` 一样不做越界检查。
+* `name[j]` 读：**常量** `j` 下降为静态槽；**运行期** `j` 先做越界检查
+  （`BoundsCheck`），再按绝对槽 `base + j` 读取。
 * 写形式：`name[j] = expr`、`name[j] += expr`、`inte name[j] = rate`（读值在系统
   开始时采样，与所有规则一致）。
-* 常量 `j` 超出 `[0, N)` 为 **detail 52**；未知数组名为 **detail 109**；初始化值多于
-  `N` 也是 detail 52。以上都不会静默读 0.0。
+* 常量 `j` 超出 `[0, N)` 为 **detail 52**；**运行期** `j` 越界、非整数或非有限值
+  为 **detail 18** 装载类 trap（绝不静默读写任意槽）；未知数组名为 **detail 109**；
+  初始化值多于 `N` 也是 detail 52。以上都不会静默读 0.0。
 * `vecN pos` 仍是无长度的匿名向量形式；`array` 增加了长度与越界检查。两者都摊平为
   扁平状态槽（零开销）。
 
 * `for` 的边界可以是 `len(name)`——具名数组的声明长度，编译期解析
-  （`for j in 0..len(v) { … }`）。未知数组名为 detail 109。**运行期**下标的越界仍
-  不检查（与 `s[i]` 相同）。
+  （`for j in 0..len(v) { … }`）。未知数组名为 detail 109。裸 `s[i]` 下标没有声明
+  长度，因此仍不做检查。
+* **归约**把整个具名数组折叠成标量：`sum(v)`、`mean(v)`、`norm(v)`（欧氏）、
+  `asum(v)`（`Σ|vᵢ|`）、`prod(v)`、`min_of(v)`、`max_of(v)`，以及双数组的
+  `dot(a, b)`。它们按编译期长度展开为普通算术（无新 opcode），因此所有后端都可运行。
+  未知数组名为 detail 109；`dot` 长度不匹配为 detail 52。
 
 ## 2.12 结构体类型（记录）
 
@@ -808,7 +871,9 @@ systems {
 * **粒子系统**：池 + `spawn`/`despawn` + `neighbor_*`（§L5）。
 * **连杆 / 摆**：每节一个 `distance` 关节，顶端 `dynamic=false`（§L6）。
 * **布 / 凝胶**：`soft` 配 `nz`（§L7）。
-* **事件 / 调度**：`emit`/`last_event`/`at`/`periodic`/`schedule`（§L8）。
+* **事件 / 调度**：`emit`/`last_event`/`at`/`periodic`/`schedule`；事件日历
+  `event_count`/`next_event_time`/`next_event_kind`/`next_event_payload`/
+  `pop_event`/`events_seen`（§L8）。
 * **状态机**：用 `when = expr` 门控写入；用 `watch` 翻转模式。
 * **单位与量纲检查**：§L10。
 * **三角网格地面（无缝）**：用高度场做一个 `poly` 形状（§L9）。
@@ -907,6 +972,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 107 | 重复的选项或字段：部件 / `bond` / `bonds` 的每个选项，以及 `entity` / `pool` 体内除 `tag` 外的每个字段，最多只能出现一次。 |
 | 108 | `bond` / `bonds` 选项未知或非法（键拼错、数值不合法、缺 `tag`/`within`、范围颠倒）。 |
 | 109 | `name[j]` 中数组名未知（RFC-0044）：该 entity 没有 `name.0 … name.k` 这段状态槽。 |
+| 110 | `resource` 的 `capacity` 不是非负整数。 |
 
 **调试流程**：缩减到一个实体 + 一个系统；核对模型（§0.6）；核对积分/赋值陷阱；加
 `invariant`；`run … --steps N` 读打印状态。
@@ -920,6 +986,9 @@ error 48: system 'update' is missing required parameter 'dt'
 | 模块 | 常量 | 代表函数 |
 | --- | --- | --- |
 | `math` | — | `clamp clamp01 lerp mix remap step smoothstep wrap sqr deg rad hypot2 hypot3 min3 max3 sgn deadzone ease_in/out` |
+| `des` | — | `utilization availability throughput wait_time queue_length mean variance ewma littles_law` |
+| `md` | `kB` | `wrap wrap_signed min_image min_image_dist number_density lattice_sc/bcc/fcc nn_dist_sc/bcc/fcc degrees_of_freedom temperature kinetic_energy berendsen_lambda berendsen_baro_lambda half_kick drift msd diffusion` |
+| `signal` | — | `db from_db power_db alpha_from_tau one_pole alpha_from_fc lowpass_rc highpass_rc dc_block integrate_trap derivative lowpass_b0..a2 biquad biquad_dc_gain envelope rms crest_factor zcr midi_to_hz hz_to_midi osc_sin soft_clip quantize` |
 | `forces` | — | `hooke spring_accel damping_accel drag_linear/quadratic_accel coulomb_force gravity_force inverse_square_accel buoyancy_force thrust_accel damper_force` |
 | `particles` | — | `terminal_velocity drag_step ballistic_x/y/vy bounce_vy reflect radius_from_mass stopping_distance freefall_time speed` |
 | `mechanics` | — | `momentum kinetic_energy reduced_mass elastic_1d_v1/v2 impulse friction_force normal_impulse inertia_rod/disk/sphere torque angular_accel angular_kinetic` |

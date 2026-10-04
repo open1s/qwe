@@ -1,0 +1,56 @@
+# std/des — discrete-event simulation statistics.
+# `import "std/des"` then `des.utilization(...)`.
+#
+# These are the deterministic time-average / throughput primitives a
+# process-flow (AnyLogic/Simio/Arena-class) model needs. Each accumulates from
+# state the caller keeps in ordinary slots; no hidden state, no RNG, so a model
+# stepped by `update` stays byte-identical across backends. It is self-contained
+# (it does not import `std/math`) so a model can import it without pulling in the
+# whole math surface; its internal helpers are called by bare sibling name.
+world { }
+
+funcs {
+  # Clamp into [0, 1] (a local copy so `std/des` needs no import).
+  des_clamp01(x) { max(0.0, min(x, 1.0)) }
+  # Heaviside step: 0 for `x < edge`, else 1.
+  des_step(edge, x) { if(x < edge, 0.0, 1.0) }
+
+  # Guarded `a / b`: `b <= 0` yields 0 instead of the division trap (detail 18).
+  # `if` evaluates both arms eagerly, so `if(b > 0, a/b, 0)` would still trap;
+  # a clamped denominator is trap-free (and `des_step(eps, b)` zeroes the
+  # `b <= 0` result so the huge clamped quotient cannot leak).
+  safe_ratio(a, b) { a / max(b, 1.0e-30) * des_step(1.0e-30, b) }
+
+  # Fraction of the elapsed horizon an entity was busy: 0 before t>0, then
+  # busy_time / t, clamped to [0, 1]. The single-server utilization.
+  utilization(busy_time, t) { des_clamp01(safe_ratio(busy_time, t)) }
+
+  # Little's law: average number in system = arrival rate x average time in
+  # system. Deterministic algebra for a steady-state check.
+  littles_law(arrival_rate, avg_time_in_system) { arrival_rate * avg_time_in_system }
+
+  # Mean of a sample given the running sum and count (0 when no samples).
+  mean(sum, count) { safe_ratio(sum, count) }
+
+  # Exponential moving average: `prev` with the new sample `x` at rate alpha.
+  ewma(prev, x, alpha) { prev + alpha * (x - prev) }
+
+  # Population variance from the running sum and sum of squares (0 before a
+  # sample exists).
+  variance(sum, sum_sq, count) {
+    let m = safe_ratio(sum, count)
+    return des_step(1.0e-30, count) * max(0.0, safe_ratio(sum_sq, count) - m * m)
+  }
+
+  # Mean waiting time = total time summed over served jobs, per job.
+  wait_time(total_wait, served) { safe_ratio(total_wait, served) }
+
+  # Throughput = completions per unit of elapsed time (0 before t > 0).
+  throughput(served, t) { safe_ratio(served, t) }
+
+  # Mean queue length = total of (queue_length x dt) per unit time.
+  queue_length(area, t) { safe_ratio(area, t) }
+
+  # Server availability = 1 - utilization, clamped to [0, 1].
+  availability(busy_time, t) { des_clamp01(1.0 - safe_ratio(busy_time, t)) }
+}

@@ -6,8 +6,8 @@ of a 4D world — 3D space, plus time.**
 [中文](README-ZH.md)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.81%2B-orange.svg)](https://www.rust-lang.org)
-[![tests](https://img.shields.io/badge/tests-461%20passing-brightgreen.svg)](#tests--conformance)
-[![conformance](https://img.shields.io/badge/conformance-28%2F28%20%C2%B7%200%20skips-brightgreen.svg)](#tests--conformance)
+[![tests](https://img.shields.io/badge/tests-485%20passing-brightgreen.svg)](#tests--conformance)
+[![conformance](https://img.shields.io/badge/conformance-36%2F36%20%C2%B7%200%20skips-brightgreen.svg)](#tests--conformance)
 [![RFCs](https://img.shields.io/badge/frozen%20contract-37%20RFCs-purple.svg)](#the-frozen-contract)
 [![repo](https://img.shields.io/badge/github-open1s%2Fqwe-181717.svg)](https://github.com/open1s/qwe)
 
@@ -19,7 +19,7 @@ sound, waves, robot arms, and machines that walk.
 
 And it is **deterministic you can prove**: the interpreter is the semantic
 oracle, the JIT must agree with it **byte-for-byte on every step**, and 300+
-tests plus 28 conformance checks enforce it — with zero skips.
+tests plus 36 conformance checks enforce it — with zero skips.
 
 ```
 World Model → WIR → Domain IR → EIR → Interpreter / JIT / AOT → Runtime → CPU / GPU / NPU / Edge / Cloud
@@ -159,7 +159,9 @@ systems {
 * **Units, checked.** Opt-in `[m/s^2]` annotations with gradual dimensional
   analysis — unannotated stays a wildcard.
 * **Events & scheduling.** `at(T)`, `periodic(P)`, `schedule(gate, delay, …)`,
-  `emit` / `last_event` — exact-once, deterministic, on the step grid.
+  `emit` / `last_event`, and the RFC-0048 event calendar
+  (`event_count` / `next_event_*` / `pop_event` / `events_seen`) — exact-once,
+  deterministic, on the step grid.
 * **Control flow, bounded.** `repeat` / `for` / `break` / `continue` unroll to
   straight-line EIR; Newton iteration inside a step is a one-liner.
 * **Diagnostics that teach.** Compile failures print the detail code and the
@@ -220,7 +222,7 @@ Inside `pwe-reference`:
 git clone git@github.com:open1s/qwe.git && cd qwe
 
 cargo build --workspace
-cargo test  --workspace          # 461 tests
+cargo test  --workspace          # 485 tests
 cargo run -p pwe-conformance     # RFC-0029: all PASS, no skips
 
 # the language, end to end:
@@ -236,15 +238,15 @@ cargo run -p pwe-reference --example language_demo
 
 | Suite | Count |
 | --- | --- |
-| Runtime / language unit tests | 402 |
+| Runtime / language unit tests | 423 |
 | Analytic law-conformance | 21 |
 | Property tests | 4 |
-| Standard-library tests | 6 |
+| Standard-library tests | 9 |
 | Fuzzing (deterministic) | 2 |
 | Integration / other | 26 |
-| **Total** | **461** |
+| **Total** | **485** |
 
-Plus `pwe-conformance`: **28 / 28, zero skips**. The `no_std` check:
+Plus `pwe-conformance`: **36 / 36, zero skips**. The `no_std` check:
 `cargo check -p pwe-api --no-default-features`.
 
 ---

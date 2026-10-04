@@ -372,6 +372,68 @@ systems {
   per period; `schedule(gate, delay, kind, payload)` enqueues a future event.
 * Events and their queue are part of the deterministic cross-backend contract.
 
+**Event calendar (RFC-0048).** The pending `schedule(...)` queue is readable as a
+first-class calendar, ordered by `(time, seq)` (a tie in `time` breaks by
+insertion order): `event_count()` pending entries; `next_event_time()` /
+`next_event_kind()` / `next_event_payload()` read the earliest entry, and
+`pop_event()` removes it (returning its payload) so a process-flow rule can
+consume events instead of only probing `last_event`. `events_seen(kind)` counts
+the events already delivered this step with that kind. Reads are pure; only
+`pop_event` mutates the calendar, and the ordering is deterministic, so both
+backends agree step for step.
+
+```pwe
+world { gravity = (0, 0, 0)
+  entity q { state = (served = 0.0, last_kind = 0.0, last_payload = 0.0) } }
+systems {
+  update { on = q; dt = 1.0
+    # every step, if a job is pending, consume the earliest one
+    schedule(at(0.0), 0.0, 1.0, 10.0)      # a job arriving now
+    let due = event_count() > 0.0
+    last_kind = next_event_kind()
+    last_payload = pop_event()
+    served = served + due
+  }
+}
+```
+
+**Resources (`seize`/`release`, RFC-0048 C2).** A capacity-gated server is a
+world declaration plus four builtins:
+
+```pwe
+world { gravity = (0, 0, 0)
+  resource server { capacity = 2 }            # 2 concurrent holders
+  entity job { state = (got = 0.0, busy = 0.0, cap = 0.0, done = 0.0) } }
+systems { update { on = job; dt = 1.0
+  got  = seize(server, 2.0)                   # 1.0 on success, 0.0 when full
+  busy = resource_busy(server)                # current holders
+  cap  = resource_capacity(server)            # the declared capacity
+  done = release(server)                      # free one; returns busy after
+} }
+```
+
+`seize` is **non-blocking**: a full resource returns 0.0 and the model decides
+what to do (e.g. reschedule the job on the event calendar and retry later — the
+DES "wait" pattern). The capacity is fixed by the **first** seize (its declared
+value), so the order in which rules run cannot widen a resource. Busy/release
+counts live in the runtime's execution context (like the event calendar), are
+cross-backend checked, and saturate at 0.
+
+**Queue discipline (RFC-0048 C1).** `schedule_at(gate, delay, kind, payload,
+priority)` is `schedule(...)` plus a priority: the calendar is ordered by
+`(time, priority, seq)`, so at the same time a **lower** priority pops first and
+equal priorities keep insertion order. `next_event_priority()` reads the head's
+priority. Plain `schedule(...)` uses priority 0 (FIFO). This is the queueing
+primitive DES models need: priority 0 is FIFO, `priority = -t` is LIFO/EDF,
+`priority = job_length` is shortest-job-first.
+
+**DES statistics (`std/des`).** `import "std/des"` gives the deterministic
+process-flow statistics — `des.utilization(busy_time, t)`,
+`des.availability`, `des.throughput(served, t)`, `des.wait_time(total, served)`,
+`des.queue_length(area, t)`, `des.mean(sum, n)`, `des.variance(sum, sum_sq, n)`,
+`des.ewma(prev, x, alpha)`, `des.littles_law(rate, time)` — all pure and
+trap-free (a zero denominator yields 0, not a division trap).
+
 **Zero-crossing detection (RFC-0048).** `cross(e)`, `rise(e)`, `fall(e)` fire
 `1.0` on the (sub)step where `e` makes a strict sign change; `last_cross(e)`
 returns the time of the most recent one (`0.0` before any). The previous value
@@ -578,9 +640,9 @@ unambiguous.
 ## 2.2 Keywords (reserved)
 
 * sections `world` `funcs` `systems`
-* world `gravity` `title` `params` `chan` `value` `entity` `field` `pool` `soft`
-  `struct` `array` `width` `height` `depth` `dx` `nx` `ny` `nz` `spacing` `origin`
-  `shape` `part`
+* world `gravity` `title` `params` `chan` `resource` `capacity` `value` `entity`
+  `field` `pool` `soft` `struct` `array` `width` `height` `depth` `dx` `nx` `ny`
+  `nz` `spacing` `origin` `shape` `part`
 * entity `position` `velocity` `state` `vec` `mass` `dynamic` `nbody` `parent`
   `restitution` `friction` `box` `sphere` `hull` `rotation` `camera` `color`
   `size` `opacity` `glow` `label` `orient` `vector`
@@ -626,6 +688,7 @@ Precedence (high → low): unary `-`, `not`/`!` → `* / %` → `+ -` → compar
 | `title = "…"` | viewer title. |
 | `params { K = v }` | model parameters (overridable with `--param`). |
 | `chan <name> { value = v }` | a channel entity (`state[0]`). |
+| `resource <name> { capacity = n }` | a capacity-gated resource (`seize`/`release`, §L8). |
 | `entity <name> { … }` | a body. |
 | `shape <name> { part … }` | a custom render shape. |
 | `struct <name> { field = <default> … }` | a named record type (§2.12). |
@@ -823,10 +886,12 @@ systems {
 ```
 
 * `name[j]` read: a **constant** `j` lowers to a static slot; a **runtime** `j`
-  lowers to a runtime-indexed read (`s[base + j]`), unchecked like `s[i]`.
+  is bound-checked (`BoundsCheck`) then read at the absolute slot `base + j`.
 * `name[j] = expr`, `name[j] += expr`, and `inte name[j] = rate` are the write
   forms (the read set is sampled at system start, like every rule).
-* A constant `j` outside `[0, N)` is **detail 52**; an unknown array name is
+* A constant `j` outside `[0, N)` is **detail 52**; a **runtime** `j` that is
+  out of range, fractional, or non-finite is a **detail 18** load-class trap
+  (never a silent read/write of an arbitrary slot); an unknown array name is
   **detail 109**; an initializer with more than `N` values is also detail 52.
   None of these silently read 0.0.
 * `vecN pos` remains the anonymous, length-less vector form; `array` adds the
@@ -834,7 +899,12 @@ systems {
 
 * A `for` bound may be `len(name)` — the declared length of a named array,
   resolved at compile time (`for j in 0..len(v) { … }`). An unknown array name is
-  detail 109. Bounds on a **runtime** index remain unchecked (like `s[i]`).
+  detail 109. A raw `s[i]` index has no declared length and so stays unchecked.
+* **Reductions** fold a whole named array into a scalar: `sum(v)`, `mean(v)`,
+  `norm(v)` (Euclidean), `asum(v)` (`Σ|vᵢ|`), `prod(v)`, `min_of(v)`,
+  `max_of(v)`, and the two-array `dot(a, b)`. They unroll to plain arithmetic
+  over the compile-time length (no new opcode), so they run on every backend. An
+  unknown array name is detail 109; a `dot` length mismatch is detail 52.
 
 ## 2.12 Struct types (records)
 
@@ -873,7 +943,9 @@ systems {
 * **Time is explicit**: every rule's expression is multiplied by `dt`; `t`
   advances by `dt` each step.
 * **Divide-by-zero traps** (detail 18) for integers **and** floats
-  (RFC-0021) — never silent `inf`/`NaN`.
+  (RFC-0021) — never silent `inf`/`NaN`. Detail 18 is the load-class trap:
+  divide/remainder by zero, integer overflow, NaN comparison, and a runtime
+  array index outside `[0, len)` (RFC-0044).
 * **`slot = expr` assigns**. Integrate with `slot = slot + inte(rate)` (or the
   `inte slot = rate` / `+=` statement); in `rk4`, `inte slot = rate`
   integrates with 4th-order Runge–Kutta. `inte(E) = dt·E`, `deriv(E) = (E−E_prev)/dt`.
@@ -909,7 +981,9 @@ systems {
 * **Particle system**: pool + `spawn`/`despawn` + `neighbor_*` (§L5).
 * **Linkage / pendulum**: one `distance` joint per link, top `dynamic=false` (§L6).
 * **Cloth / gel**: `soft` with `nz` (§L7).
-* **Events / scheduling**: `emit`/`last_event`/`at`/`periodic`/`schedule` (§L8).
+* **Events / scheduling**: `emit`/`last_event`/`at`/`periodic`/`schedule`; the
+  event calendar `event_count`/`next_event_time`/`next_event_kind`/
+  `next_event_payload`/`pop_event`/`events_seen` (§L8).
 * **State machine**: gate writes with `when = expr`; flip modes with `watch`.
 * **Units & dimensional checks**: §L10.
 * **Mesh ground (no seams)**: one `poly` shape from a heightfield (§L9).
@@ -1009,6 +1083,7 @@ error 48: system 'update' is missing required parameter 'dt'
 | 107 | A duplicate option or field: each option of a part, `bond` or `bonds`, and each non-`tag` field of an `entity` / `pool` body, may appear at most once. |
 | 108 | An unknown or invalid `bond` / `bonds` option (bad key, non-numeric value, missing `tag`/`within`, inverted range). |
 | 109 | An unknown array name in `name[j]` (RFC-0044): the entity declares no `name.0 … name.k` state run. |
+| 110 | A `resource` `capacity` that is not a non-negative integer. |
 
 **Workflow**: reduce to one entity + one system; check the model (§0.6); check
 the integrate/assign trap; add an `invariant`; run with `--steps N` and read the
@@ -1024,6 +1099,9 @@ Pure-function modules; constants are overridable params. Full signatures in
 | Module | Constants | Representative functions |
 | --- | --- | --- |
 | `math` | — | `clamp clamp01 lerp mix remap step smoothstep wrap sqr deg rad hypot2 hypot3 min3 max3 sgn deadzone ease_in/out` |
+| `des` | — | `utilization availability throughput wait_time queue_length mean variance ewma littles_law` |
+| `md` | `kB` | `wrap wrap_signed min_image min_image_dist number_density lattice_sc/bcc/fcc nn_dist_sc/bcc/fcc degrees_of_freedom temperature kinetic_energy berendsen_lambda berendsen_baro_lambda half_kick drift msd diffusion` |
+| `signal` | — | `db from_db power_db alpha_from_tau one_pole alpha_from_fc lowpass_rc highpass_rc dc_block integrate_trap derivative lowpass_b0..a2 biquad biquad_dc_gain envelope rms crest_factor zcr midi_to_hz hz_to_midi osc_sin soft_clip quantize` |
 | `forces` | — | `hooke spring_accel damping_accel drag_linear/quadratic_accel coulomb_force gravity_force inverse_square_accel buoyancy_force thrust_accel damper_force` |
 | `particles` | — | `terminal_velocity drag_step ballistic_x/y/vy bounce_vy reflect radius_from_mass stopping_distance freefall_time speed` |
 | `mechanics` | — | `momentum kinetic_energy reduced_mass elastic_1d_v1/v2 impulse friction_force normal_impulse inertia_rod/disk/sphere torque angular_accel angular_kinetic` |

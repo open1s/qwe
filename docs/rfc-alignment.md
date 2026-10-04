@@ -46,7 +46,7 @@ Post-v0.2 extensions implemented by the reference slice. Each is covered by a
 | 0043 | value types lowered to EIR (`int`/`bool`) | Done | `pwe-conformance` "RFC-0043 typed int/bool values (exact integer arithmetic, cross-backend)"; `lang::tests::int_let_uses_integer_semantics`, `lang::tests::rfc_0043_integer_and_fractional_literals_mix`, `lang::tests::explicit_numeric_casts`; opcodes `I64ToF64`/`F64ToI64` (interpreter oracle; native/WGSL exclude them) |
 | 0045 | semantic module system (stable names+version, export/privacy, deterministic merge) | Done | `pwe-conformance` RFC-0045 cases; `lang::tests::module_*`, `from_import_respects_export_surface`; details 101/102 |
 | 0046 | EIR as an explicit SSA CFG (blocks/edges; explicit wire form) | Done | `eir::tests::eir_cfg_blocks_round_trip`; `EirModule::blocks`/`verify_cfg`; FUNCTIONS section encodes explicit blocks (block_count>1), legacy single-block still decodes; RFC-0021 concrete layout + RFC-0046 reconciled |
-| 0044 | typed arrays / SoA user types | Done | `pwe-conformance` "RFC-0044 typed arrays (static + runtime index + len bound, cross-backend)"; `lang::tests::typed_arrays_read_write_and_bounds`, `typed_array_runtime_index_read_matches_static`, `typed_array_constant_index_out_of_range_is_rejected`, `typed_array_initializer_arity_is_checked` (details 52/109), `for_bound_can_be_array_len`, `array_len_unknown_name_is_detail_109`; runtime-index bounds checks still deferred |
+| 0044 | typed arrays / SoA user types | Done | `pwe-conformance` "RFC-0044 typed arrays (static + runtime index + len bound, cross-backend)"; `lang::tests::typed_arrays_read_write_and_bounds`, `typed_array_runtime_index_read_matches_static`, `typed_array_constant_index_out_of_range_is_rejected`, `typed_array_initializer_arity_is_checked` (details 52/109), `for_bound_can_be_array_len`, `array_len_unknown_name_is_detail_109`, `typed_array_runtime_index_out_of_range_traps`; runtime-index bounds checks (`BoundsCheck`, detail 18) landed, cross-backend conformance `"RFC-0044 array runtime index bounds-checked (cross-backend)"`; array reductions (`sum`/`mean`/`norm`/`asum`/`prod`/`min_of`/`max_of`/`dot`, unrolled to native EIR) cross-backend `"RFC-0044 array reductions (sum/mean/norm/dot/prod, cross-backend)"` |
 
 ## General-simulation direction (RFC-0047, RFC-0048)
 
@@ -61,7 +61,21 @@ operators) is the first landed slice.
 
 | RFC | Required reference slice | Status | Evidence / next gate |
 | --- | --- | --- | --- |
-| 0048 | discrete-event + hybrid core | Partial | Slice A: runtime-owned `cross`/`rise`/`fall` zero-crossing operators over the `deriv` per-site history (`CrossDown`/`RiseEdge`/`FallEdge`), interpreter-oracle, cross-backend. Slices B–D (event calendar value, queue/resource library, hybrid reinit + block IR) are Proposed in RFC-0048 |
+| 0048 | discrete-event + hybrid core | Partial | Slice A: runtime-owned `cross`/`rise`/`fall`/`last_cross` zero-crossing operators over the `deriv` per-site history (`CrossDown`/`RiseEdge`/`FallEdge`/`LastCross`), interpreter-oracle, cross-backend. Slice B: the event calendar as a first-class value — explicit `(time, seq)` ordering on `ScheduledEvent`/`EmittedEvent` plus `event_count`/`next_event_time`/`next_event_kind`/`next_event_payload`/`pop_event`/`events_seen` (`EventCount`…`EventSeenCount`), cross-backend. Slice C1: priority queue discipline (`schedule_at`/`next_event_priority`, `(time, priority, seq)` ordering) + the `std/des` deterministic statistics library (`utilization availability throughput wait_time queue_length mean variance ewma littles_law`). Slice C2: capacity-gated resources (`resource r { capacity = n }`, `seize`/`release`/`resource_busy`/`resource_capacity` — `SeizeResource`…`ResourceCapacity`, execution-context state, cross-backend). Slice D (hybrid reinit + block IR) is Proposed in RFC-0048 |
+
+### Domain libraries (RFC-0047 step 5+)
+
+Landed domain libraries move their capability-matrix row in RFC-0047; each has a
+named fixture + cross-backend conformance case.
+
+| Library | Domain | Status | Evidence |
+| --- | --- | --- | --- |
+| `std/des` | discrete-event statistics | Done | RFC-0048 slice C1; `pwe-conformance` "RFC-0048 DES statistics library (std/des utilization, cross-backend)" |
+| `std/signal` | sampled-data / DSP filters | Done | RFC-0047 step 5 (filter primitives); `pwe-conformance` "RFC-0047 signal/DSP library (biquad DC gain + one-pole, cross-backend)"; `stdlib.rs::signal_module_computes_dsp_primitives`, `stdlib.rs::signal_biquad_settles_to_dc_gain` |
+| `std/md` | classical molecular dynamics | Done | RFC-0047 step 6 (PBC + thermostat scaffolding); `pwe-conformance` "RFC-0047 molecular-dynamics library (PBC minimum image + Verlet, cross-backend)"; `stdlib.rs::md_module_computes_pbc_and_thermostat` |
+
+`fft`/dense linear algebra (the rest of step 5) need an array-parameter call
+convention first and remain open.
 
 ## Language front end
 

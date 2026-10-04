@@ -42,12 +42,12 @@ subset exists; **Missing** = not implemented (RFC or sub-RFC required).
 | General numerics (MATLAB core) | typed values incl. exact `int`/`bool`, arrays, linear algebra | Partial | typed EIR registers RFC-0043 (Done: exact `I64` ops + `I64ToF64`/`F64ToI64`), `array N name` (RFC-0044, Done); no matrix type / BLAS |
 | Control systems (Simulink) | continuous + discrete blocks, zero-crossing, algebraic loops | Partial | `update`/`rk4`, `at`/`periodic`/`schedule`, `when` gate; no zero-crossing detection, no algebraic-loop solver, no block-diagram IR |
 | Equation-based / multi-physics (Modelica, Dymola) | acausal connectors, DAE (not just ODE), index reduction | Missing | PWE is causal ODE/difference only; a DAE layer would be a new Domain IR (needs RFC) |
-| Agent-based / DES (AnyLogic, Simio, Arena) | discrete-event queue, resources, entities, process flow | Partial | pools, `emit`/`last_event`, `schedule`, `gillespie`; no queue/resource/statistics primitives, no event calendar as a first-class value |
+| Agent-based / DES (AnyLogic, Simio, Arena) | discrete-event queue, resources, entities, process flow | Partial | pools, `emit`/`last_event`, `schedule`, `gillespie`; RFC-0048 adds the event calendar (`event_count`/`next_event_*`/`pop_event`/`events_seen`, `(time, seq, priority)` ordering), capacity-gated resources (`resource`/`seize`/`release`/`resource_busy`), and `std/des` statistics; no wait/queue *blocking* yet (seize is non-blocking; a model retries on the next event) |
 | Stochastic chemical kinetics (COPASI, BioNetGen) | SSA, rule-based reactions, compartments | Done (core) | `gillespie` SSA with `channel` reactions; rule-based (graph) rewriting and compartments Missing |
-| Molecular dynamics (LAMMPS, GROMACS) | force fields, thermostats, PBC, neighbor lists | Partial | `nbody`, `bonds` nets, `neighbor_*`; no PBC, no thermostat/barostat, no long-range (Ewald/PME) |
+| Molecular dynamics (LAMMPS, GROMACS) | force fields, thermostats, PBC, neighbor lists | Partial | `nbody`, `bonds` nets, `neighbor_*`; `std/md` (RFC-0047 step 6) adds the PBC minimum image + wrapping, lattice/density helpers, kinetic temperature, and the Berendsen thermostat/barostat (pure, cross-backend) — a full MD run needs neighbor-list/force-loop wiring, and long-range (Ewald/PME) is open |
 | Rigid-body / robotics (Gazebo, MuJoCo, Bullet) | joints, articulations, contacts, sensors | Partial | joints, soft bodies, colliders, hulls, broadphase; no contact solver tuning, no articulated-body dynamics, no sensor model library |
 | CFD / thermal (OpenFOAM, Fluent) | conservative PDE, meshes, turbulence | Partial | grid fields + `diffuse`/`wave`/`poisson`, stability checks; uniform grids only, no unstructured mesh, no turbulence closures |
-| Signal / DSP (Simulink, scipy) | filters, FFT, sampled-data timing | Missing | no filter/FFT primitives; `every`/`substeps` only |
+| Signal / DSP (Simulink, scipy) | filters, FFT, sampled-data timing | Partial | `std/signal` (RFC-0047 step 5, landed): decibels, one-pole low/high-pass + DC blocker, trapezoidal integration, RBJ biquad coefficients + difference equation, envelope/RMS/crest/ZCR, MIDI pitch; all pure, deterministic, cross-backend. No direct FFT yet (a later kernel; the DFT is expressible as a scalar sum) |
 | Electrical / power (Simulink, PLECS) | circuit DAE, switch events | Missing | DAE + event detection (same gap as Modelica) |
 | Multibody / vehicles (Adams, CarSim) | constrained multibody, tires, road | Partial | joints + soft bodies + fields; no tire/road contact models |
 | Digital-twin / co-simulation (FMI/FMU, DDS) | import/export FMU, sync protocols | Missing | a `pwe` FMU export + a co-sim boundary would let PWE host tools first (RFC needed) |
@@ -77,12 +77,17 @@ does not ship:
 3. **Discrete-event + hybrid core**: an event calendar as a first-class value,
    zero-crossing detection, and a queue/resource library — the shared need of
    DES, control, power, and chemical domains. (sub-RFC: RFC-0048; Slice A
-   zero-crossing operators landed, Slices B–D Proposed)
+   zero-crossing operators, Slice B event-calendar reads, and Slices C1/C2
+   priority-queueing + statistics + resources landed; Slice D Proposed)
 4. **DAE / acausal layer**: connectors + `der`/`when` semantics over a DAE
    Domain IR, with index reduction. Unlocks Modelica-class multi-physics.
    (new sub-RFC; largest)
 5. **Numeric kernels**: dense linear algebra, `fft`, filter primitives — with a
-   SoA/deterministic contract.
+   SoA/deterministic contract. (`std/signal` landed the **filter primitives**
+   slice: a pure, deterministic DSP library over caller state, cross-backend
+   conformance `"RFC-0047 signal/DSP library (biquad DC gain + one-pole,
+   cross-backend)"`. Dense linear algebra and `fft` — an array-parameter
+   call convention first — remain.)
 6. **Domain libraries**: control, signal, electrical, MD (PBC + thermostats),
    CFD (meshes), robotics (articulated bodies + sensors).
 7. **Co-simulation boundary**: FMI/FMU import/export so PWE interoperates

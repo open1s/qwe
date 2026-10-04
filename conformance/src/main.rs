@@ -699,6 +699,356 @@ fn extensions(report: &mut Report) {
         "RFC-0048 zero-crossing detection (cross/rise/fall/last_cross, cross-backend)",
         if crossing_ok { Case::Pass } else { Case::Fail },
     );
+
+    // RFC-0048 slice B: the event calendar as a first-class value. A producer
+    // schedules two future events; a consumer reads the pending queue with
+    // `event_count`/`next_event_*`, pops the earliest with `pop_event`, and counts
+    // what was delivered this step with `events_seen`. `run` steps cross-backend,
+    // so the case proves interpreter ≡ JIT for the new calendar opcodes.
+    let calendar = r#"
+        world { gravity = (0,0,0)
+            entity src { state = (fired = 0.0) }
+            entity w { state = (a_n = 0.0, b_kind = 0.0, c_time = 0.0, d_pop = 0.0,
+                                 e_left = 0.0, f_seen = 0.0) } }
+        systems {
+            update { on = src; dt = 1.0
+                schedule(at(0.0), 2.0, 5.0, 50.0)
+                schedule(at(0.0), 3.0, 6.0, 60.0)
+                emit(7.0, 1.0)
+                emit(7.0, 2.0)
+                fired = event_count() }
+            update { on = w; dt = 1.0
+                a_n = event_count()
+                d_pop = pop_event()
+                e_left = event_count()
+                f_seen = events_seen(7.0)
+                b_kind = next_event_kind()
+                c_time = next_event_time() } }
+    "#;
+    let calendar_ok = run(calendar, 1)
+        .map(|rt| {
+            // Consumers run after producers (declaration order); the consumer's
+            // writes are ordered by LHS name (a_n, b_kind, c_time, d_pop,
+            // e_left, f_seen). At t=0 both producer events were delivered, so
+            // `events_seen(7)` is 2 and the two future entries are pending at
+            // t=2 and t=3; the parenthesized reads happen before `d_pop`.
+            let w = rt.scene.get(EntityId(2)).and_then(|e| e.state.as_ref());
+            w.map(|s| {
+                s.values.first() == Some(&2.0)      // a_n: two pending before the pop
+                    && s.values.get(1) == Some(&5.0) // b_kind (pre-pop): the t=2 entry
+                    && s.values.get(2) == Some(&2.0) // c_time (pre-pop)
+                    && s.values.get(3) == Some(&50.0) // d_pop: earliest payload
+                    && s.values.get(4) == Some(&1.0) // e_left: one after the pop
+                    && s.values.get(5) == Some(&2.0) // f_seen: two kind-7 emits
+            })
+            .unwrap_or(false)
+                && finite(&rt, 2)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0048 event calendar (event_count/next_event_*/pop_event/events_seen, cross-backend)",
+        if calendar_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0048 slice C1: priority-ordered queue discipline. Three events at the
+    // same time with priorities 9, 1 and 0 (the plain `schedule` default) must
+    // pop in priority order; `run` steps cross-backend, so interpreter ≡ JIT is
+    // proved for `schedule_at` / `NextEventPriority` too.
+    let priority = r#"
+        world { gravity = (0,0,0)
+            entity src { state = (scheduled = 0.0) }
+            entity w { state = (a_kind = 0.0, b_prio = 0.0, c_pop = 0.0,
+                                 d_kind = 0.0, e_pop = 0.0, f_kind = 0.0) } }
+        systems {
+            update { on = src; dt = 1.0
+                schedule_at(at(0.0), 2.0, 5.0, 50.0, 9.0)
+                schedule_at(at(0.0), 2.0, 6.0, 60.0, 1.0)
+                schedule(at(0.0), 2.0, 7.0, 70.0)
+                scheduled = event_count() }
+            update { on = w; dt = 1.0
+                a_kind = next_event_kind()
+                b_prio = next_event_priority()
+                c_pop = pop_event()
+                d_kind = next_event_kind()
+                e_pop = pop_event()
+                f_kind = next_event_kind() }
+        }
+    "#;
+    let priority_ok = run(priority, 1)
+        .map(|rt| {
+            let src = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+            let w = rt.scene.get(EntityId(2)).and_then(|e| e.state.as_ref());
+            src.map(|s| s.values.first() == Some(&3.0)).unwrap_or(false)
+                && w.map(|s| {
+                    // Consumer writes are ordered by LHS name: a_kind, b_prio,
+                    // c_pop, d_kind, e_pop, f_kind.
+                    s.values.first() == Some(&7.0)      // earliest kind: priority 0
+                        && s.values.get(1) == Some(&0.0) // its priority
+                        && s.values.get(2) == Some(&70.0) // popped first
+                        && s.values.get(3) == Some(&6.0) // next: priority 1
+                        && s.values.get(4) == Some(&60.0)
+                        && s.values.get(5) == Some(&5.0) // last: priority 9
+                })
+                .unwrap_or(false)
+                && finite(&rt, 2)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0048 priority calendar (schedule_at / next_event_priority, cross-backend)",
+        if priority_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0048 slice C1 + std/des: the deterministic DES statistics library
+    // (`std/des`) used on a single-server queue. A job arrives every step, the
+    // calendar holds it, and `des.utilization` reports a busy fraction in [0,1].
+    let des_src = r#"
+        import "std/des"
+        world { gravity = (0,0,0)
+            entity station { state = (busy = 0.0, served = 0.0, util = 0.0) } }
+        systems {
+            update { on = station; dt = 1.0
+                schedule(1.0, 0.0, 1.0, 1.0)      # one job arrives every step
+                let job = pop_event()
+                busy = job
+                served = served + job
+                util = des.utilization(served, t) }
+        }
+    "#;
+    let des_ok = run(des_src, 4)
+        .map(|rt| {
+            let st = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+            st.map(|s| {
+                let util = s.values.get(2).copied().unwrap_or(f64::NAN);
+                // Four steps, one job each: served == 4, utilization == 1.
+                s.values.get(1) == Some(&4.0) && util.is_finite() && (0.0..=1.0).contains(&util)
+            })
+            .unwrap_or(false)
+                && finite(&rt, 1)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0048 DES statistics library (std/des utilization, cross-backend)",
+        if des_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0048 slice C2: capacity-gated resources. A capacity-2 server accepts
+    // two seizes, refuses the third, and accepts a fourth after a release; the
+    // busy/capacity reads track the execution context's resource table. `run`
+    // steps cross-backend, so interpreter ≡ JIT is proved for resources too.
+    let resources = r#"
+        world { gravity = (0,0,0)
+            resource server { capacity = 2 }
+            entity e { state = (a = 0.0, b = 0.0, c = 0.0, p = 0.0,
+                                 q = 0.0, r = 0.0, s = 0.0) } }
+        systems {
+            update { on = e; dt = 1.0
+                a = seize(server, 2.0)
+                b = seize(server, 2.0)
+                c = seize(server, 2.0)
+                p = resource_busy(server)
+                q = resource_capacity(server)
+                r = release(server)
+                s = seize(server, 2.0) }
+        }
+    "#;
+    let resources_ok = run(resources, 1)
+        .map(|rt| {
+            let st = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+            st.map(|s| {
+                // Writes are ordered by LHS name (a, b, c, p, q, r, s — chosen so
+                // the name order matches the intended evaluation order).
+                s.values.first() == Some(&1.0)
+                    && s.values.get(1) == Some(&1.0)
+                    && s.values.get(2) == Some(&0.0)
+                    && s.values.get(3) == Some(&2.0)
+                    && s.values.get(4) == Some(&2.0)
+                    && s.values.get(5) == Some(&1.0)
+                    && s.values.get(6) == Some(&1.0)
+            })
+            .unwrap_or(false)
+                && finite(&rt, 1)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0048 resources (seize/release/resource_busy, cross-backend)",
+        if resources_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0044 (deferred item, landed): a runtime array index is bound-checked.
+    // An in-range dynamic read/write succeeds cross-backend; an out-of-range
+    // index traps (detail 18) — the trap path is covered by `lang::tests`, since
+    // a trap aborts the step and so cannot be a cross-backend success case. The
+    // accumulator confirms both the `v[k] +=` write and the `v[k]` read hit the
+    // intended element.
+    let arrays = r#"
+        world { gravity = (0,0,0)
+            entity e { state = (k = 1.0, acc = 0.0) array 3 v { 1.0, 2.0, 3.0 } } }
+        systems {
+            update { on = e; dt = 1.0
+                v[k] += 10.0
+                acc = v[k] + v[2] }
+        }
+    "#;
+    let arrays_ok = run(arrays, 3)
+        .map(|rt| {
+            let st = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+            st.map(|s| {
+                // slots: k, acc, v.0, v.1, v.2 → v[k] (k=1) is 2 + 3·10 = 32.
+                s.values.first() == Some(&1.0)
+                    && s.values.get(1) == Some(&35.0)
+                    && s.values.get(2) == Some(&1.0)
+                    && s.values.get(3) == Some(&32.0)
+                    && s.values.get(4) == Some(&3.0)
+            })
+            .unwrap_or(false)
+                && finite(&rt, 1)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0044 array runtime index bounds-checked (cross-backend)",
+        if arrays_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0047 step 5: the sampled-data (signal/DSP) library. A one-pole low-pass
+    // settles toward its input and an RBJ biquad low-pass settles to unit DC
+    // gain — both deterministic recurrences that run cross-backend, so this is
+    // the signal-domain counterpart of the `std/des` case.
+    let signal = r#"
+        import "std/signal"
+        world { gravity = (0, 0, 0)
+            entity f { state = (y = 0.0, x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0,
+                                lp = 0.0, db = 0.0) } }
+        systems {
+            update { on = f; dt = 0.001
+                let b0 = signal.lowpass_b0(100.0, 0.7071067811865476, 1000.0)
+                let b1 = signal.lowpass_b1(100.0, 0.7071067811865476, 1000.0)
+                let b2 = signal.lowpass_b2(100.0, 0.7071067811865476, 1000.0)
+                let a1 = signal.lowpass_a1(100.0, 0.7071067811865476, 1000.0)
+                let a2 = signal.lowpass_a2(100.0, 0.7071067811865476, 1000.0)
+                let xn = 1.0
+                let yn = signal.biquad(b0, b1, b2, a1, a2, xn, x1, x2, y1, y2)
+                let x1n = xn
+                let x2n = x1
+                let y1n = yn
+                let y2n = y1
+                x1 = x1n
+                x2 = x2n
+                y = yn
+                y1 = y1n
+                y2 = y2n
+                lp = signal.one_pole(lp, 1.0, 0.25)
+                db = signal.db(0.5) }
+        }
+    "#;
+    let signal_ok = run(signal, 256)
+        .map(|rt| {
+            let st = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+            st.map(|s| {
+                // y settles to DC gain 1; lp (0.25 pole) is ~1 after 256 steps;
+                // db(0.5) == 20·log10(0.5) ~= -6.0206.
+                (s.values.first().copied().unwrap_or(f64::NAN) - 1.0).abs() < 1e-6
+                    && s.values.get(5).is_some_and(|v| (*v - 1.0).abs() < 1e-3)
+                    && s.values.get(6).is_some_and(|v| (*v + 6.0206).abs() < 1e-3)
+            })
+            .unwrap_or(false)
+                && finite(&rt, 1)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0047 signal/DSP library (biquad DC gain + one-pole, cross-backend)",
+        if signal_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0047 step 6: the molecular-dynamics library. A particle is wrapped into
+    // its periodic cell and its distance to another is taken by the minimum
+    // image; a velocity-Verlet half-kick + drift advances it. All pure and
+    // cross-backend, so this is the MD-domain counterpart of `std/des`/`std/signal`.
+    let md = r#"
+        import "std/md"
+        world { gravity = (0, 0, 0)
+            entity p { state = (x = 9.0, vx = 1.0, fx = 0.0, m = 2.0,
+                                d = 0.0, lam = 0.0) } }
+        systems {
+            update { on = p; dt = 0.5
+                let dv = md.half_kick(vx, fx, m, dt) - vx
+                let vxn = md.half_kick(vx, fx, m, dt)
+                let xn = md.drift(x, vxn, dt)
+                d = md.min_image_dist(11.0, 0.0, 0.0, 10.0)
+                lam = md.berendsen_lambda(100.0, 120.0, 0.001, 0.1)
+                vx = vxn
+                x = md.wrap(xn, 10.0) }
+        }
+    "#;
+    let md_ok = run(md, 4)
+        .map(|rt| {
+            let st = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+            st.map(|s| {
+                // x advances 0.5/step at vx=1 (force-free), wrapped into [0,10):
+                // 9 -> 9.5 -> 0.0 -> 0.5 -> 1.0; vx stays 1.
+                s.values.first().is_some_and(|v| (*v - 1.0).abs() < 1e-9)
+                    && s.values.get(1).is_some_and(|v| (*v - 1.0).abs() < 1e-9)
+                    && s.values.get(4).is_some_and(|v| (*v - 1.0).abs() < 1e-9)
+                    && s.values.get(5).is_some_and(|v| (*v - 1.001).abs() < 1e-6)
+            })
+            .unwrap_or(false)
+                && finite(&rt, 1)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0047 molecular-dynamics library (PBC minimum image + Verlet, cross-backend)",
+        if md_ok { Case::Pass } else { Case::Fail },
+    );
+
+    // RFC-0044 follow-up: array reductions (`sum`/`mean`/`norm`/`asum`/`prod`/
+    // `min_of`/`max_of`, two-array `dot`). They unroll over the compile-time
+    // length to native EIR, so they run cross-backend with no new opcode — a
+    // kernel primitive for statistics / DSP / linear-algebra rules.
+    let reductions = r#"
+        world { gravity = (0, 0, 0)
+            entity e { state = (s = 0.0, m = 0.0, n = 0.0, d = 0.0,
+                                 lo = 0.0, hi = 0.0, p = 0.0, a = 0.0)
+                array 3 v { 3.0, 4.0, 12.0 }
+                array 3 w { 1.0, 2.0, 3.0 } } }
+        systems {
+            update { on = e; dt = 1.0
+                s  = sum(v)
+                m  = mean(v)
+                n  = norm(v)
+                d  = dot(v, w)
+                lo = min_of(v)
+                hi = max_of(v)
+                p  = prod(w)
+                a  = asum(v) }
+        }
+    "#;
+    let reductions_ok = run(reductions, 1)
+        .map(|rt| {
+            let st = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+            st.map(|s| {
+                // slots: s m n d lo hi p a v.0 v.1 v.2 w.0 w.1 w.2
+                s.values.first() == Some(&19.0)
+                    && s.values
+                        .get(1)
+                        .is_some_and(|v| (*v - 19.0 / 3.0).abs() < 1e-12)
+                    && s.values.get(2) == Some(&13.0)
+                    && s.values.get(3) == Some(&47.0)
+                    && s.values.get(4) == Some(&3.0)
+                    && s.values.get(5) == Some(&12.0)
+                    && s.values.get(6) == Some(&6.0)
+                    && s.values.get(7) == Some(&19.0)
+            })
+            .unwrap_or(false)
+                && finite(&rt, 1)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0044 array reductions (sum/mean/norm/dot/prod, cross-backend)",
+        if reductions_ok {
+            Case::Pass
+        } else {
+            Case::Fail
+        },
+    );
 }
 
 /// RFC-0045: the semantic module system — a two-module program compiles, runs

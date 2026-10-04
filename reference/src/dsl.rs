@@ -173,6 +173,15 @@ pub struct ChanDecl {
     pub value: f64,
 }
 
+/// RFC-0048 slice C2: a declared capacity-gated resource (a server / machine /
+/// token pool). Its `busy` count is execution-context state (`ExecEnv.resources`
+/// keyed by the name); the declaration only fixes the capacity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResourceDecl {
+    pub name: String,
+    pub capacity: u32,
+}
+
 /// A declared deterministic scalar grid field: the PDE substrate the language's
 /// rules read and write (`fget`/`fset`/`flap`). Storage, discrete operators,
 /// and determinism hashing live in `field::Field`; this is the declaration.
@@ -213,6 +222,8 @@ pub struct WorldModel {
     /// RFC-0042: user-defined `struct` record types.
     pub structs: std::collections::BTreeMap<String, StructDef>,
     pub channels: Vec<ChanDecl>,
+    /// RFC-0048 slice C2: capacity-gated resources (`resource r { capacity = 1 }`).
+    pub resources: Vec<ResourceDecl>,
     pub fields: Vec<FieldDecl>,
     /// User-defined custom shapes: name -> parts (multi-primitive, local offsets).
     pub shapes: std::collections::BTreeMap<String, Vec<crate::components::ShapePart>>,
@@ -240,6 +251,7 @@ impl WorldModel {
             softs: Vec::new(),
             structs: std::collections::BTreeMap::new(),
             channels: Vec::new(),
+            resources: Vec::new(),
             fields: Vec::new(),
             shapes: std::collections::BTreeMap::new(),
             bonds: Vec::new(),

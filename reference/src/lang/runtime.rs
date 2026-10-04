@@ -782,6 +782,21 @@ impl LangRuntime {
         if env_a.events != env_b.events || env_a.queue != env_b.queue {
             return Err(error(Status::EirInvalid, 50));
         }
+        // RFC-0048: the per-site history (deriv / zero-crossing), cross
+        // timestamps, and the calendar's insertion counter are derived signals,
+        // but the two backends must still derive them identically (a divergence
+        // would surface as a different write the *next* step).
+        if env_a.hist != env_b.hist
+            || env_a.cross_time != env_b.cross_time
+            || env_a.next_seq != env_b.next_seq
+        {
+            return Err(error(Status::EirInvalid, 50));
+        }
+        // RFC-0048 slice C2: resources are execution-context state (like the
+        // calendar), so the two backends must derive identical busy counts.
+        if env_a.resources != env_b.resources {
+            return Err(error(Status::EirInvalid, 50));
+        }
         // RFC-0037: bulk field sweeps live in the dense overlays rather than the
         // write list, so require byte-identical overlays too.
         if rt_a.field_overlays() != rt_b.field_overlays() {

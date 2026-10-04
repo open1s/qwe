@@ -1,0 +1,116 @@
+# std/md — molecular-dynamics building blocks (LAMMPS/GROMACS-class models).
+# `import "std/md"` then `md.<fn>(...)`.
+#
+# The pieces a classical MD integrator needs *around* the force field: periodic
+# boundary conditions (minimum image / wrapping), lattice and density helpers,
+# kinetic temperature, and the Berendsen thermostat/barostat scale factors.
+# These are pure functions of their arguments — the box, the accumulators, and
+# the previous configuration are the caller's state — so a model stepped by
+# `update` stays byte-identical across backends. Divisions are guarded, so no
+# input traps (detail 18); a degenerate denominator yields a finite fallback.
+world {
+  params { kB = 1.380649e-23 [kg*m^2*s^-2*K^-1] }
+}
+
+funcs {
+  # --- guards (local copies so `std/md` needs no import) ---------------------
+  md_step(edge, x) { if(x < edge, 0.0, 1.0) }
+  md_safe(a, b) { a / max(b, 1.0e-30) * md_step(1.0e-30, b) }
+  md_abs(x) { max(x, 0.0 - x) }
+
+  # --- periodic boundary conditions -----------------------------------------
+  # Wrap a coordinate into the primary cell `[0, L)`. `%` (fmod) keeps the sign
+  # of the dividend, so the `+ L) % L` form is used for a coset representative.
+  wrap(x, l) { (x % l + l) % l }
+  # Wrap a coordinate into the centered cell `[-L/2, L/2)` (nearest image in 1D).
+  wrap_signed(x, l) { x - l * round(x / l) }
+  # Minimum-image displacement along one axis: the shortest vector `dx` modulo
+  # the box, in `[-L/2, L/2)`.
+  min_image(dx, l) { dx - l * round(dx / l) }
+  # Minimum-image distance for a 3D displacement `(dx, dy, dz)` in a cubic box.
+  min_image_dist(dx, dy, dz, l) {
+    let ix = min_image(dx, l)
+    let iy = min_image(dy, l)
+    let iz = min_image(dz, l)
+    return sqrt(ix * ix + iy * iy + iz * iz)
+  }
+  # Squared minimum-image distance (cheaper when only comparing to a cutoff).
+  min_image_dist2(dx, dy, dz, l) {
+    let ix = min_image(dx, l)
+    let iy = min_image(dy, l)
+    let iz = min_image(dz, l)
+    return ix * ix + iy * iy + iz * iz
+  }
+
+  # --- lattice / density ----------------------------------------------------
+  # Number density `N / V` for a cubic box of side `L`.
+  number_density(n, l) { md_safe(n, l * l * l) }
+  # Cubic box side from a target number density.
+  box_from_density(n, rho) { pow(md_safe(n, rho), 0.3333333333333333) }
+  # Conventional cubic lattice constant for a target density:
+  # simple cubic (1 atom/cell), bcc (2), fcc (4).
+  lattice_sc(rho) { pow(md_safe(1.0, rho), 0.3333333333333333) }
+  lattice_bcc(rho) { pow(md_safe(2.0, rho), 0.3333333333333333) }
+  lattice_fcc(rho) { pow(md_safe(4.0, rho), 0.3333333333333333) }
+  # Nearest-neighbor distance: sc = a, bcc = a*√3/2, fcc = a/√2.
+  nn_dist_sc(rho) { lattice_sc(rho) }
+  nn_dist_bcc(rho) { 0.8660254037844386 * lattice_bcc(rho) }
+  nn_dist_fcc(rho) { 0.7071067811865476 * lattice_fcc(rho) }
+
+  # --- kinetic temperature --------------------------------------------------
+  # Degrees of freedom for `n` point particles: 3n, minus 3 if the center of
+  # mass is fixed (remove_com).
+  degrees_of_freedom(n, remove_com) { 3.0 * n - 3.0 * remove_com }
+  # Kinetic temperature from the kinetic energy: T = 2 KE / (dof · kB).
+  temperature(ke, n, remove_com) {
+    md_safe(2.0 * ke, degrees_of_freedom(n, remove_com) * kB)
+  }
+  # Equipartition kinetic energy for a temperature: KE = (dof/2) kB T.
+  kinetic_energy(temp, n, remove_com) {
+    0.5 * degrees_of_freedom(n, remove_com) * kB * temp
+  }
+  # Instantaneous temperature from a velocity sum of squares `Σ m v²`:
+  # T = Σ m v² / (dof · kB)  (since 2 KE = Σ m v²).
+  temperature_from_velocity(vsq, n, remove_com) {
+    md_safe(vsq, degrees_of_freedom(n, remove_com) * kB)
+  }
+
+  # --- Berendsen thermostat / barostat --------------------------------------
+  # Velocity-rescaling factor toward a target temperature over coupling `tau`:
+  # λ = sqrt(1 + (dt/tau)(T0/T - 1)). Applied as `v *= λ`.
+  berendsen_lambda(temp, temp0, dt, tau) {
+    sqrt(1.0 + md_safe(dt, tau) * (md_safe(temp0, temp) - 1.0))
+  }
+  # `tau` from a coupling time constant in steps (`tau = n_steps · dt`).
+  tau_from_steps(n_steps, dt) { n_steps * dt }
+  # Kinetic-energy drift after a rescale is exactly removed; the applied
+  # energy input to reach `temp0` from `temp`.
+  heat_to_apply(temp, temp0, n, remove_com) {
+    kinetic_energy(temp0, n, remove_com) - kinetic_energy(temp, n, remove_com)
+  }
+  # Berendsen barostat box-scale factor toward a target pressure:
+  # λ = (1 - (κ dt/τ)(P0 - P))^(1/3). Applied as `L *= λ`.
+  berendsen_baro_lambda(pressure, pressure0, compressibility, dt, tau) {
+    pow(1.0 - md_safe(compressibility * dt, tau) * (pressure0 - pressure), 0.3333333333333333)
+  }
+  # Isothermal compressibility κ from the bulk modulus: κ = 1/K.
+  compressibility(bulk_modulus) { md_safe(1.0, bulk_modulus) }
+
+  # --- analysis helpers -----------------------------------------------------
+  # Radial-distribution histogram bin index for a separation `r` and bin width.
+  rdf_bin(r, dr) { floor(md_safe(r, dr)) }
+  # Radial distribution function from a histogram count and an ideal count.
+  rdf(count, ideal_count) { md_safe(count, ideal_count) }
+  # Mean squared displacement from a reference position (3D).
+  msd(dx, dy, dz) { dx * dx + dy * dy + dz * dz }
+  # Einstein diffusion coefficient from the MSD slope: D = MSD / (2·dim·time).
+  # (`time` is named `elapsed`, not `t`: `t` is the reserved simulation clock.)
+  diffusion(msd_value, elapsed, dim) { md_safe(msd_value, 2.0 * dim * elapsed) }
+  # Velocity Verlet half-kick: v += (F/m)(dt/2).
+  half_kick(v, force, mass, dt) { v + md_safe(force * dt, 2.0 * mass) }
+  # Velocity Verlet drift: x += v·dt.
+  drift(x, v, dt) { x + v * dt }
+  # Reduced (Lennard-Jones) units: r* = r/σ, and back.
+  reduced_length(r, sigma) { md_safe(r, sigma) }
+  reduced_energy(e, eps) { md_safe(e, eps) }
+}

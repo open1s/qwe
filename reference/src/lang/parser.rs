@@ -220,6 +220,28 @@ pub(crate) fn is_builtin_call(name: &str) -> bool {
             | "vdot"
             | "vdist"
             | "last_event"
+            | "event_count"
+            | "next_event_time"
+            | "next_event_kind"
+            | "next_event_payload"
+            | "next_event_priority"
+            | "pop_event"
+            | "events_seen"
+            | "schedule_at"
+            // RFC-0048 slice C2: capacity-gated resources.
+            | "seize"
+            | "release"
+            | "resource_busy"
+            | "resource_capacity"
+            // RFC-0044 follow-up: array reductions over a named array.
+            | "sum"
+            | "mean"
+            | "dot"
+            | "norm"
+            | "asum"
+            | "prod"
+            | "min_of"
+            | "max_of"
             | "fget"
             | "flap"
             | "fset"
@@ -277,6 +299,25 @@ pub(crate) fn builtin_arity(name: &str) -> Option<usize> {
         | "last_event" => 1,
         // Binary operators.
         "pow" | "min" | "max" | "atan2" | "hypot" | "neighbor_mean" | "emit" => 2,
+        // RFC-0048 slice B/C1: the event calendar (a read/pop surface over the
+        // pending scheduled-event queue) plus the per-step seen counter and the
+        // priority-scheduling form.
+        "event_count"
+        | "next_event_time"
+        | "next_event_kind"
+        | "next_event_payload"
+        | "next_event_priority"
+        | "pop_event" => 0,
+        "events_seen" => 1,
+        "schedule_at" => 5,
+        // RFC-0048 slice C2: `seize(resource, capacity)`; `release` takes a
+        // resource name, the reads take none.
+        "seize" => 2,
+        "release" | "resource_busy" | "resource_capacity" => 1,
+        // RFC-0044 follow-up: array reductions take a literal array name (the
+        // length is compile-time). `dot(a, b)` folds two equal-length arrays.
+        "sum" | "mean" | "norm" | "asum" | "prod" | "min_of" | "max_of" => 1,
+        "dot" => 2,
         // Vector helpers: `vlen(x, y, z)` and the six-component
         // `vdot(ax,ay,az,bx,by,bz)` / `vdist(...)`; plus the conditional.
         "vlen" => 3,
@@ -1393,6 +1434,81 @@ pub(crate) fn build_call(pair: Pair<'_, Rule>) -> Result<Expr> {
             }
             "last_event"
         }
+        // RFC-0048 slice B: the event calendar / seen counter.
+        "event_count"
+        | "next_event_time"
+        | "next_event_kind"
+        | "next_event_payload"
+        | "next_event_priority"
+        | "pop_event" => {
+            if !args.is_empty() {
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
+            }
+            Box::leak(name.clone().into_boxed_str())
+        }
+        "events_seen" => {
+            if args.len() != 1 {
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
+            }
+            "events_seen"
+        }
+        // RFC-0048 slice C2: `seize(resource, capacity)` and
+        // `release(resource)` / `resource_busy(resource)` /
+        // `resource_capacity(resource)`. The first argument must be a literal
+        // resource name (like `fget`'s field), so the resource id is
+        // compile-time; the capacity is a runtime value.
+        "seize" => {
+            if args.len() != 2 || !matches!(args.first(), Some(Expr::Name(_))) {
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
+            }
+            "seize"
+        }
+        "release" | "resource_busy" | "resource_capacity" => {
+            if args.len() != 1 || !matches!(args.first(), Some(Expr::Name(_))) {
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
+            }
+            Box::leak(name.clone().into_boxed_str())
+        }
+        // RFC-0048 slice C1: `schedule_at(gate, delay, kind, payload, priority)`.
+        "schedule_at" => {
+            if args.len() != 5 {
+                return Err(error_at(
+                    Status::Invalid,
+                    59,
+                    0,
+                    format!("`{name}` called with the wrong number of arguments"),
+                ));
+            }
+            "schedule_at"
+        }
+        // RFC-0044 follow-up: array reductions. The name is returned verbatim;
+        // whether it is the builtin (a literal array-name argument) or a
+        // **user function** of the same name is decided in `check_call_arities`,
+        // which knows the `funcs` list — so builtin names stay shadowable and a
+        // misused reduction still fails loudly there (never a silent 0).
+        "sum" | "mean" | "norm" | "asum" | "prod" | "min_of" | "max_of" | "dot" => {
+            Box::leak(name.clone().into_boxed_str())
+        }
         // Grid field access: `fget(f, i, j)` / `flap(f, i, j)` / `fset(f, i, j, v)`;
         // the first argument must be a literal field name.
         "fget" | "flap" => {
@@ -1632,6 +1748,28 @@ pub fn parse(source: &str) -> Result<ParsedProgram> {
                             let name = next_pair(&mut inner)?.as_str().to_string();
                             let value = inner.next().map(parse_value).unwrap_or(0.0);
                             model.channels.push(crate::dsl::ChanDecl { name, value });
+                        }
+                        Rule::resource_stmt => {
+                            // RFC-0048 slice C2: `resource r { capacity = 1 }`.
+                            let mut inner = item.into_inner();
+                            let name = next_pair(&mut inner)?.as_str().to_string();
+                            let cap_text = inner.next().map(|p| p.as_str().trim()).unwrap_or("0");
+                            let cap = cap_text.parse::<f64>().unwrap_or(0.0);
+                            if !cap.is_finite() || cap.fract() != 0.0 || cap < 0.0 || cap > 1.0e9 {
+                                return Err(error_at(
+                                    Status::Invalid,
+                                    110,
+                                    0,
+                                    format!(
+                                        "resource `{name}` capacity must be a non-negative integer"
+                                    ),
+                                ));
+                            }
+                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                            let capacity = cap as u32;
+                            model
+                                .resources
+                                .push(crate::dsl::ResourceDecl { name, capacity });
                         }
                         Rule::bonds_stmt => {
                             let stmt_start = item.as_span().start();

@@ -1922,6 +1922,13 @@ impl PhysicsProgram {
                 }
                 let barrier = !barrier_emitted;
                 barrier_emitted = true;
+                // Namespace per-call-site history keys by the function id, so
+                // the runtime's global history maps cannot alias the first
+                // history site of one system×entity function onto another's
+                // (issue #94). The low 32 bits stay the lowering-time site
+                // (which distinguishes operators within a function); the
+                // function id rides in the high 32 bits.
+                namespace_history_sites(&mut instrs, fid);
                 functions.push(Function {
                     id: fid,
                     effect_mask: crate::eir::EIR_EFFECT_READ_WORLD
@@ -1948,6 +1955,35 @@ impl PhysicsProgram {
             systems,
             entities,
             module,
+        }
+    }
+}
+
+/// Rewrites every history-carrying instruction (`HistRead`/`HistWrite`/
+/// `HistHas`/`LastCross` and the `CrossDown`/`RiseEdge`/`FallEdge` edges) in
+/// a lowered function so its site constant is `(function_id << 32) | site`,
+/// with the per-function site in the low 32 bits and the function id high.
+///
+/// Sites are allocated per function at lowering time; without the high bits the
+/// runtime's global history maps would alias the first history site of every
+/// function (issue #94). Deterministic: it depends only on the function id.
+fn namespace_history_sites(instrs: &mut [Instruction], function_id: u64) {
+    use crate::eir::Immediate;
+    for ins in instrs.iter_mut() {
+        if !matches!(
+            ins.opcode,
+            Opcode::HistRead
+                | Opcode::HistWrite
+                | Opcode::HistHas
+                | Opcode::LastCross
+                | Opcode::CrossDown
+                | Opcode::RiseEdge
+                | Opcode::FallEdge
+        ) {
+            continue;
+        }
+        if let Some(Immediate::U64(site)) = ins.constant {
+            ins.constant = Some(Immediate::U64((function_id << 32) | (site & 0xffff_ffff)));
         }
     }
 }

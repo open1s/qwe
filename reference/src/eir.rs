@@ -253,6 +253,40 @@ declare_opcodes! {
     /// kind, payload. Yields nothing. Gate on a per-step pulse (`at`/`periodic`
     /// or `last_event`) to schedule exactly once.
     ScheduleEvent = 223 => u64,
+    /// RFC-0048 slice C1: like `ScheduleEvent`, but the new entry carries an
+    /// explicit **priority** (operand 4, truncated to i64) and the calendar is
+    /// ordered by `(time, priority, seq)` — lower priority first, ties by
+    /// insertion. Operands: gate, delay, kind, payload, priority. Yields
+    /// nothing.
+    ScheduleEventAt = 246 => u64,
+    /// RFC-0048 slice C1: the priority of the earliest pending calendar entry,
+    /// or 0.0 when empty. No operands; result F64.
+    NextEventPriority = 247 => f64,
+    /// RFC-0048 slice C2: capacity-gated resources (`seize`/`release`). The
+    /// resource id rides in `constant` (`Immediate::U64`); the busy count lives
+    /// in the execution context's resource table (parallel to the event
+    /// calendar), so both backends derive it identically and `step_cross`
+    /// compares it byte-for-byte. `SeizeResource` is non-blocking: operand 0 is
+    /// the capacity, and it returns 1.0 and increments `busy` when
+    /// `busy < capacity`, else 0.0.
+    SeizeResource = 248 => f64,
+    /// RFC-0048 slice C2: release one unit (saturating at 0); returns the
+    /// remaining busy count. Resource id in `constant`; no operands.
+    ReleaseResource = 249 => f64,
+    /// RFC-0048 slice C2: current busy count (0 when unknown). No operands;
+    /// resource id in `constant`; result F64.
+    ResourceBusy = 250 => f64,
+    /// RFC-0048 slice C2: the declared capacity (0 when unknown). No operands;
+    /// resource id in `constant`; result F64.
+    ResourceCapacity = 251 => f64,
+    /// RFC-0044 (deferred item, landed): a runtime array-index bound check.
+    /// Operands: index, base, len. `index` is the 0-based position inside the
+    /// array; `base` is the array's first State slot and `len` its declared
+    /// length. Traps (detail 18, the RFC-0021 load-class trap) when `index` is
+    /// not a finite integer in `[0, len)`, else yields the absolute slot
+    /// `base + index`. Lets a runtime-indexed `name[i]` read/write be
+    /// bounds-checked before the slot is touched.
+    BoundsCheck = 252 => f64,
     /// RFC-0037: one Jacobi diffusion sweep `T += rate·∇²T` over a grid field
     /// (the whole sweep in one instruction). Operand 0 = rate; target = field.
     FieldDiffuse = 224 => u64,
@@ -310,6 +344,25 @@ declare_opcodes! {
     /// (0.0 before any crossing). The site id rides in `constant`
     /// (`Immediate::U64`); result is F64. Pure.
     LastCross = 239 => f64,
+    // -- RFC-0048 slice B: the event calendar as a first-class value --
+    /// Number of *pending* (not-yet-due) calendar entries at the current step.
+    /// No operands; result F64.
+    EventCount = 240 => f64,
+    /// Simulation time of the earliest pending calendar entry, or `f64::MAX`
+    /// when the calendar is empty (the same "no entity" sentinel
+    /// `NearestDist` uses, so the value stays finite). No operands; F64.
+    NextEventTime = 241 => f64,
+    /// Kind of the earliest pending calendar entry, or 0.0 when empty. No
+    /// operands; result F64.
+    NextEventKind = 242 => f64,
+    /// Payload of the earliest pending calendar entry (f64 bit pattern), or 0.0
+    /// when empty. No operands; result F64.
+    NextEventPayload = 243 => f64,
+    /// Pop (remove) the earliest pending calendar entry and yield its payload
+    /// bit pattern as F64, or 0.0 when empty. No operands. Mutates the calendar.
+    PopEvent = 244 => f64,
+    /// Number of events emitted so far this step whose kind matches operand 0.
+    EventSeenCount = 245 => f64,
     Return = 0x8000 => u64,
     /// Unconditional branch to an instruction index (block target). Single
     /// operand = target index.
@@ -433,6 +486,9 @@ pub struct WorldWrite {
 pub struct EmittedEvent {
     pub kind: u32,
     pub payload: u64,
+    /// RFC-0048 slice B: monotonic insertion counter, so equal-time events keep
+    /// a deterministic order across regions, snapshots, and backends.
+    pub seq: u64,
 }
 
 /// A dynamically scheduled event: `(kind, payload)` to fire at simulation
@@ -443,6 +499,27 @@ pub struct ScheduledEvent {
     pub time: f64,
     pub kind: u32,
     pub payload: u64,
+    /// RFC-0048 slice C1: queue discipline. The calendar is ordered by
+    /// `(time, priority, seq)`: earlier time first, then lower priority, then
+    /// insertion order. The plain `schedule(...)` uses priority 0, so its order
+    /// is exactly the Slice-B `(time, seq)`.
+    pub priority: i64,
+    /// RFC-0048 slice B: monotonic insertion counter; ties in `time`/`priority`
+    /// are broken by `seq` (never by float comparison), matching `EmittedEvent`.
+    pub seq: u64,
+}
+
+/// RFC-0048 slice C2: the runtime state of one `resource` — its fixed capacity
+/// and current busy count. Held in [`ExecEnv::resources`] keyed by the
+/// compile-time resource id, exactly like the event calendar: execution-context
+/// state, mutated only by `SeizeResource`/`ReleaseResource`, and compared
+/// byte-for-byte by `step_cross` so the interpreter and JIT cannot diverge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourceState {
+    /// Maximum concurrent holders.
+    pub capacity: i64,
+    /// Current holders (`0..=capacity`).
+    pub busy: i64,
 }
 
 /// A small deterministic PRNG (xorshift64*), seeded from a fixed domain constant
@@ -503,6 +580,12 @@ pub struct ExecEnv {
     /// (site id -> simulation time). Written by `CrossDown`/`RiseEdge`/
     /// `FallEdge` when they fire, read by `LastCross`.
     pub cross_time: std::collections::BTreeMap<u64, f64>,
+    /// RFC-0048 slice B: monotonic insertion counter for the event calendar,
+    /// so equal-time ties are ordered by insertion (`(time, seq)`).
+    pub next_seq: u64,
+    /// RFC-0048 slice C2: named resources (server capacity) keyed by the
+    /// compile-time resource id. Execution-context state, like the calendar.
+    pub resources: std::collections::BTreeMap<u64, ResourceState>,
 }
 impl Default for ExecEnv {
     fn default() -> Self {
@@ -516,6 +599,25 @@ impl Default for ExecEnv {
             queue: Vec::new(),
             hist: std::collections::BTreeMap::new(),
             cross_time: std::collections::BTreeMap::new(),
+            next_seq: 0,
+            resources: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+impl ExecEnv {
+    /// The earliest pending calendar entry (the calendar is kept sorted by
+    /// `(time, priority, seq)`), or `None` when empty.
+    pub fn next_event(&self) -> Option<&ScheduledEvent> {
+        self.queue.first()
+    }
+
+    /// Removes and returns the earliest pending calendar entry, or `None`.
+    pub fn pop_next_event(&mut self) -> Option<ScheduledEvent> {
+        if self.queue.is_empty() {
+            None
+        } else {
+            Some(self.queue.remove(0))
         }
     }
 }
@@ -541,6 +643,7 @@ pub fn drain_due_events(env: &mut ExecEnv) {
         .map(|e| EmittedEvent {
             kind: e.kind,
             payload: e.payload,
+            seq: e.seq,
         })
         .collect();
     env.events.extend(due);
@@ -1037,6 +1140,12 @@ impl EirModule {
                     }
                     None
                 }
+                Opcode::ScheduleEventAt => {
+                    if instruction.operands.len() != 5 || instruction.target.is_some() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    None
+                }
                 Opcode::HistRead => {
                     if !instruction.operands.is_empty() || instruction.constant.is_none() {
                         return Err(error(Status::EirInvalid, 4, index));
@@ -1070,6 +1179,51 @@ impl EirModule {
                 }
                 Opcode::LastCross => {
                     if !instruction.operands.is_empty() || instruction.constant.is_none() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::EventCount
+                | Opcode::NextEventTime
+                | Opcode::NextEventKind
+                | Opcode::NextEventPayload
+                | Opcode::NextEventPriority
+                | Opcode::PopEvent => {
+                    // Calendar reads/pops take no operands and read state from
+                    // the execution context's pending queue.
+                    if !instruction.operands.is_empty() || instruction.target.is_some() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::EventSeenCount => {
+                    if instruction.operands.len() != 1 || instruction.target.is_some() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::SeizeResource => {
+                    // `seize(resource_id, capacity)`: operand 0 = capacity.
+                    if instruction.operands.len() != 1
+                        || instruction.target.is_some()
+                        || instruction.constant.is_none()
+                    {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::ReleaseResource | Opcode::ResourceBusy | Opcode::ResourceCapacity => {
+                    if !instruction.operands.is_empty()
+                        || instruction.target.is_some()
+                        || instruction.constant.is_none()
+                    {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::BoundsCheck => {
+                    // RFC-0044: index, base, len — a runtime trap.
+                    if instruction.operands.len() != 3 || instruction.target.is_some() {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
                     Some(ValueType::F64)
@@ -1692,14 +1846,73 @@ impl EirModule {
                                 .ok_or(error(Status::EirInvalid, 18, 0))?,
                         );
                         let time = env.time + delay;
-                        // Keep the queue sorted by time (stable for equal times).
-                        let pos = env.queue.partition_point(|e| e.time <= time);
+                        let seq = env.next_seq;
+                        env.next_seq += 1;
+                        // Keep the queue ordered by `(time, priority, seq)`:
+                        // plain `schedule` uses priority 0, so equal-time
+                        // entries land after every earlier insertion.
+                        let pos = env
+                            .queue
+                            .partition_point(|e| (e.time, e.priority, e.seq) <= (time, 0, seq));
                         env.queue.insert(
                             pos,
                             ScheduledEvent {
                                 time,
                                 kind,
                                 payload,
+                                priority: 0,
+                                seq,
+                            },
+                        );
+                    }
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::ScheduleEventAt => {
+                    let gate = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[0])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))?,
+                    );
+                    if gate != 0.0 {
+                        let delay = as_f64(
+                            stacks[depth - 1]
+                                .get(&instruction.operands[1])
+                                .copied()
+                                .ok_or(error(Status::EirInvalid, 16, 0))?,
+                        );
+                        let kind = as_f64(
+                            stacks[depth - 1]
+                                .get(&instruction.operands[2])
+                                .copied()
+                                .ok_or(error(Status::EirInvalid, 17, 0))?,
+                        ) as u32;
+                        let payload = as_u64(
+                            stacks[depth - 1]
+                                .get(&instruction.operands[3])
+                                .copied()
+                                .ok_or(error(Status::EirInvalid, 18, 0))?,
+                        );
+                        let priority = as_i64(
+                            stacks[depth - 1]
+                                .get(&instruction.operands[4])
+                                .copied()
+                                .ok_or(error(Status::EirInvalid, 19, 0))?,
+                        );
+                        let time = env.time + delay;
+                        let seq = env.next_seq;
+                        env.next_seq += 1;
+                        let pos = env.queue.partition_point(|e| {
+                            (e.time, e.priority, e.seq) <= (time, priority, seq)
+                        });
+                        env.queue.insert(
+                            pos,
+                            ScheduledEvent {
+                                time,
+                                kind,
+                                payload,
+                                priority,
+                                seq,
                             },
                         );
                     }
@@ -1771,6 +1984,125 @@ impl EirModule {
                         .map(|e| f64::from_bits(e.payload))
                         .unwrap_or(0.0);
                     stacks[depth - 1].insert(instruction.result_id, Immediate::F64(payload));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::EventCount => {
+                    stacks[depth - 1].insert(
+                        instruction.result_id,
+                        Immediate::F64(env.queue.len() as f64),
+                    );
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::NextEventTime => {
+                    // `f64::MAX` (not `+inf`) when empty: a finite sentinel, so
+                    // storing it in a state slot does not trip the detail-88
+                    // non-finite check (matching `NearestDist`).
+                    let t = env.queue.first().map(|e| e.time).unwrap_or(f64::MAX);
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(t));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::NextEventKind => {
+                    let k = env.queue.first().map(|e| e.kind).unwrap_or(0) as f64;
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(k));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::NextEventPayload => {
+                    let p = env
+                        .queue
+                        .first()
+                        .map(|e| f64::from_bits(e.payload))
+                        .unwrap_or(0.0);
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(p));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::NextEventPriority => {
+                    let pr = env.queue.first().map(|e| e.priority).unwrap_or(0) as f64;
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(pr));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::SeizeResource => {
+                    let rid = match instruction.constant {
+                        Some(Immediate::U64(id)) => id,
+                        _ => return Err(error(Status::EirInvalid, 23, 0)),
+                    };
+                    let capacity = as_i64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[0])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))?,
+                    );
+                    // The first seize fixes the capacity (the declaration
+                    // value); later seizes reuse it, so a caller cannot widen
+                    // a resource mid-run by passing a larger number.
+                    let entry = env
+                        .resources
+                        .entry(rid)
+                        .or_insert(ResourceState { capacity, busy: 0 });
+                    let acquired = entry.busy < entry.capacity;
+                    if acquired {
+                        entry.busy += 1;
+                    }
+                    let r = if acquired { 1.0 } else { 0.0 };
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(r));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::ReleaseResource => {
+                    let rid = match instruction.constant {
+                        Some(Immediate::U64(id)) => id,
+                        _ => return Err(error(Status::EirInvalid, 23, 0)),
+                    };
+                    let busy = match env.resources.get_mut(&rid) {
+                        Some(entry) => {
+                            if entry.busy > 0 {
+                                entry.busy -= 1;
+                            }
+                            entry.busy
+                        }
+                        None => 0,
+                    };
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(busy as f64));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::ResourceBusy => {
+                    let rid = match instruction.constant {
+                        Some(Immediate::U64(id)) => id,
+                        _ => return Err(error(Status::EirInvalid, 23, 0)),
+                    };
+                    let busy = env.resources.get(&rid).map(|r| r.busy).unwrap_or(0);
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(busy as f64));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::ResourceCapacity => {
+                    let rid = match instruction.constant {
+                        Some(Immediate::U64(id)) => id,
+                        _ => return Err(error(Status::EirInvalid, 23, 0)),
+                    };
+                    let capacity = env.resources.get(&rid).map(|r| r.capacity).unwrap_or(0);
+                    stacks[depth - 1]
+                        .insert(instruction.result_id, Immediate::F64(capacity as f64));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::PopEvent => {
+                    let p = env
+                        .queue
+                        .first()
+                        .map(|e| f64::from_bits(e.payload))
+                        .unwrap_or(0.0);
+                    if !env.queue.is_empty() {
+                        env.queue.remove(0);
+                    }
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(p));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::EventSeenCount => {
+                    let kind = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[0])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))?,
+                    ) as u32;
+                    let n = env.events.iter().filter(|e| e.kind == kind).count() as f64;
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(n));
                     pcs[depth - 1] += 1;
                 }
                 Opcode::HistRead => {
@@ -1859,6 +2191,33 @@ impl EirModule {
                     };
                     let t = env.cross_time.get(&site).copied().unwrap_or(0.0);
                     stacks[depth - 1].insert(instruction.result_id, Immediate::F64(t));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::BoundsCheck => {
+                    let idx = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[0])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))?,
+                    );
+                    let base = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[1])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 17, 0))?,
+                    );
+                    let len = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[2])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 18, 0))?,
+                    );
+                    // A non-finite or fractional index, or one outside the
+                    // array's `[0, len)`, is a load-class trap (detail 18).
+                    if !idx.is_finite() || idx.fract() != 0.0 || idx < 0.0 || idx >= len {
+                        return Err(error(Status::EirInvalid, 18, pc));
+                    }
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(base + idx));
                     pcs[depth - 1] += 1;
                 }
                 Opcode::ReadSlotDyn => {
@@ -2079,7 +2438,9 @@ impl EirModule {
                             .copied()
                             .ok_or(error(Status::EirInvalid, 36, 0))?,
                     );
-                    env.events.push(EmittedEvent { kind, payload });
+                    let seq = env.next_seq;
+                    env.next_seq += 1;
+                    env.events.push(EmittedEvent { kind, payload, seq });
                     pcs[depth - 1] += 1;
                 }
                 Opcode::Time => {
@@ -4311,7 +4672,8 @@ mod tests {
             env.events,
             vec![EmittedEvent {
                 kind: 7,
-                payload: 99
+                payload: 99,
+                seq: 0,
             }]
         );
     }
@@ -4343,6 +4705,19 @@ mod tests {
             Opcode::RiseEdge,
             Opcode::FallEdge,
             Opcode::LastCross,
+            Opcode::EventCount,
+            Opcode::NextEventTime,
+            Opcode::NextEventKind,
+            Opcode::NextEventPayload,
+            Opcode::PopEvent,
+            Opcode::EventSeenCount,
+            Opcode::ScheduleEventAt,
+            Opcode::NextEventPriority,
+            Opcode::SeizeResource,
+            Opcode::ReleaseResource,
+            Opcode::ResourceBusy,
+            Opcode::ResourceCapacity,
+            Opcode::BoundsCheck,
         ];
         let mut instructions: Vec<Instruction> = opcodes
             .iter()
@@ -4386,6 +4761,637 @@ mod tests {
                 "{want:?} did not survive the EIR codec round-trip"
             );
         }
+    }
+
+    /// RFC-0048 slice B: the calendar opcodes read/pop the pending queue in
+    /// `(time, seq)` order; equal-time ties follow insertion order.
+    #[test]
+    fn eir_calendar_reads_and_pop_in_time_seq_order() {
+        fn cst(id: u32, v: f64) -> Instruction {
+            Instruction {
+                opcode: Opcode::Const,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: Some(Immediate::F64(v)),
+                target: None,
+            }
+        }
+        fn put(gate: u32, delay: u32, kind: u32, payload: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::ScheduleEvent,
+                result_id: 0,
+                result_type: None,
+                operands: vec![gate, delay, kind, payload],
+                constant: None,
+                target: None,
+            }
+        }
+        fn cal(id: u32, op: Opcode) -> Instruction {
+            Instruction {
+                opcode: op,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: None,
+                target: None,
+            }
+        }
+        fn wr(v: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::WriteView,
+                result_id: 0,
+                result_type: None,
+                operands: vec![v],
+                constant: None,
+                target: Some(ComponentRef {
+                    entity: 1,
+                    component: ComponentTypeId([7; 16]),
+                    offset: 0,
+                }),
+            }
+        }
+        let module = EirModule {
+            module_hash: Hash256([0; 32]),
+            schema_set_hash: Hash256([0; 32]),
+            domain_ir_hash: Hash256([0; 32]),
+            target_kind: 0,
+            functions: vec![Function {
+                id: 0,
+                effect_mask: 0,
+                argument_count: 0,
+                instructions: vec![
+                    // Both schedules fire at t=0 + delay, so with delays 2 and 3
+                    // they enqueue at t=2 and t=3; the gate is a plain 1.0.
+                    cst(1, 1.0),
+                    cst(2, 2.0),
+                    cst(3, 5.0),
+                    cst(4, 50.0),
+                    put(1, 2, 3, 4),
+                    cst(5, 3.0),
+                    cst(6, 6.0),
+                    cst(7, 60.0),
+                    put(1, 5, 6, 7),
+                    cal(8, Opcode::EventCount),
+                    cal(9, Opcode::NextEventTime),
+                    cal(10, Opcode::NextEventKind),
+                    cal(11, Opcode::NextEventPayload),
+                    cal(12, Opcode::PopEvent),
+                    cal(13, Opcode::EventCount),
+                    cal(14, Opcode::NextEventTime),
+                    wr(8),
+                    wr(9),
+                    wr(10),
+                    wr(11),
+                    wr(12),
+                    wr(13),
+                    wr(14),
+                    ret(),
+                ],
+            }],
+        };
+        assert!(module.validate(false).is_ok());
+        #[derive(Default)]
+        struct Track {
+            writes: Vec<u64>,
+        }
+        impl EirRuntime for Track {
+            fn read_field(&self, _t: ComponentRef) -> Result<u64> {
+                Ok(0)
+            }
+            fn write_field(&mut self, _t: ComponentRef, v: u64) {
+                self.writes.push(v);
+            }
+            fn query_neighbor_count(&self, _e: u128, _r: f64) -> Result<u64> {
+                Ok(0)
+            }
+            fn query_nearest_dist(&self, _e: u128) -> Result<u64> {
+                Ok(f64::MAX.to_bits())
+            }
+            fn query_neighbor_mean(&self, _e: u128, _s: u32, _r: f64) -> Result<f64> {
+                Ok(0.0)
+            }
+            fn query_nearest_offset(&self, _e: u128) -> Result<(f64, f64, f64)> {
+                Ok((0.0, 0.0, 0.0))
+            }
+            fn field_laplacian(
+                &self,
+                _c: ComponentTypeId,
+                _i: f64,
+                _j: f64,
+                _w: f64,
+            ) -> Result<f64> {
+                Ok(0.0)
+            }
+        }
+        let mut rt = Track::default();
+        let mut env = ExecEnv {
+            time: 0.0,
+            step_dt: 1.0,
+            ..ExecEnv::default()
+        };
+        module
+            .interpret_with_env(&mut rt, &mut env, WorldId(1), WorldVersion(0))
+            .unwrap();
+        let got: Vec<f64> = rt.writes.iter().map(|b| f64::from_bits(*b)).collect();
+        assert_eq!(
+            got,
+            vec![2.0, 2.0, 5.0, 50.0, 50.0, 1.0, 3.0],
+            "count, time, kind, payload, pop payload, remaining count, remaining time"
+        );
+        assert_eq!(env.queue.len(), 1);
+        assert_eq!(env.queue[0].kind, 6, "the t=3 entry remains after the pop");
+    }
+
+    /// RFC-0048 slice C1: `ScheduleEventAt` orders the calendar by
+    /// `(time, priority, seq)`.
+    #[test]
+    fn eir_calendar_priority_orders_within_a_time() {
+        fn cst(id: u32, v: f64) -> Instruction {
+            Instruction {
+                opcode: Opcode::Const,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: Some(Immediate::F64(v)),
+                target: None,
+            }
+        }
+        fn put_at(gate: u32, delay: u32, kind: u32, payload: u32, prio: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::ScheduleEventAt,
+                result_id: 0,
+                result_type: None,
+                operands: vec![gate, delay, kind, payload, prio],
+                constant: None,
+                target: None,
+            }
+        }
+        fn cal(id: u32, op: Opcode) -> Instruction {
+            Instruction {
+                opcode: op,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: None,
+                target: None,
+            }
+        }
+        fn wr(v: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::WriteView,
+                result_id: 0,
+                result_type: None,
+                operands: vec![v],
+                constant: None,
+                target: Some(ComponentRef {
+                    entity: 1,
+                    component: ComponentTypeId([7; 16]),
+                    offset: 0,
+                }),
+            }
+        }
+        let module = EirModule {
+            module_hash: Hash256([0; 32]),
+            schema_set_hash: Hash256([0; 32]),
+            domain_ir_hash: Hash256([0; 32]),
+            target_kind: 0,
+            functions: vec![Function {
+                id: 0,
+                effect_mask: 0,
+                argument_count: 0,
+                instructions: vec![
+                    cst(1, 1.0),
+                    cst(2, 2.0),
+                    // kind 5 at priority 10
+                    cst(3, 5.0),
+                    cst(4, 50.0),
+                    cst(5, 10.0),
+                    put_at(1, 2, 3, 4, 5),
+                    // kind 6 at priority 1 (earlier)
+                    cst(6, 6.0),
+                    cst(7, 60.0),
+                    cst(8, 1.0),
+                    put_at(1, 2, 6, 7, 8),
+                    cal(9, Opcode::NextEventKind),
+                    cal(10, Opcode::NextEventPriority),
+                    cal(11, Opcode::PopEvent),
+                    cal(12, Opcode::NextEventKind),
+                    cal(13, Opcode::PopEvent),
+                    wr(9),
+                    wr(10),
+                    wr(11),
+                    wr(12),
+                    wr(13),
+                    ret(),
+                ],
+            }],
+        };
+        assert!(module.validate(false).is_ok());
+        #[derive(Default)]
+        struct Track {
+            writes: Vec<u64>,
+        }
+        impl EirRuntime for Track {
+            fn read_field(&self, _t: ComponentRef) -> Result<u64> {
+                Ok(0)
+            }
+            fn write_field(&mut self, _t: ComponentRef, v: u64) {
+                self.writes.push(v);
+            }
+            fn query_neighbor_count(&self, _e: u128, _r: f64) -> Result<u64> {
+                Ok(0)
+            }
+            fn query_nearest_dist(&self, _e: u128) -> Result<u64> {
+                Ok(f64::MAX.to_bits())
+            }
+            fn query_neighbor_mean(&self, _e: u128, _s: u32, _r: f64) -> Result<f64> {
+                Ok(0.0)
+            }
+            fn query_nearest_offset(&self, _e: u128) -> Result<(f64, f64, f64)> {
+                Ok((0.0, 0.0, 0.0))
+            }
+            fn field_laplacian(
+                &self,
+                _c: ComponentTypeId,
+                _i: f64,
+                _j: f64,
+                _w: f64,
+            ) -> Result<f64> {
+                Ok(0.0)
+            }
+        }
+        let mut rt = Track::default();
+        let mut env = ExecEnv {
+            time: 0.0,
+            step_dt: 1.0,
+            ..ExecEnv::default()
+        };
+        module
+            .interpret_with_env(&mut rt, &mut env, WorldId(1), WorldVersion(0))
+            .unwrap();
+        let got: Vec<f64> = rt.writes.iter().map(|b| f64::from_bits(*b)).collect();
+        assert_eq!(
+            got,
+            vec![6.0, 1.0, 60.0, 5.0, 50.0],
+            "priority 1 before priority 10, then each pops once"
+        );
+        assert!(env.queue.is_empty());
+    }
+
+    /// RFC-0044: `BoundsCheck(index, base, len)` yields the absolute slot
+    /// `base + index` for an in-range index and traps (detail 18) otherwise.
+    #[test]
+    fn eir_bounds_check_maps_and_traps() {
+        fn cst(id: u32, v: f64) -> Instruction {
+            Instruction {
+                opcode: Opcode::Const,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: Some(Immediate::F64(v)),
+                target: None,
+            }
+        }
+        fn bounds(id: u32, idx: u32, base: u32, len: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::BoundsCheck,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![idx, base, len],
+                constant: None,
+                target: None,
+            }
+        }
+        fn wr(v: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::WriteView,
+                result_id: 0,
+                result_type: None,
+                operands: vec![v],
+                constant: None,
+                target: Some(ComponentRef {
+                    entity: 1,
+                    component: ComponentTypeId([9; 16]),
+                    offset: 0,
+                }),
+            }
+        }
+        #[derive(Default)]
+        struct Track {
+            writes: Vec<u64>,
+        }
+        impl EirRuntime for Track {
+            fn read_field(&self, _t: ComponentRef) -> Result<u64> {
+                Ok(0)
+            }
+            fn write_field(&mut self, _t: ComponentRef, v: u64) {
+                self.writes.push(v);
+            }
+            fn query_neighbor_count(&self, _e: u128, _r: f64) -> Result<u64> {
+                Ok(0)
+            }
+            fn query_nearest_dist(&self, _e: u128) -> Result<u64> {
+                Ok(f64::MAX.to_bits())
+            }
+            fn query_neighbor_mean(&self, _e: u128, _s: u32, _r: f64) -> Result<f64> {
+                Ok(0.0)
+            }
+            fn query_nearest_offset(&self, _e: u128) -> Result<(f64, f64, f64)> {
+                Ok((0.0, 0.0, 0.0))
+            }
+            fn field_laplacian(
+                &self,
+                _c: ComponentTypeId,
+                _i: f64,
+                _j: f64,
+                _w: f64,
+            ) -> Result<f64> {
+                Ok(0.0)
+            }
+        }
+        let mk = |idx: f64| EirModule {
+            module_hash: Hash256([0; 32]),
+            schema_set_hash: Hash256([0; 32]),
+            domain_ir_hash: Hash256([0; 32]),
+            target_kind: 0,
+            functions: vec![Function {
+                id: 0,
+                effect_mask: 0,
+                argument_count: 0,
+                instructions: vec![
+                    cst(1, idx),
+                    cst(2, 2.0),
+                    cst(3, 3.0),
+                    bounds(4, 1, 2, 3),
+                    wr(4),
+                    ret(),
+                ],
+            }],
+        };
+        // In range: 2 + 1 == 3.
+        let mut rt = Track::default();
+        let mut env = ExecEnv::default();
+        mk(1.0)
+            .interpret_with_env(&mut rt, &mut env, WorldId(1), WorldVersion(0))
+            .unwrap();
+        assert_eq!(
+            rt.writes
+                .iter()
+                .map(|b| f64::from_bits(*b))
+                .collect::<Vec<_>>(),
+            vec![3.0]
+        );
+        // Out of range, negative, and fractional indices all trap (detail 18).
+        for bad in [3.0, -1.0, 0.5, f64::NAN, f64::INFINITY] {
+            let mut rt = Track::default();
+            let mut env = ExecEnv::default();
+            let e = mk(bad)
+                .interpret_with_env(&mut rt, &mut env, WorldId(1), WorldVersion(0))
+                .unwrap_err();
+            assert_eq!(e.detail, 18, "index {bad} must trap");
+        }
+    }
+
+    /// RFC-0048 slice C2: `SeizeResource`/`ReleaseResource` guard on capacity;
+    /// the busy/capacity reads reflect the execution context's resource table.
+    #[test]
+    fn eir_resource_seize_release_respects_capacity() {
+        fn cst(id: u32, v: f64) -> Instruction {
+            Instruction {
+                opcode: Opcode::Const,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: Some(Immediate::F64(v)),
+                target: None,
+            }
+        }
+        fn res(id: u32, op: Opcode, rid: u64, operand: Option<u32>) -> Instruction {
+            Instruction {
+                opcode: op,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: operand.into_iter().collect(),
+                constant: Some(Immediate::U64(rid)),
+                target: None,
+            }
+        }
+        fn wr(v: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::WriteView,
+                result_id: 0,
+                result_type: None,
+                operands: vec![v],
+                constant: None,
+                target: Some(ComponentRef {
+                    entity: 1,
+                    component: ComponentTypeId([7; 16]),
+                    offset: 0,
+                }),
+            }
+        }
+        let rid = 0x8000_0000_0000_0042;
+        let module = EirModule {
+            module_hash: Hash256([0; 32]),
+            schema_set_hash: Hash256([0; 32]),
+            domain_ir_hash: Hash256([0; 32]),
+            target_kind: 0,
+            functions: vec![Function {
+                id: 0,
+                effect_mask: 0,
+                argument_count: 0,
+                instructions: vec![
+                    cst(1, 2.0),
+                    res(2, Opcode::SeizeResource, rid, Some(1)),
+                    res(3, Opcode::SeizeResource, rid, Some(1)),
+                    res(4, Opcode::SeizeResource, rid, Some(1)),
+                    res(5, Opcode::ResourceBusy, rid, None),
+                    res(6, Opcode::ResourceCapacity, rid, None),
+                    res(7, Opcode::ReleaseResource, rid, None),
+                    res(8, Opcode::SeizeResource, rid, Some(1)),
+                    wr(2),
+                    wr(3),
+                    wr(4),
+                    wr(5),
+                    wr(6),
+                    wr(7),
+                    wr(8),
+                    ret(),
+                ],
+            }],
+        };
+        assert!(module.validate(false).is_ok());
+        #[derive(Default)]
+        struct Track {
+            writes: Vec<u64>,
+        }
+        impl EirRuntime for Track {
+            fn read_field(&self, _t: ComponentRef) -> Result<u64> {
+                Ok(0)
+            }
+            fn write_field(&mut self, _t: ComponentRef, v: u64) {
+                self.writes.push(v);
+            }
+            fn query_neighbor_count(&self, _e: u128, _r: f64) -> Result<u64> {
+                Ok(0)
+            }
+            fn query_nearest_dist(&self, _e: u128) -> Result<u64> {
+                Ok(f64::MAX.to_bits())
+            }
+            fn query_neighbor_mean(&self, _e: u128, _s: u32, _r: f64) -> Result<f64> {
+                Ok(0.0)
+            }
+            fn query_nearest_offset(&self, _e: u128) -> Result<(f64, f64, f64)> {
+                Ok((0.0, 0.0, 0.0))
+            }
+            fn field_laplacian(
+                &self,
+                _c: ComponentTypeId,
+                _i: f64,
+                _j: f64,
+                _w: f64,
+            ) -> Result<f64> {
+                Ok(0.0)
+            }
+        }
+        let mut rt = Track::default();
+        let mut env = ExecEnv::default();
+        module
+            .interpret_with_env(&mut rt, &mut env, WorldId(1), WorldVersion(0))
+            .unwrap();
+        let got: Vec<f64> = rt.writes.iter().map(|b| f64::from_bits(*b)).collect();
+        assert_eq!(
+            got,
+            vec![1.0, 1.0, 0.0, 2.0, 2.0, 1.0, 1.0],
+            "two seizes succeed, the third is refused, then a release frees one"
+        );
+        assert_eq!(env.resources.get(&rid).map(|r| r.busy), Some(2));
+    }
+
+    /// RFC-0048 slice B: equal-time entries pop in insertion order (`seq`).
+    #[test]
+    fn eir_calendar_equal_time_ties_use_insertion_order() {
+        fn cst(id: u32, v: f64) -> Instruction {
+            Instruction {
+                opcode: Opcode::Const,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: Some(Immediate::F64(v)),
+                target: None,
+            }
+        }
+        fn put(gate: u32, delay: u32, kind: u32, payload: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::ScheduleEvent,
+                result_id: 0,
+                result_type: None,
+                operands: vec![gate, delay, kind, payload],
+                constant: None,
+                target: None,
+            }
+        }
+        fn pop(id: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::PopEvent,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: None,
+                target: None,
+            }
+        }
+        fn wr(v: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::WriteView,
+                result_id: 0,
+                result_type: None,
+                operands: vec![v],
+                constant: None,
+                target: Some(ComponentRef {
+                    entity: 1,
+                    component: ComponentTypeId([7; 16]),
+                    offset: 0,
+                }),
+            }
+        }
+        let module = EirModule {
+            module_hash: Hash256([0; 32]),
+            schema_set_hash: Hash256([0; 32]),
+            domain_ir_hash: Hash256([0; 32]),
+            target_kind: 0,
+            functions: vec![Function {
+                id: 0,
+                effect_mask: 0,
+                argument_count: 0,
+                instructions: vec![
+                    cst(1, 1.0),
+                    cst(2, 2.0),
+                    cst(3, 5.0),
+                    cst(4, 50.0),
+                    put(1, 2, 3, 4),
+                    cst(5, 6.0),
+                    cst(6, 60.0),
+                    put(1, 2, 5, 6),
+                    pop(7),
+                    pop(8),
+                    wr(7),
+                    wr(8),
+                    ret(),
+                ],
+            }],
+        };
+        assert!(module.validate(false).is_ok());
+        #[derive(Default)]
+        struct Track {
+            writes: Vec<u64>,
+        }
+        impl EirRuntime for Track {
+            fn read_field(&self, _t: ComponentRef) -> Result<u64> {
+                Ok(0)
+            }
+            fn write_field(&mut self, _t: ComponentRef, v: u64) {
+                self.writes.push(v);
+            }
+            fn query_neighbor_count(&self, _e: u128, _r: f64) -> Result<u64> {
+                Ok(0)
+            }
+            fn query_nearest_dist(&self, _e: u128) -> Result<u64> {
+                Ok(f64::MAX.to_bits())
+            }
+            fn query_neighbor_mean(&self, _e: u128, _s: u32, _r: f64) -> Result<f64> {
+                Ok(0.0)
+            }
+            fn query_nearest_offset(&self, _e: u128) -> Result<(f64, f64, f64)> {
+                Ok((0.0, 0.0, 0.0))
+            }
+            fn field_laplacian(
+                &self,
+                _c: ComponentTypeId,
+                _i: f64,
+                _j: f64,
+                _w: f64,
+            ) -> Result<f64> {
+                Ok(0.0)
+            }
+        }
+        let mut rt = Track::default();
+        let mut env = ExecEnv {
+            time: 0.0,
+            step_dt: 1.0,
+            ..ExecEnv::default()
+        };
+        module
+            .interpret_with_env(&mut rt, &mut env, WorldId(1), WorldVersion(0))
+            .unwrap();
+        let got: Vec<f64> = rt.writes.iter().map(|b| f64::from_bits(*b)).collect();
+        assert_eq!(
+            got,
+            vec![50.0, 60.0],
+            "the first-inserted tied entry pops first"
+        );
+        assert!(env.queue.is_empty());
     }
 
     #[test]

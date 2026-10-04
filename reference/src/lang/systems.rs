@@ -386,7 +386,7 @@ impl EirSystem for UpdateSystem {
             // runtime-index write; the index may use slots and locals. A named
             // array index resolves its base against *this* entity's layout.
             for (idx, expr) in &self.dyn_rules {
-                let Some(idx_expr) = idx.resolve(&sn) else {
+                let Some(ri) = super::lower::lower_dyn_index(idx, &ctx, &mut next_id, out) else {
                     continue;
                 };
                 let expr_reg = super::lower::lower_expr_f64(expr, &ctx, &mut next_id, out);
@@ -414,7 +414,6 @@ impl EirSystem for UpdateSystem {
                     Some(g) => binary(crate::eir::Opcode::Mul, scaled, g, &mut next_id, out),
                     None => scaled,
                 };
-                let ri = lower_expr_f64(&idx_expr, &ctx, &mut next_id, out);
                 let cur = next_id;
                 next_id += 1;
                 out.push(crate::physics_eir::instr(
@@ -491,10 +490,9 @@ impl EirSystem for UpdateSystem {
                 ));
             }
             for (idx, expr) in &self.dyn_assigns {
-                let Some(idx_expr) = idx.resolve(&sn) else {
+                let Some(ri) = super::lower::lower_dyn_index(idx, &ctx, &mut next_id, out) else {
                     continue;
                 };
-                let ri = lower_expr_f64(&idx_expr, &ctx, &mut next_id, out);
                 let val = super::lower::lower_expr_f64(expr, &ctx, &mut next_id, out);
                 let val = match gate_reg {
                     Some(g) => {

@@ -6,9 +6,14 @@ named array type. Shipped surface (this build):
 either order; an entity may declare several `array` fields);
 `name[j]` read (constant index → static slot; runtime index → `ReadSlotDyn`);
 `name[j] = expr`, `name[j] += expr`, and `inte name[j] = rate` writes;
-constant indices are bounds-checked at compile time (detail 52) and an unknown
-array name is detail 109 — both fail loudly instead of silently reading 0.0.
-`vecN` and `s[i]` are unchanged. A `for` bound may be `len(name)` — the
+constant indices are bounds-checked at compile time (detail 52) and a
+**runtime** index (`name[k]` for non-constant `k`) is bound-checked at
+execution time by the `BoundsCheck` EIR opcode: a non-finite, fractional, or
+out-of-range index is a load-class trap (detail 18) instead of a silent read or
+write of an arbitrary State slot. An unknown array name is detail 109 — all
+fail loudly instead of silently reading 0.0.
+`vecN` and `s[i]` are unchanged (`s[i]` has no declared length and stays
+unchecked, exactly as before). A `for` bound may be `len(name)` — the
 declared length of a named array, a compile-time integer (`for j in
 0..len(samples)`); an unknown array name is detail 109. Conformance:
 `pwe-conformance` "RFC-0044 typed arrays (static + runtime index + len bound,
@@ -20,13 +25,17 @@ cross-backend)"; tests
 `typed_array_constant_index_out_of_range_is_rejected`,
 `typed_array_initializer_arity_is_checked`, `typed_array_fields_compose_and_allow_several_per_entity`,
 `typed_array_dynamic_write_lands_on_the_target_layout`,
-`typed_array_unknown_array_in_ode_rule_is_rejected`.
+`typed_array_unknown_array_in_ode_rule_is_rejected`,
+`typed_array_runtime_index_out_of_range_traps`,
+`array_reductions_fold_named_arrays`, `array_reduction_unknown_array_is_detail_109`,
+`array_dot_needs_two_array_names`; EIR:
+`eir::tests::eir_bounds_check_maps_and_traps`.
 
-Deferred (future, see **Deferred** below): dynamic-index bounds checks and
-array element unit annotations. The `EntityDecl.arrays` map records each
-array's length, so these are additive. (`len(name)` in a `for` bound is
-implemented; as a general scalar expression it is not — it resolves at parse
-time against the world's array layout, so it is only meaningful as a bound.)
+Deferred (future, see **Deferred** below): array element unit annotations and a
+general scalar `len(name)`. The `EntityDecl.arrays` map records each array's
+length, so these are additive. (`len(name)` in a `for` bound is implemented; as
+a general scalar expression it is not — it resolves at parse time against the
+world's array layout, so it is only meaningful as a bound.)
 
 ## Motivation
 
@@ -55,12 +64,20 @@ the name (`EntityDecl.arrays: BTreeMap<String, usize>`), which `vecN` does not.
 
 - `name[j]` — read. If `j` is an integer constant in `[0, N)` it lowers to the
   slot `name.j` directly (compile-time); otherwise it lowers to a
-  runtime-indexed read `s[base + j]` (bounds are the caller's responsibility and
-  documented; a future revision may add a checked variant).
+  `BoundsCheck(j, base, N)` followed by a runtime-indexed read
+  `ReadSlotDyn(check(j))`, where `BoundsCheck` yields the absolute slot
+  `base + j` or traps (detail 18).
 - `name[j] = expr` — write, same rule (constant index → static slot write;
-  runtime index → `WriteSlotDyn`).
-- `len(name)` — **deferred** (see below): a compile-time integer literal `N`,
-  usable in `for` bounds.
+  runtime index → the same `BoundsCheck` then `WriteSlotDyn`).
+- `len(name)` — a compile-time integer literal `N`, usable in `for` bounds
+  (as a general scalar expression it is deferred; see below).
+- **Array reductions** — `sum(a)`, `mean(a)`, `norm(a)` (Euclidean),
+  `asum(a)` (`Σ|aᵢ|`), `prod(a)`, `min_of(a)`, `max_of(a)`, and the two-array
+  `dot(a, b)`. The argument is a literal array name (its length is
+  compile-time), so each unrolls to native EIR over the elements — **no new
+  opcode**, cross-backend, and a kernel primitive for statistics / DSP /
+  linear-algebra rules. An unknown name is detail 109; `dot` of unequal lengths
+  (or a non-name argument) is rejected (52 / 59).
 
 ### Lowering
 
@@ -70,26 +87,40 @@ compile-time check re-derives the length from that run, which equals the `N`
 recorded in `EntityDecl.arrays`):
 - constant index → the static slot `name.j` (0≤j<N checked at compile time,
   detail 52);
-- dynamic index → `base + index` (reusing `ReadSlotDyn` / `WriteSlotDyn`),
-  with `base` taken from the layout of the entity the system targets.
+- dynamic index → `BoundsCheck(index, base, N)` then `ReadSlotDyn` /
+  `WriteSlotDyn` on the checked absolute slot, with `base`/`N` taken from the
+  layout of the entity the system targets.
+
+`BoundsCheck = 252` (operands `index, base, len`) is the RFC-0021 load-class
+check: it traps (detail 18) when `index` is not a finite integer in `[0, len)`,
+else yields `base + index`. It is interpreter-only today (not in
+`native.rs::eligible`), so array programs run on the interpreter while the
+`step_cross` cross-check treats the interpreter as the reference.
 
 ### Diagnostics
 
 - constant index out of range → detail 52 (slot index out of range);
+- runtime index out of range / fractional / non-finite → detail 18 (load-class
+  trap, `BoundsCheck`);
 - unknown array name (no `name.0 … name.k` run on the entity) → detail 109.
 
 ## Validation
 
 - Cross-backend (`step_cross`) equality for `name[j]` static and dynamic forms.
 - Diagnostics for out-of-range constant indices and unknown array names.
-- Conformance case exercising arrays on both backends.
+- Runtime out-of-range / fractional indices trap (detail 18), proving no silent
+  read/write of an arbitrary State slot.
+- Conformance case exercising an in-range dynamic array read/write on both
+  backends; `lang::tests` covers the OOB trap (a trap aborts the step, so it is
+  not a cross-backend success case).
 
 ## Deferred
 
 Specified here but **not** part of this revision; `EntityDecl.arrays` already
 records the length, so each item is additive:
 
-- Bounds checks on **runtime** indices (today unchecked, exactly like `s[i]`).
+- Bounds checks on a raw runtime `s[i]` index (`s[i]` has no declared length, so
+  it stays unchecked, exactly as before).
 - Per-element unit annotations.
 - `len(name)` outside a `for` bound (a general scalar expression).
 

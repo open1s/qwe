@@ -2205,6 +2205,7 @@ pub(crate) fn merge_modules(
     let mut entity_seen: BTreeMap<String, String> = Default::default();
     let mut field_seen: BTreeMap<String, String> = Default::default();
     let mut channel_seen: BTreeMap<String, String> = Default::default();
+    let mut resource_seen: BTreeMap<String, String> = Default::default();
     let mut gravity_set = false;
     for m in &modules {
         let q = |n: &str| -> String {
@@ -2286,6 +2287,23 @@ pub(crate) fn merge_modules(
             }
             channel_seen.insert(c.name.clone(), who.clone());
             model.channels.push(c.clone());
+        }
+        // RFC-0048 slice C2: resources merge by (qualified) name.
+        for r in &m.parsed.model.resources {
+            let name = q(&r.name);
+            if resource_seen.contains_key(&name) {
+                return Err(error_at(
+                    Status::Invalid,
+                    76,
+                    0,
+                    format!("resource `{name}` defined twice"),
+                ));
+            }
+            resource_seen.insert(name.clone(), who.clone());
+            model.resources.push(crate::dsl::ResourceDecl {
+                name,
+                capacity: r.capacity,
+            });
         }
         for f in &m.parsed.model.fields {
             if field_seen.contains_key(&f.name) {
@@ -3133,7 +3151,50 @@ fn check_array_index(
             check_array_index(a, state_names_by_id, sys_off)?;
             check_array_index(b, state_names_by_id, sys_off)
         }
-        Expr::Call(_, args) => {
+        Expr::Call(name, args) => {
+            // RFC-0044 follow-up: an array reduction (`sum(v)`, `dot(a, b)`, …)
+            // names a whole array; an unknown name is detail 109 and a `dot`
+            // length mismatch is detail 52, so the program fails loudly instead
+            // of lowering to a silent 0.
+            let reduction = matches!(
+                *name,
+                "sum" | "mean" | "norm" | "asum" | "prod" | "min_of" | "max_of" | "dot"
+            );
+            if reduction {
+                let lens: Vec<usize> = args
+                    .iter()
+                    .filter_map(|a| match a {
+                        Expr::Name(n) => Some(array_len_in_layouts(n, state_names_by_id)),
+                        _ => None,
+                    })
+                    .collect();
+                // Any non-name argument (or a name that is no array) is caught
+                // by the arity check (detail 59); here we only validate names
+                // that *could* be arrays.
+                for a in args {
+                    if let Expr::Name(n) = a {
+                        if array_len_in_layouts(n, state_names_by_id) == 0 {
+                            return Err(error_at(
+                                Status::Invalid,
+                                109,
+                                sys_off,
+                                format!("unknown array `{n}` in `{name}(…)`"),
+                            ));
+                        }
+                    }
+                }
+                if *name == "dot" && lens.len() == 2 && lens[0] != lens[1] {
+                    return Err(error_at(
+                        Status::Invalid,
+                        52,
+                        sys_off,
+                        format!(
+                            "`dot` needs equal array lengths ({} vs {})",
+                            lens[0], lens[1]
+                        ),
+                    ));
+                }
+            }
             for a in args {
                 check_array_index(a, state_names_by_id, sys_off)?;
             }
@@ -3141,6 +3202,28 @@ fn check_array_index(
         }
         _ => Ok(()),
     }
+}
+
+/// The length of array `name` on the layout that declares it (`0` when no
+/// layout does). Used by the array-reduction checks.
+fn array_len_in_layouts(
+    name: &str,
+    state_names_by_id: &std::collections::BTreeMap<u128, std::collections::BTreeMap<String, usize>>,
+) -> usize {
+    state_names_by_id
+        .values()
+        .filter_map(|m| {
+            if !m.contains_key(&format!("{name}.0")) {
+                return None;
+            }
+            let mut len = 1usize;
+            while m.contains_key(&format!("{name}.{len}")) {
+                len += 1;
+            }
+            Some(len)
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// RFC-0044: runs `check_array_index` over every expression of a `let`/loop
@@ -3187,17 +3270,33 @@ fn const_index(e: &Expr) -> Option<i64> {
 /// [`crate::lang::parser::builtin_arity`]. A wrong count must be a diagnostic,
 /// not a lowering panic (lowering indexes some arguments directly).
 fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
+    // Existence/arity is resolved exactly like lowering: an unqualified name
+    // first resolves inside the call site's own namespace (so `outer(x)` in
+    // module `m` finds `m.inner`), then falls back to the global set. Keying
+    // only on the bare short name would let two modules' same-named functions
+    // collide (a 1-arg `m1.f` shadowing a 2-arg `m2.f`), so the caller's
+    // namespace is part of the lookup.
     let mut arity: std::collections::BTreeMap<String, usize> = Default::default();
     for f in &parsed.funcs {
         arity.insert(f.name.clone(), f.params.len());
-        if !f.namespace.is_empty() {
-            arity.insert(format!("{}.{}", f.namespace, f.name), f.params.len());
-        }
     }
-    fn walk(e: &Expr, arity: &std::collections::BTreeMap<String, usize>) -> Result<()> {
+    /// Resolve `name` within `ns`: try `ns.name` first, then the bare name.
+    fn lookup(
+        arity: &std::collections::BTreeMap<String, usize>,
+        ns: &str,
+        name: &str,
+    ) -> Option<usize> {
+        if !ns.is_empty() {
+            if let Some(&n) = arity.get(&format!("{ns}.{name}")) {
+                return Some(n);
+            }
+        }
+        arity.get(name).copied()
+    }
+    fn check(e: &Expr, arity: &std::collections::BTreeMap<String, usize>, ns: &str) -> Result<()> {
         match e {
             Expr::Call(name, args) => {
-                if let Some(&n) = arity.get(*name) {
+                if let Some(n) = lookup(arity, ns, name) {
                     if args.len() != n {
                         return Err(error_at(
                             Status::Invalid,
@@ -3215,6 +3314,27 @@ fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
                             format!("`{name}` expects {n} argument(s), got {}", args.len()),
                         ));
                     }
+                    // RFC-0044 follow-up: a reduction's arguments must be array
+                    // *names* (never expressions), or lowering would have to
+                    // fall back silently.
+                    let reduction_shape_ok = match *name {
+                        "dot" => {
+                            matches!(args.first(), Some(Expr::Name(_)))
+                                && matches!(args.get(1), Some(Expr::Name(_)))
+                        }
+                        "sum" | "mean" | "norm" | "asum" | "prod" | "min_of" | "max_of" => {
+                            matches!(args.first(), Some(Expr::Name(_)))
+                        }
+                        _ => true,
+                    };
+                    if !reduction_shape_ok {
+                        return Err(error_at(
+                            Status::Invalid,
+                            59,
+                            0,
+                            format!("`{name}` expects array name(s), e.g. `{name}(a, b)`"),
+                        ));
+                    }
                 } else if !crate::lang::parser::is_builtin_call(name) {
                     return Err(error_at(
                         Status::Invalid,
@@ -3226,11 +3346,11 @@ fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
                     ));
                 }
                 for a in args {
-                    walk(a, arity)?;
+                    check(a, arity, ns)?;
                 }
                 Ok(())
             }
-            Expr::SlotDyn(a) | Expr::Neg(a) | Expr::Not(a) => walk(a, arity),
+            Expr::SlotDyn(a) | Expr::Neg(a) | Expr::Not(a) => check(a, arity, ns),
             Expr::Add(a, b)
             | Expr::Sub(a, b)
             | Expr::Mul(a, b)
@@ -3239,31 +3359,32 @@ fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
             | Expr::Cmp(_, a, b)
             | Expr::And(a, b)
             | Expr::Or(a, b) => {
-                walk(a, arity)?;
-                walk(b, arity)
+                check(a, arity, ns)?;
+                check(b, arity, ns)
             }
             _ => Ok(()),
         }
     }
-    fn walk_lets(
+    fn check_lets(
         stmts: &[LetStmt],
         arity: &std::collections::BTreeMap<String, usize>,
+        ns: &str,
     ) -> Result<()> {
         for s in stmts {
             match s {
-                LetStmt::Let(_, e) => walk(e, arity)?,
-                LetStmt::LetInt(_, e) => walk(e, arity)?,
+                LetStmt::Let(_, e) => check(e, arity, ns)?,
+                LetStmt::LetInt(_, e) => check(e, arity, ns)?,
                 LetStmt::If(c, t, e) => {
-                    walk(c, arity)?;
-                    walk(t, arity)?;
+                    check(c, arity, ns)?;
+                    check(t, arity, ns)?;
                     if let Some(e) = e {
-                        walk(e, arity)?;
+                        check(e, arity, ns)?;
                     }
                 }
-                LetStmt::Repeat(_, b) | LetStmt::For(_, _, _, b) => walk_lets(b, arity)?,
+                LetStmt::Repeat(_, b) | LetStmt::For(_, _, _, b) => check_lets(b, arity, ns)?,
                 LetStmt::Break(c) | LetStmt::Continue(c) => {
                     if let Some(e) = c {
-                        walk(e, arity)?;
+                        check(e, arity, ns)?;
                     }
                 }
             }
@@ -3271,21 +3392,23 @@ fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
         Ok(())
     }
     for sys in &parsed.systems {
+        let ns = sys.namespace.as_str();
         let lets = to_let_stmts(&sys.update_stmts, sys.byte_offset)?;
-        walk_lets(&lets, &arity)?;
+        check_lets(&lets, &arity, ns)?;
         for text in sys.update.values().chain(sys.assigns.values()) {
-            walk(&parse_expr_str(text)?, &arity)?;
+            check(&parse_expr_str(text)?, &arity, ns)?;
         }
         if let Some(w) = sys.string_params.get("when") {
             if let Ok(e) = parse_expr_str(w) {
-                walk(&e, &arity)?;
+                check(&e, &arity, ns)?;
             }
         }
     }
     for f in &parsed.funcs {
-        walk(&f.body, &arity)?;
+        let ns = f.namespace.as_str();
+        check(&f.body, &arity, ns)?;
         let lets = to_let_stmts(&f.stmts, 0)?;
-        walk_lets(&lets, &arity)?;
+        check_lets(&lets, &arity, ns)?;
     }
     Ok(())
 }

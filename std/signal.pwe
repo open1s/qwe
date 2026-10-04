@@ -1,0 +1,111 @@
+# std/signal — signal-processing / sampled-data primitives.
+# `import "std/signal"` then `signal.<fn>(...)`.
+#
+# These are the scalar DSP building blocks a sampled-data (Simulink/scipy.signal
+# -class) model needs: decibel conversions, first-order (one-pole) low/high-pass
+# and DC blockers, trapezoidal integration, RBJ biquad coefficients, envelope
+# followers, and small measurement helpers. They are pure functions of their
+# arguments — filter *memory* is the caller's state (ordinary named slots), so a
+# model stepped by `update` stays byte-identical across backends and needs no
+# hidden per-call-site storage. Every division is guarded, so no input traps
+# (detail 18); a zero denominator yields a finite fallback.
+world { }
+
+funcs {
+  # --- guards ---------------------------------------------------------------
+  # Heaviside step: 0 for `x < edge`, else 1.
+  sig_step_ge(edge, x) { if(x < edge, 0.0, 1.0) }
+  # Guarded `a / b`: `b <= 0` yields 0. `if` is eager, so a clamped denominator
+  # is used to stay trap-free.
+  safe_ratio(a, b) { a / max(b, 1.0e-30) * sig_step_ge(1.0e-30, b) }
+  # |x|.
+  absf(x) { max(x, 0.0 - x) }
+  # Sign of `x` as -1 / +1 (0 is treated as +1).
+  sgn_of(x) { if(x < 0.0, 0.0 - 1.0, 1.0) }
+  # Guarded `a / b` that keeps the sign of a *signed* denominator: the
+  # denominator is clamped away from zero and the quotient is zeroed when
+  # `|b|` is negligible, so no input traps (detail 18). `if` is eager, so a
+  # bare `if(b == 0, 0, a/b)` would still trap — hence the clamped form.
+  safe_div(a, b) {
+    a / (absf(b) + 1.0e-30) * sgn_of(b) * sig_step_ge(1.0e-30, absf(b))
+  }
+
+  # --- decibels -------------------------------------------------------------
+  # Amplitude ratio -> dB (20 log10), floored at -6000 dB for x == 0.
+  db(x) { 20.0 * log10(max(absf(x), 1.0e-300)) }
+  # dB -> amplitude ratio.
+  from_db(d) { pow(10.0, d / 20.0) }
+  # Power ratio -> dB (10 log10).
+  power_db(x) { 10.0 * log10(max(absf(x), 1.0e-300)) }
+
+  # --- first-order filters --------------------------------------------------
+  # One-pole smoothing coefficient for time constant `tau` and step `dt`
+  # (in (0, 1] for positive tau, dt).
+  alpha_from_tau(tau, dt) { safe_ratio(dt, tau + dt) }
+  # One-pole (exponential) low-pass: `prev` toward `sample` at rate `alpha`.
+  one_pole(prev, sample, alpha) { prev + alpha * (sample - prev) }
+  # RC low-pass coefficient for cutoff `fc` [Hz] and step `dt` [s].
+  alpha_from_fc(fc, dt) { safe_ratio(1.0, safe_ratio(1.0, 6.283185307179586 * fc) + dt) }
+  # RC low-pass (a one-pole whose coefficient comes from the cutoff).
+  lowpass_rc(prev, sample, fc, dt) { prev + alpha_from_fc(fc, dt) * (sample - prev) }
+  # One-pole high-pass (complement of the low-pass): `alpha` in [0,1].
+  highpass_rc(prev_out, sample, prev_in, alpha) { alpha * (prev_out + sample - prev_in) }
+  # DC blocker: removes the mean while passing the band above `r` (r ~ 0.995).
+  dc_block(prev_in, prev_out, sample, r) { sample - prev_in + r * prev_out }
+
+  # --- integrators / differentiators ----------------------------------------
+  # Trapezoidal integration: `acc` plus the area of the last trapezoid.
+  integrate_trap(acc, x, x_prev, dt) { acc + 0.5 * (x + x_prev) * dt }
+  # Backward-difference derivative (0 when dt <= 0).
+  derivative(x, x_prev, dt) { safe_ratio(x - x_prev, dt) }
+
+  # --- biquads (RBJ audio-EQ cookbook, normalized by a0) --------------------
+  # Low-pass coefficients `(b0, b1, b2, a1, a2)` at cutoff `fc`, quality `q`,
+  # sample rate `fs`. The caller keeps `x1 x2 y1 y2` and evaluates `biquad`.
+  w0(fc, fs) { 6.283185307179586 * safe_ratio(fc, fs) }
+  bq_alpha(fc, q, fs) { safe_div(sin(w0(fc, fs)), 2.0 * q) }
+  bq_a0(fc, q, fs) { 1.0 + bq_alpha(fc, q, fs) }
+  lowpass_b0(fc, q, fs) { 0.5 * (1.0 - cos(w0(fc, fs))) / bq_a0(fc, q, fs) }
+  lowpass_b1(fc, q, fs) { (1.0 - cos(w0(fc, fs))) / bq_a0(fc, q, fs) }
+  lowpass_b2(fc, q, fs) { lowpass_b0(fc, q, fs) }
+  lowpass_a1(fc, q, fs) { (0.0 - 2.0 * cos(w0(fc, fs))) / bq_a0(fc, q, fs) }
+  lowpass_a2(fc, q, fs) { (1.0 - bq_alpha(fc, q, fs)) / bq_a0(fc, q, fs) }
+  # Direct-form-I difference equation:
+  # y = b0 x + b1 x1 + b2 x2 - a1 y1 - a2 y2.
+  biquad(b0, b1, b2, a1, a2, x, x1, x2, y1, y2) {
+    b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+  }
+  # Biquad steady-state (DC) gain = (b0+b1+b2) / (1+a1+a2).
+  biquad_dc_gain(b0, b1, b2, a1, a2) { safe_div(b0 + b1 + b2, 1.0 + a1 + a2) }
+
+  # --- envelope / measurement ----------------------------------------------
+  # Attack/release envelope follower (`attack`/`release` in [0,1] per step).
+  envelope(env, x, attack, release) {
+    if(x > env, env + attack * (x - env), env + release * (x - env))
+  }
+  # RMS from a running sum of squares and a sample count.
+  rms(sum_sq, n) { sqrt(max(0.0, safe_ratio(sum_sq, n))) }
+  # Crest factor = peak / rms (0 when rms == 0).
+  crest_factor(peak, rms_value) { safe_div(peak, rms_value) }
+  # Sample-to-sample zero-crossing rate over `n` samples (0 when n == 0).
+  zcr(crossings, n) { safe_ratio(crossings, n) }
+  # Midpoint of a symmetric dead band (helper for hysteresis thresholds).
+  midband(lo, hi) { 0.5 * (lo + hi) }
+
+  # --- tone / pitch ---------------------------------------------------------
+  # MIDI note number -> frequency [Hz] (A4 = 69 = 440 Hz).
+  midi_to_hz(note) { 440.0 * pow(2.0, (note - 69.0) / 12.0) }
+  # Frequency [Hz] -> MIDI note number.
+  hz_to_midi(hz) { 69.0 + 12.0 * log2(max(hz, 1.0e-12) / 440.0) }
+  # Phase increment per step for a sine of frequency `freq` [Hz], step `dt` [s].
+  phase_inc(freq, dt) { freq * dt }
+  # Unit sine from a phase in turns (wraps).
+  osc_sin(turns) { sin(6.283185307179586 * turns) }
+
+  # --- nonlinear / quantizer -----------------------------------------------
+  # Soft clip with drive `k > 0`, normalized so |y| <= 1 (the identity is not
+  # recovered at k == 0; pass a small positive `k` for near-linear behavior).
+  soft_clip(x, k) { safe_div(tanh(k * x), tanh(k)) }
+  # Mid-tread quantizer: snap to the nearest multiple of `step`.
+  quantize(x, step) { floor(x / step + 0.5) * step }
+}

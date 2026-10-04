@@ -123,6 +123,7 @@ conformance 18/18), but probe-verified semantic/crash findings filed as
 
 | [0094](https://github.com/open1s/qwe/issues/94) | Medium | `ExecEnv.hist`/`cross_time` keyed by a per-function `HistRead` count with no function namespace: `deriv` in two systems silently corrupts each other (s=-7 vs 1, t=10 vs 3, matches shared-key model); `--check` passes (both backends err identically); pre-existing on origin/main, RFC-0048 widens it to `cross_time` and claims false "per-entity" sites | lower.rs:88/147 (site = count of HistReads in own out), eir.rs hist/cross_time global maps |
 | [0095](https://github.com/open1s/qwe/issues/95) | Medium | `cross(deriv(x))` computes its hist site **before** lowering the argument (lower.rs:147→148) so the nested deriv shares the site: over constant deriv (+1/step) unrolled `cross(v)` never fires, nested form fires at steps 4 and 7 in 8; `--check` passes; reverse nesting `deriv(cross(x))` fine; RFC-0048 WIP, its "never collide" claim false for nesting | lower.rs:147-148 vs deriv's 78→88 ordering, RFC-0048 |
+| [0096](https://github.com/open1s/qwe/issues/96) | Medium | bare sibling `funcs` calls weren't arity-checked (only the qualified `ns.name` and the merged `f.name` were registered), so `std/des`'s internal `safe_ratio(...)` failed with detail 59; a naive global short-name fix then collided two modules' same-named functions with different arities | compile.rs `check_call_arities`: register the short name **per call-site namespace**, not globally |
 
 ## Suggested order
 
@@ -1784,5 +1785,183 @@ reviewed the WIP directly as the current code; filed 0094 and 0095):
    corrected when the slice lands.
 7. Gates: no pushes this pass except this record. Open after pass 50:
    **#94, #95**.
+
+### Pass 51 — #94 and #95 fixed (RFC-0048 Slice A follow-up)
+
+Both filed issues are **fixed** and covered by regression tests:
+
+- **#94**: `PhysicsProgram::build_with_guards` now rewrites each function's
+  history-site constants to `(function_id << 32) | site`
+  (`namespace_history_sites`), so two systems that use `deriv`/`cross` no
+  longer alias a key. Test:
+  `lang::tests::history_sites_are_namespaced_per_function`.
+- **#95**: `lower_zero_crossing` lowers its argument *before* taking its site
+  (matching `deriv`), so `cross(deriv(x))` no longer shares the nested site.
+  Test: `lang::tests::nested_history_operators_do_not_share_a_site`.
+- RFC-0048's history-site paragraph was corrected (it previously claimed
+  per-entity sites and that `step_cross` compared the history maps; it now
+  documents the `(function_id, site)` key). `step_cross` **does** now compare
+  `hist`/`cross_time` in addition to writes/events/queue/overlays.
+
+**Open after pass 51: none.**
+
+### Pass 52 — RFC-0048 Slice B (event calendar as a first-class value)
+
+Landed the calendar read/pop surface requested by RFC-0048 Slice B. No new
+issues filed; the work surfaced and fixed one spec-level gap in the existing
+queue:
+
+- **Explicit `(time, seq)` ordering.** `ScheduledEvent` and `EmittedEvent` now
+  carry a monotonic `seq` assigned by `ExecEnv.next_seq`; `ScheduleEvent` inserts
+  at `partition_point(|e| (e.time, e.seq) <= (time, seq))`, so equal-time ties
+  are ordered by **insertion**, never by a float comparison (the RFC's
+  non-negotiable ordering rule, previously only incidental via stable insert).
+- **Language surface** (interpreter-oracle, cross-backend): `event_count`,
+  `next_event_time`, `next_event_kind`, `next_event_payload`, `pop_event`,
+  `events_seen(kind)` → opcodes `EventCount = 240` … `EventSeenCount = 245`.
+  `pop_event` mutates the pending calendar; the rest are pure reads.
+- **Note (not an issue):** `update` assignment lowering is ordered by LHS name,
+  not source order; the calendar tests make that explicit rather than relying on
+  statement order. This is pre-existing and unchanged.
+- Evidence: conformance `"RFC-0048 event calendar (…, cross-backend)"`;
+  `lang::tests::rfc_0048_calendar_reads_and_pop_the_pending_queue`,
+  `…equal_time_ties_use_insertion_order`,
+  `…events_seen_counts_delivered_events_by_kind`,
+  `…empty_calendar_reads_are_finite_sentinels`;
+  `eir::tests::eir_calendar_reads_and_pop_in_time_seq_order`,
+  `…equal_time_ties_use_insertion_order`.
+
+**Open after pass 52: none.**
+
+### Pass 53 — RFC-0048 Slices C1/C2 + the bare-sibling resolution fix (#96)
+
+Landed the queue-discipline + statistics (C1) and resource (C2) increments, and
+fixed one latent resolution defect the C2 work exposed:
+
+- **#96 (Medium, fixed) — bare sibling `funcs` calls were arity-checked by a
+  global short name.** A module function may call its sibling by bare name
+  (`outer(x) { inner(x) }`), but `check_call_arities` registered only `f.name`
+  and `f.namespace + "." + f.name` — never the short name — so `std/des`'s
+  internal `safe_ratio` call was rejected with detail 59. The first fix (register
+  the short name globally) over-corrected: two imported modules that each define
+  `f` with **different arities** then collided (`m1.f/1` shadowing `m2.f/2` →
+  `error 59`). The correct fix resolves the name **within the call site's own
+  namespace first**, then falls back to the global set, exactly like lowering
+  does. Regression:
+  `lang::tests::module_bare_sibling_calls_resolve_per_namespace` (both the
+  no-collision and the still-fails-on-real-mismatch directions). Evidence:
+  `std/des` now compiles as a funcs-heavy module.
+- **C2 — resources.** `resource r { capacity = n }` plus
+  `seize(r, cap)` / `release(r)` / `resource_busy(r)` / `resource_capacity(r)`
+  → opcodes `SeizeResource = 248` … `ResourceCapacity = 251`. The busy/capacity
+  live in `ExecEnv.resources` (execution-context state, FNV-1a name key, exactly
+  like the calendar), a non-blocking seize returns 1.0/0.0 on the capacity gate,
+  the first seize fixes the capacity, and release saturates at 0.
+  `step_cross` compares the whole table, so interpreter ≡ JIT holds.
+- **Note (not an issue):** `update` assignment lowering is ordered by LHS name,
+  not source order. The C2 conformance fixture names its slots so the intended
+  order matches; this is pre-existing (Pass 52) and unchanged.
+- Evidence: conformance `"RFC-0048 resources (seize/release/resource_busy,
+  cross-backend)"`; `lang::tests::rfc_0048_resource_seize_release_respects_capacity`,
+  `…resource_capacity_is_fixed_and_release_saturates`,
+  `eir::tests::eir_resource_seize_release_respects_capacity`;
+  `lang::tests::module_bare_sibling_calls_resolve_per_namespace`.
+
+### Pass 54 — RFC-0044 deferred item: runtime array-index bounds checks
+
+Closed the last open item in RFC-0044's *Deferred* list (bounds checks on
+runtime indices). `name[k]` for non-constant `k` was previously unchecked: an
+out-of-range index silently read an arbitrary State slot, or wrote one, or
+produced a huge component-ref offset — a real hole for library-sized numeric
+kernels (a probe with index 4 on a length-2 array read garbage).
+
+- **New opcode `BoundsCheck = 252`** (operands `index, base, len`; result
+  `base + index`). It traps (detail 18, the RFC-0021 load-class trap) when the
+  index is not a finite integer in `[0, len)`. Interpreter-only (not in
+  `native.rs::eligible`), so array programs stay on the interpreter and
+  `step_cross` remains the reference equivalence check.
+- **Lowering.** `Expr::Index`'s runtime branch emits `BoundsCheck` then reads
+  the checked absolute slot; the `dyn_rules` / `dyn_assigns` runtime **writes**
+  use the same check via `lower::lower_dyn_index`. A raw `s[i]` has no declared
+  length and stays unchecked, as before.
+- **No silent fallback.** An OOB/fractional/non-finite index is a `Result`
+  error, not a panic and not a 0.0 read.
+- Evidence: `lang::tests::typed_array_runtime_index_out_of_range_traps` (read,
+  write, and fractional), `eir::tests::eir_bounds_check_maps_and_traps`
+  (in-range mapping + trap set), codec round-trip for `BoundsCheck`, conformance
+  `"RFC-0044 array runtime index bounds-checked (cross-backend)"`.
+- RFC-0044 status updated: the bounds-check item moves out of *Deferred*; only
+  per-element units and a general scalar `len(name)` remain.
+
+### Pass 55 — RFC-0047 step 5: the signal/DSP library (`std/signal`)
+
+Closed the **Signal / DSP** row of the RFC-0047 capability matrix (was
+**Missing**) with a first domain-library slice. `std/signal.pwe` is a pure,
+trap-free scalar DSP library over *caller* state (no hidden per-call-site
+storage), so a model stepped by `update` stays byte-identical across backends:
+
+- Decibels (`db`/`from_db`/`power_db`); one-pole low/high-pass, DC blocker, and
+  an RC-cutoff coefficient (`alpha_from_fc`); trapezoidal integration;
+  RBJ audio-EQ **biquad** coefficients + the direct-form-I difference equation
+  (`lowpass_b0…a2`, `biquad`, `biquad_dc_gain`); envelope follower, RMS, crest
+  factor, zero-crossing rate; MIDI `<->` Hz and a sine phase oscillator;
+  `soft_clip` and a mid-tread quantizer.
+- Every division is guarded (`safe_ratio`/`safe_div` with a sign-preserving
+  clamped denominator), so **no input traps** (detail 18) — a zero denominator
+  yields a finite fallback, matching `std/des`.
+- Evidence: conformance `"RFC-0047 signal/DSP library (biquad DC gain + one-pole,
+  cross-backend)"`; `stdlib.rs::signal_module_computes_dsp_primitives` (16-value
+  cross-module batch) and `stdlib.rs::signal_biquad_settles_to_dc_gain` (the
+  direct-form-I recurrence settles to unit DC gain and stays finite).
+- RFC-0047 matrix updated: Signal/DSP → **Partial** (filters landed; `fft` and
+  dense linear algebra need an array-parameter call convention and remain open).
+
+### Pass 56 — RFC-0047 step 6: the molecular-dynamics library (`std/md`)
+
+The Molecular-dynamics row of the RFC-0047 matrix listed "no PBC, no
+thermostat/barostat" as the gap. `std/md.pwe` supplies those **around** the
+force field as a pure, trap-free library over caller state:
+
+- **PBC**: `wrap`, `wrap_signed` (centered cell), `min_image` (1D), and
+  `min_image_dist` / `min_image_dist2` (3D, cubic box).
+- **Lattice / density**: `number_density`, `box_from_density`, and
+  `lattice_sc/bcc/fcc` + `nn_dist_sc/bcc/fcc`.
+- **Temperature**: `degrees_of_freedom` (with `remove_com`), `temperature`,
+  `kinetic_energy`, `temperature_from_velocity`.
+- **Berendsen thermostat/barostat**: `berendsen_lambda`, `tau_from_steps`,
+  `heat_to_apply`, `berendsen_baro_lambda`, `compressibility`.
+- **Integrator / analysis**: `half_kick`, `drift`, `msd`, `diffusion`,
+  `rdf`/`rdf_bin`, reduced-unit conversions.
+- A latent trap surfaced and was fixed while writing the tests: `diffusion`'s
+  time parameter was named `t`, which the language reserves for the simulation
+  clock (detail 67), so the rule computed 0; renamed to `elapsed`.
+- Evidence: conformance `"RFC-0047 molecular-dynamics library (PBC minimum image
+  + Verlet, cross-backend)"`;
+  `stdlib.rs::md_module_computes_pbc_and_thermostat` (16-value batch).
+- RFC-0047 matrix updated: Molecular dynamics → Partial with `std/md` noted.
+
+### Pass 57 — RFC-0044 follow-up: array reductions (`sum`/`mean`/`norm`/`dot`/…)
+
+The numeric-kernel gap listed in RFC-0047 step 5 (no dense-linear-algebra /
+statistics primitives) starts here: reductions over a named array lower to
+**native EIR** by unrolling over the compile-time length — no new opcode, so
+they are cross-backend and every backend keeps working unchanged.
+
+- `sum(a) mean(a) norm(a) asum(a) prod(a) min_of(a) max_of(a)` and the
+  two-array `dot(a, b)`.
+- The argument is a literal array name (like `len(name)`); an unknown name is
+  detail 109, a `dot` length mismatch is detail 52, and a non-name argument is
+  the arity error 59. `is_builtin_call`/`builtin_arity`/`build_call` validate at
+  parse; `check_array_index` re-validates the names against real layouts so the
+  error is source-positioned.
+- A latent slot-span bug surfaced while wiring this: `expr_slot_span` reserved
+  only the array's *base* slot for a reduction's name argument, so a length-3
+  array's later elements read an unbound register (EIR detail 25). Fixed by
+  reserving every element of a named array in a reduction call.
+- Evidence: conformance `"RFC-0044 array reductions (sum/mean/norm/dot/prod,
+  cross-backend)"`; `lang::tests::array_reductions_fold_named_arrays`,
+  `array_reduction_unknown_array_is_detail_109`, `array_dot_needs_two_array_names`.
+
+**Open after pass 57: none.**
 
 Local copies of the bodies live next to this file (`0001-…` … `0035-…`).
