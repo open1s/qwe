@@ -2490,6 +2490,154 @@ fn watch_flags_zero_crossing() {
     assert_eq!(flag(&rt), 0.0, "no further crossing");
 }
 
+/// RFC-0048: `cross(e)`/`rise(e)`/`fall(e)` detect a sign event on any
+/// expression using runtime-owned per-site history (no user state slot), and
+/// `last_cross(e)` reports when the crossing happened. Both backends agree
+/// byte-for-byte (`step_cross`). The watcher entity reads `@src.x`, the
+/// committed (start-of-step) value, so the write ordering inside one `update`
+/// block does not matter.
+#[test]
+fn rfc_0048_zero_crossing_operators() {
+    let src = "world { gravity=(0,0,0) \
+                     entity src { state=(x=0.0) } \
+                     entity w { state=(c=0.0,r=0.0,f=0.0,last=0.0) } } \
+                   systems { \
+                     update { on = src; dt = 1.0 x = x + 2.0 } \
+                     update { on = w; dt = 1.0 \
+                       c = cross(@src.x - 2.5) \
+                       r = rise(@src.x - 2.5) \
+                       f = fall(@src.x - 2.5) \
+                       last = last_cross(@src.x - 2.5) } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    let vals = |rt: &LangRuntime| {
+        rt.scene
+            .get(EntityId(2))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values
+            .clone()
+    };
+    // src.x is read committed: step k sees x = 2(k-1) before src's own write,
+    // so the sign change of (x - 2.5) is -0.5 -> +1.5 on step 2 (k=1, t=1).
+    rt.step_cross().unwrap();
+    assert_eq!(vals(&rt)[0], 0.0, "step 1: x=0, no crossing");
+    rt.step_cross().unwrap();
+    let v = vals(&rt);
+    assert_eq!(v[0], 1.0, "step 2: cross fires when x-2.5 changes sign");
+    assert_eq!(v[1], 1.0, "rise fires on the upward transition");
+    assert_eq!(v[2], 0.0, "fall does not fire upward");
+    assert_eq!(v[3], 1.0, "last_cross records t=1");
+    // Later steps see x = 4, 6, ... — no further crossings.
+    rt.step_cross_n(3).unwrap();
+    let v = vals(&rt);
+    assert_eq!(v[0], 0.0, "cross fires once");
+    assert_eq!(v[1], 0.0, "rise fires once");
+    assert_eq!(v[3], 1.0, "last_cross keeps the most recent crossing time");
+}
+
+/// RFC-0048: `cross` is a *strict* sign change, so an exact touch of zero is
+/// not a crossing (no chattering on a signal that lands on zero), and the first
+/// step can never fire (no history yet).
+#[test]
+fn rfc_0048_zero_crossing_is_strict_and_fires_once() {
+    let clean = "world { gravity=(0,0,0) \
+                     entity src { state=(x=-1.0) } \
+                     entity w { state=(c=0.0) } } \
+                   systems { \
+                     update { on = src; dt = 1.0 x = x + 0.75 } \
+                     update { on = w; dt = 1.0 c = cross(@src.x) } }";
+    let mut rt = LangRuntime::compile(clean).unwrap();
+    let c = |rt: &LangRuntime| {
+        rt.scene
+            .get(EntityId(2))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[0]
+    };
+    // Cross-entity read observes the same-step write: x = -0.25, 0.5, 1.25, …
+    // so the strict crossing is -0.25 -> 0.5 on step 2.
+    rt.step_cross().unwrap();
+    assert_eq!(c(&rt), 0.0, "step 1: no history");
+    rt.step_cross().unwrap();
+    assert_eq!(c(&rt), 1.0, "step 2: -0.25 -> 0.5 is a strict crossing");
+    rt.step_cross_n(2).unwrap();
+    assert_eq!(c(&rt), 0.0, "fires once");
+
+    // Landing exactly on zero is not a crossing: x = -0.5, 0.0, 0.5, … never
+    // fires under the strict rule (the signal must be nonzero on both sides).
+    let touching = "world { gravity=(0,0,0) \
+                     entity src { state=(x=-1.0) } \
+                     entity w { state=(c=0.0) } } \
+                   systems { \
+                     update { on = src; dt = 1.0 x = x + 0.5 } \
+                     update { on = w; dt = 1.0 c = cross(@src.x) } }";
+    let mut rt = LangRuntime::compile(touching).unwrap();
+    rt.step_cross_n(5).unwrap();
+    assert_eq!(c(&rt), 0.0, "an exact-zero touch is not a strict crossing");
+}
+
+/// RFC-0048: a zero-crossing expression composes with the existing `when`
+/// gate, giving event-driven reinitialization (mode switch) without a new
+/// system kind: `when = rise(e)` runs the rule's update only on the transition
+/// step.
+#[test]
+fn rfc_0048_zero_crossing_gates_when_for_reinit() {
+    let src = "world { gravity=(0,0,0) \
+                     entity src { state=(x=-1.0) } \
+                     entity w { state=(ph=0.0, k=0.0) } } \
+                   systems { \
+                     update { on = src; dt = 1.0 x = x + 0.75 } \
+                     update { on = w; dt = 1.0 ph = ph + 1.0 } \
+                     update { on = w; dt = 1.0 when = rise(@src.x) k = k + 1.0 } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    let k = |rt: &LangRuntime| {
+        rt.scene
+            .get(EntityId(2))
+            .unwrap()
+            .state
+            .as_ref()
+            .unwrap()
+            .values[1]
+    };
+    // x: -0.25, 0.5, 1.25, … — the rise is on step 2, so the gated rule fires
+    // exactly then (and never again).
+    rt.step_cross().unwrap();
+    assert_eq!(k(&rt), 0.0, "step 1: no crossing, gate closed");
+    rt.step_cross().unwrap();
+    assert_eq!(k(&rt), 1.0, "step 2: rise opens the gate exactly once");
+    rt.step_cross_n(3).unwrap();
+    assert_eq!(k(&rt), 1.0, "no further rises, no further reinit");
+}
+
+/// A builtin called with the wrong number of arguments is a clean
+/// diagnostic (detail 59), not a lowering panic — lowering indexes some
+/// arguments directly (`cross(e)`, `deriv(e)`, the casts, `vlen(x,y,z)`).
+#[test]
+fn builtin_arity_mismatch_is_a_diagnostic_not_a_panic() {
+    for call in [
+        "cross()",
+        "last_cross()",
+        "rise(1.0, 2.0)",
+        "vlen(1.0)",
+        "deriv()",
+        "at()",
+        "schedule(1.0)",
+    ] {
+        let src = format!(
+            "world {{ gravity=(0,0,0) entity e {{ state=(x=0.0) }} }} \
+             systems {{ update {{ on=e; dt=1.0 x = {call} }} }}"
+        );
+        match LangRuntime::compile(&src) {
+            Ok(_) => panic!("`{call}` should not compile"),
+            Err(e) => assert_eq!(e.detail, 59, "`{call}` should report detail 59"),
+        }
+    }
+}
+
 /// `s[i]` dynamic indexing reads and writes the State slot at a runtime
 /// index, shared by both backends (cross-checked via `step_cross`).
 #[test]

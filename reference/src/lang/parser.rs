@@ -240,6 +240,11 @@ pub(crate) fn is_builtin_call(name: &str) -> bool {
             | "hypot"
             | "inte"
             | "deriv"
+            // RFC-0048 runtime-owned zero-crossing detection.
+            | "cross"
+            | "rise"
+            | "fall"
+            | "last_cross"
             // RFC-0043 conversion casts (literal `i64(x)` / `f64(x)` lower to
             // these opcodes rather than the old floor/abs desugaring).
             | "i64"
@@ -250,6 +255,38 @@ pub(crate) fn is_builtin_call(name: &str) -> bool {
             | "__i64_to_f64"
             | "__f64_to_i64"
     )
+}
+
+/// The fixed arity of a builtin whose argument count is checked before
+/// lowering, or `None` for builtins that accept a variable count.
+///
+/// Lowering indexes some arguments directly (`cross(e)`, `deriv(e)`, the
+/// casts, `vlen(x,y,z)`), so a wrong count must be a clean diagnostic instead
+/// of a panic. Callers report detail 59, the same code user-function arity
+/// mismatches use.
+pub(crate) fn builtin_arity(name: &str) -> Option<usize> {
+    Some(match name {
+        // Zero-argument generators / queries.
+        "random" | "noise" | "active" | "nearest_dist" | "nearest_dx" | "nearest_dy"
+        | "nearest_dz" => 0,
+        // Unary operators, casts, and per-call-site history operators.
+        "sin" | "cos" | "exp" | "ln" | "sqrt" | "abs" | "floor" | "ceil" | "round" | "sign"
+        | "log10" | "log2" | "sinh" | "cosh" | "tanh" | "asin" | "acos" | "atan" | "print"
+        | "i64" | "i32" | "u64" | "u32" | "f64" | "__i64_to_f64" | "__f64_to_i64" | "inte"
+        | "deriv" | "cross" | "rise" | "fall" | "last_cross" | "neighbor_count" | "at"
+        | "last_event" => 1,
+        // Binary operators.
+        "pow" | "min" | "max" | "atan2" | "hypot" | "neighbor_mean" | "emit" => 2,
+        // Vector helpers: `vlen(x, y, z)` and the six-component
+        // `vdot(ax,ay,az,bx,by,bz)` / `vdist(...)`; plus the conditional.
+        "vlen" => 3,
+        "vdot" | "vdist" => 6,
+        "if" => 3,
+        "schedule" => 4,
+        // `fget`/`flap`/`fset` are 2D/3D (variable) and `periodic` has an
+        // optional phase, so they stay unchecked here.
+        _ => return None,
+    })
 }
 
 /// Evaluates a purely-integer constant expression with **integer** semantics

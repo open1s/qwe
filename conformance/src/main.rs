@@ -658,6 +658,47 @@ fn extensions(report: &mut Report) {
         "RFC-0043 typed int/bool values (exact integer arithmetic, cross-backend)",
         if typed_ok { Case::Pass } else { Case::Fail },
     );
+
+    // RFC-0048: runtime-owned zero-crossing detection. A bouncing mass whose
+    // velocity flips sign at the crossing of `y`; `cross`/`rise`/`fall` fire on
+    // the transition step and `last_cross` records when it happened. The
+    // operators live in EIR, and `run` steps cross-backend, so the case proves
+    // interpreter ≡ JIT for the new opcodes.
+    let crossing = r#"
+        world { gravity = (0,0,0)
+            entity src { state = (y = -1.0) }
+            entity w { state = (c = 0.0, r = 0.0, f = 0.0, last = 0.0) } }
+        systems {
+            update { on = src; dt = 1.0 y = y + 0.75 }
+            update { on = w; dt = 1.0
+                c = cross(@src.y)
+                r = rise(@src.y)
+                f = fall(@src.y)
+                last = last_cross(@src.y) } }
+    "#;
+    let crossing_ok = run(crossing, 3)
+        .map(|rt| {
+            let w = rt.scene.get(EntityId(2)).and_then(|e| e.state.as_ref());
+            let src = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+            w.map(|s| {
+                // Committed cross-entity read: y = -0.25, 0.5, 1.25 after 3
+                // steps; the crossing happened on step 2 (t=1), and it was
+                // upward, so rise fired and fall did not; by the end the flag
+                // is back to 0 but `last_cross` remembers t=1.
+                s.values.first() == Some(&0.0)
+                    && s.values.get(1) == Some(&0.0)
+                    && s.values.get(2) == Some(&0.0)
+                    && s.values.get(3) == Some(&1.0)
+            })
+            .unwrap_or(false)
+                && src.map(|s| s.values[0] == 1.25).unwrap_or(false)
+                && finite(&rt, 2)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0048 zero-crossing detection (cross/rise/fall/last_cross, cross-backend)",
+        if crossing_ok { Case::Pass } else { Case::Fail },
+    );
 }
 
 /// RFC-0045: the semantic module system — a two-module program compiles, runs

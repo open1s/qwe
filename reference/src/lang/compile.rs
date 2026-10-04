@@ -3182,9 +3182,10 @@ fn const_index(e: &Expr) -> Option<i64> {
     }
 }
 
-/// Rejects a user-`funcs` call whose argument count does not match the
-/// definition (detail 59). Builtins are checked at lowering; user functions
-/// previously were not checked at all (extra args silently ignored).
+/// Rejects a call whose argument count does not match the function or builtin
+/// (detail 59): a user `funcs` definition, or a fixed-arity builtin from
+/// [`crate::lang::parser::builtin_arity`]. A wrong count must be a diagnostic,
+/// not a lowering panic (lowering indexes some arguments directly).
 fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
     let mut arity: std::collections::BTreeMap<String, usize> = Default::default();
     for f in &parsed.funcs {
@@ -3197,6 +3198,15 @@ fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
         match e {
             Expr::Call(name, args) => {
                 if let Some(&n) = arity.get(*name) {
+                    if args.len() != n {
+                        return Err(error_at(
+                            Status::Invalid,
+                            59,
+                            0,
+                            format!("`{name}` expects {n} argument(s), got {}", args.len()),
+                        ));
+                    }
+                } else if let Some(n) = crate::lang::parser::builtin_arity(name) {
                     if args.len() != n {
                         return Err(error_at(
                             Status::Invalid,

@@ -121,6 +121,94 @@ pub(crate) fn lower_inte_deriv(
     res
 }
 
+/// RFC-0048 zero-crossing operators: `cross(e)`, `rise(e)`, `fall(e)`, and
+/// `last_cross(e)`.
+///
+/// The site's previous value and the last-cross timestamp live in the runtime's
+/// per-call-site history (`ExecEnv.hist`/`cross_time`), exactly like
+/// `deriv(E)`, so no user state slot is consumed and each system × entity is
+/// automatically its own site (each function gets a fresh `out`). The site id
+/// is the count of `HistRead`s emitted so far: `deriv` uses the same counter,
+/// and every operator here emits exactly one `HistRead`, so ids are unique
+/// within a function and never collide with `deriv`.
+///
+/// The edge operators take `[prev, cur, has]` and fire only when history exists
+/// (`has`), so the first (sub)step can never report a crossing — the same rule
+/// `deriv` uses. `last_cross(e)` detects the same strict sign change and
+/// returns the simulation time of the most recent one (0.0 before any).
+pub(crate) fn lower_zero_crossing(
+    name: &str,
+    args: &[Expr],
+    ctx: &LowerCtx<'_>,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> u32 {
+    use crate::eir::{Immediate, Opcode, ValueType};
+    let site = out.iter().filter(|i| i.opcode == Opcode::HistRead).count() as u64;
+    let e = lower_expr_f64(&args[0], ctx, next_id, out);
+    // prev = history[site] (0.0 before the first step), has = history exists.
+    let prev = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        Opcode::HistRead,
+        prev,
+        Some(ValueType::F64),
+        vec![],
+        Some(Immediate::U64(site)),
+        None,
+    ));
+    let has = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        Opcode::HistHas,
+        has,
+        Some(ValueType::F64),
+        vec![],
+        Some(Immediate::U64(site)),
+        None,
+    ));
+    // Remember this (sub)step's value for the next one.
+    out.push(crate::physics_eir::instr(
+        Opcode::HistWrite,
+        0,
+        None,
+        vec![e],
+        Some(Immediate::U64(site)),
+        None,
+    ));
+    // `last_cross` reports *when* the (strict) crossing happened; it detects the
+    // edge (which timestamps the site) and then reads the timestamp back.
+    let op = match name {
+        "rise" => Opcode::RiseEdge,
+        "fall" => Opcode::FallEdge,
+        _ => Opcode::CrossDown,
+    };
+    let edge = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        op,
+        edge,
+        Some(ValueType::F64),
+        vec![prev, e, has],
+        Some(Immediate::U64(site)),
+        None,
+    ));
+    if name != "last_cross" {
+        return edge;
+    }
+    let r = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        Opcode::LastCross,
+        r,
+        Some(ValueType::F64),
+        vec![],
+        Some(Immediate::U64(site)),
+        None,
+    ));
+    r
+}
+
 pub(crate) fn lower_expr(
     expr: &Expr,
     ctx: &LowerCtx<'_>,
@@ -498,6 +586,10 @@ pub(crate) fn lower_expr(
         Expr::Call(name, args) => {
             if *name == "inte" || *name == "deriv" {
                 return lower_inte_deriv(name, args, ctx, next_id, out);
+            }
+            // RFC-0048: runtime-owned zero-crossing detection.
+            if *name == "cross" || *name == "rise" || *name == "fall" || *name == "last_cross" {
+                return lower_zero_crossing(name, args, ctx, next_id, out);
             }
             // RFC-0043 explicit casts. `__i64_to_f64` widens an exact integer
             // (a no-op on an already-f64 value); the integer casts truncate

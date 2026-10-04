@@ -48,12 +48,20 @@ Post-v0.2 extensions implemented by the reference slice. Each is covered by a
 | 0046 | EIR as an explicit SSA CFG (blocks/edges; explicit wire form) | Done | `eir::tests::eir_cfg_blocks_round_trip`; `EirModule::blocks`/`verify_cfg`; FUNCTIONS section encodes explicit blocks (block_count>1), legacy single-block still decodes; RFC-0021 concrete layout + RFC-0046 reconciled |
 | 0044 | typed arrays / SoA user types | Done | `pwe-conformance` "RFC-0044 typed arrays (static + runtime index + len bound, cross-backend)"; `lang::tests::typed_arrays_read_write_and_bounds`, `typed_array_runtime_index_read_matches_static`, `typed_array_constant_index_out_of_range_is_rejected`, `typed_array_initializer_arity_is_checked` (details 52/109), `for_bound_can_be_array_len`, `array_len_unknown_name_is_detail_109`; runtime-index bounds checks still deferred |
 
-## General-simulation direction (RFC-0047)
+## General-simulation direction (RFC-0047, RFC-0048)
 
 RFC-0047 is a direction document (no frozen-contract change): it defines what
 "general-purpose, top-tier simulation language" means for PWE as a capability
 matrix and a dependency-ordered plan. Domain rows there move to **Done** only
 with a named fixture + conformance case, on the same rule as the tables above.
+
+RFC-0048 lands step 3 of that sequence (discrete-event + hybrid core). Its own
+slices move to Done individually; Slice A (runtime-owned zero-crossing
+operators) is the first landed slice.
+
+| RFC | Required reference slice | Status | Evidence / next gate |
+| --- | --- | --- | --- |
+| 0048 | discrete-event + hybrid core | Partial | Slice A: runtime-owned `cross`/`rise`/`fall` zero-crossing operators over the `deriv` per-site history (`CrossDown`/`RiseEdge`/`FallEdge`), interpreter-oracle, cross-backend. Slices B–D (event calendar value, queue/resource library, hybrid reinit + block IR) are Proposed in RFC-0048 |
 
 ## Language front end
 

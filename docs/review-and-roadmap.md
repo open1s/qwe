@@ -21,7 +21,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
 | 最大文件 | `lang/tests.rs` 4.3k；`eir.rs` 4.3k；`lang/systems.rs` 3.5k（原 `lang.rs` 10.8k 已拆分为 8 个模块） |
 | 外部依赖 | 运行时仅 `pest`（+ macOS 可选 `metal`）；dev 依赖仅 `naga`；无其它重依赖 |
 | `pwe-api` | `#![no_std]`、零依赖、82 个 `pub` 项、`include/pwe_abi.h`（布局被测试锁定） |
-| RFC | 46 份（RFC-0001…0046，其中 0043/0044/0045/0046 为扩展集）；conformance 27 用例 |
+| RFC | 47 份（RFC-0001…0048，其中 0043…0048 为扩展集）；conformance 28 用例 |
 | 测试 | 439 个（单元 381 + laws 21 + property 4 + stdlib 6 + fmt 1 + fuzz 2 + `pwe-api` 15 + cli 9） |
 | 非测试 `unwrap()` | 0（`clippy.toml` + `#![cfg_attr(not(test), deny(clippy::unwrap_used))]` 防回归） |
 | `unsafe` | 31 处，集中在 `src/ffi.rs`(10)/`native.rs`(19)/`gpu.rs`(2) |
@@ -121,7 +121,7 @@ PWE 方向正确：**微内核 + 分层 IR（WIR → Domain IR → EIR）+ 确�
   - [x] **fuzz（依赖无关、CI 可跑）**：`reference/tests/fuzz.rs` 用确定性 PRNG 向所有公开解码边界（EIR/extension/channel）与 parser/compiler/formatter 灌入随机字节/源码，断言**不 panic**、解析返回 `Result`、`format_source` **幂等**。Miri 用法记于 CONTRIBUTING（`cargo +nightly miri test --test fuzz`；`cfg!(miri)` 下自动减迭代）。
   - [ ] 分布式/插件沙箱（更大）——**已排期 P4**：RFC-0006 QUIC 传输 + RFC-0016 同进程能力级插件宿主
 - [~] EIR 升级为显式 SSA CFG；RFC↔conformance ≥80%
-  - [x] RFC↔conformance：冻结集 RFC-0019–0036 全覆盖；**扩展 RFC-0037–0042 各有 conformance 用例**（场扫描/池/关节/软体/struct，cross-backend），**RFC-0043/0045 再增 3 例**，报告 **total=27 failed=0**；`docs/rfc-alignment.md` 增补扩展 RFC 表（0043/0044/0045 均为 Done）。
+  - [x] RFC↔conformance：冻结集 RFC-0019–0036 全覆盖；**扩展 RFC-0037–0042 各有 conformance 用例**（场扫描/池/关节/软体/struct，cross-backend），**RFC-0043/0045 再增 3 例**，**RFC-0048 Slice A（零穿越检测 cross/rise/fall/last_cross）再增 1 例**，报告 **total=28 failed=0**；`docs/rfc-alignment.md` 增补扩展 RFC 表与 general-simulation 小节（0043/0044/0045/0046 均为 Done；0048 Slice A Partial）。
   - [x] EIR 显式 SSA CFG（RFC-0046，已实现表示层+wire）：`EirModule::blocks`/`verify_cfg`；`verify_linear_dominance` 改用具实块；FUNCTIONS 段对含分支函数编码显式块（`block_count>1`，兼容旧单块），解码确定性拼接、重编码逐字节一致（`eir_cfg_blocks_round_trip`）。残留：块参数 SSA 与跨块优化（DCE/GVN）。
 - [x] ADR/贡献指南/架构文档：`docs/architecture.md`（流水线/边界/执行层）、`CONTRIBUTING.md`（工具链/门禁/特性/流程）、`docs/adr/`（0001–0005：原生 cc 后端、进程内豁免、opt-in 线程化、SIMD 不采用、GPU 实验性）。
 

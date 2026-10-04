@@ -372,6 +372,28 @@ systems {
   per period; `schedule(gate, delay, kind, payload)` enqueues a future event.
 * Events and their queue are part of the deterministic cross-backend contract.
 
+**Zero-crossing detection (RFC-0048).** `cross(e)`, `rise(e)`, `fall(e)` fire
+`1.0` on the (sub)step where `e` makes a strict sign change; `last_cross(e)`
+returns the time of the most recent one (`0.0` before any). The previous value
+and the timestamp live in the runtime's per-call-site history — no state slot is
+needed, and each system × entity is its own site — so this is the hybrid-control
+primitive `watch` cannot provide: it sees every `rk4` substage and reports *when*
+a switch happened. `cross` is a *strict* change, so a signal that lands exactly
+on zero does not chatter; the first step never fires.
+
+```pwe
+world { gravity = (0, 0, 0) entity ball { state = (y = 1.0, v = 0.0, hit = 0.0, t_hit = 0.0) } }
+systems {
+  update { on = ball; dt = 0.01
+    v = v - 9.81 * dt            # free fall
+    y = y + v * dt
+    hit = fall(y)                # 1.0 on the step y crosses zero downward
+    t_hit = last_cross(y)        # when it crossed (0.0 until it does)
+    v = v + hit * 2.0 * abs(v)   # reinit: flip velocity on impact
+  }
+}
+```
+
 ## L9 — Make it look right (presentation)
 
 Presentation never affects the simulation. Attributes:

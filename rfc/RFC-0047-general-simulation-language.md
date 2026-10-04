@@ -76,7 +76,8 @@ does not ship:
    checks, and a future record/array-of-record path).
 3. **Discrete-event + hybrid core**: an event calendar as a first-class value,
    zero-crossing detection, and a queue/resource library — the shared need of
-   DES, control, power, and chemical domains. (new sub-RFC)
+   DES, control, power, and chemical domains. (sub-RFC: RFC-0048; Slice A
+   zero-crossing operators landed, Slices B–D Proposed)
 4. **DAE / acausal layer**: connectors + `der`/`when` semantics over a DAE
    Domain IR, with index reduction. Unlocks Modelica-class multi-physics.
    (new sub-RFC; largest)

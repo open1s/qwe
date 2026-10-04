@@ -294,6 +294,22 @@ declare_opcodes! {
     /// Read a component field from the **committed** scene, ignoring
     /// in-interpretation writes. Target as `ReadView`; result is F64.
     ReadCommitted = 232 => f64,
+    // -- RFC-0048 zero-crossing detection (runtime-owned per-site history) --
+    /// RFC-0048: 1.0 on the (sub)step where the two operands change sign
+    /// *strictly* (`prev ≠ 0 ∧ cur ≠ 0 ∧ sign(prev) ≠ sign(cur)`), else 0.0.
+    /// Operands: `prev`, `cur`. Pure; the site's previous value is remembered
+    /// by the lowerer via `HistWrite`, exactly like `deriv`.
+    CrossDown = 236 => f64,
+    /// RFC-0048: 1.0 on a strict upward transition (`prev ≤ 0 ∧ cur > 0`),
+    /// else 0.0. Operands: `prev`, `cur`. Pure.
+    RiseEdge = 237 => f64,
+    /// RFC-0048: 1.0 on a strict downward transition (`prev ≥ 0 ∧ cur < 0`),
+    /// else 0.0. Operands: `prev`, `cur`. Pure.
+    FallEdge = 238 => f64,
+    /// RFC-0048: simulation time of the most recent crossing at a call site
+    /// (0.0 before any crossing). The site id rides in `constant`
+    /// (`Immediate::U64`); result is F64. Pure.
+    LastCross = 239 => f64,
     Return = 0x8000 => u64,
     /// Unconditional branch to an instruction index (block target). Single
     /// operand = target index.
@@ -483,6 +499,10 @@ pub struct ExecEnv {
     /// (sub)step value). Persists across steps within a runtime; cleared on
     /// `reset`, so the first step's `deriv` is 0.
     pub hist: std::collections::BTreeMap<u64, f64>,
+    /// RFC-0048: per-call-site timestamp of the most recent zero crossing
+    /// (site id -> simulation time). Written by `CrossDown`/`RiseEdge`/
+    /// `FallEdge` when they fire, read by `LastCross`.
+    pub cross_time: std::collections::BTreeMap<u64, f64>,
 }
 impl Default for ExecEnv {
     fn default() -> Self {
@@ -495,6 +515,7 @@ impl Default for ExecEnv {
             step_dt: 0.0,
             queue: Vec::new(),
             hist: std::collections::BTreeMap::new(),
+            cross_time: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -1029,6 +1050,25 @@ impl EirModule {
                     None
                 }
                 Opcode::HistHas => {
+                    if !instruction.operands.is_empty() || instruction.constant.is_none() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::CrossDown | Opcode::RiseEdge | Opcode::FallEdge => {
+                    if instruction.operands.len() != 3 || instruction.target.is_some() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    // The optional `constant` is the call site id (used to
+                    // timestamp the crossing for `LastCross`).
+                    if instruction.constant.is_some()
+                        && !matches!(instruction.constant, Some(Immediate::U64(_)))
+                    {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::LastCross => {
                     if !instruction.operands.is_empty() || instruction.constant.is_none() {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
@@ -1767,6 +1807,58 @@ impl EirModule {
                         0.0
                     };
                     stacks[depth - 1].insert(instruction.result_id, Immediate::F64(has));
+                    pcs[depth - 1] += 1;
+                }
+                // RFC-0048 zero-crossing detection. Semantics are exact and
+                // pure: the operands are compared with no epsilon. A crossing
+                // timestamps the site for `LastCross`; NaN operands fail the
+                // step (matches the language's NaN rejection elsewhere).
+                Opcode::CrossDown | Opcode::RiseEdge | Opcode::FallEdge => {
+                    let prev = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[0])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))?,
+                    );
+                    let cur = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[1])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 17, 0))?,
+                    );
+                    if prev.is_nan() || cur.is_nan() {
+                        return Err(error(Status::EirInvalid, 18, 0));
+                    }
+                    let has = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[2])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 18, 0))?,
+                    );
+                    let fired = has != 0.0
+                        && match instruction.opcode {
+                            Opcode::CrossDown => {
+                                prev != 0.0 && cur != 0.0 && (prev < 0.0) != (cur < 0.0)
+                            }
+                            Opcode::RiseEdge => prev <= 0.0 && cur > 0.0,
+                            _ => prev >= 0.0 && cur < 0.0,
+                        };
+                    if fired {
+                        if let Some(Immediate::U64(site)) = instruction.constant {
+                            env.cross_time.insert(site, env.time);
+                        }
+                    }
+                    stacks[depth - 1]
+                        .insert(instruction.result_id, Immediate::F64(fired as u8 as f64));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::LastCross => {
+                    let site = match instruction.constant {
+                        Some(Immediate::U64(site)) => site,
+                        _ => return Err(error(Status::EirInvalid, 23, 0)),
+                    };
+                    let t = env.cross_time.get(&site).copied().unwrap_or(0.0);
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(t));
                     pcs[depth - 1] += 1;
                 }
                 Opcode::ReadSlotDyn => {
@@ -3822,6 +3914,148 @@ mod tests {
         assert!(module.validate(true).is_ok());
     }
 
+    #[test]
+    fn eir_zero_crossing_operators_fire_and_timestamp() {
+        // RFC-0048: the three edge operators share a per-site history. Run one
+        // function once per step against ONE `ExecEnv` so the history persists,
+        // and let it write the edge flag to a tracked component field.
+        fn const_f64(id: u32, v: f64) -> Instruction {
+            Instruction {
+                opcode: Opcode::Const,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: Some(Immediate::F64(v)),
+                target: None,
+            }
+        }
+        let hist = |id: u32| Instruction {
+            opcode: Opcode::HistRead,
+            result_id: id,
+            result_type: Some(ValueType::F64),
+            operands: vec![],
+            constant: Some(Immediate::U64(0)),
+            target: None,
+        };
+        let has = |id: u32| Instruction {
+            opcode: Opcode::HistHas,
+            result_id: id,
+            result_type: Some(ValueType::F64),
+            operands: vec![],
+            constant: Some(Immediate::U64(0)),
+            target: None,
+        };
+        let write = |v: u32| Instruction {
+            opcode: Opcode::HistWrite,
+            result_id: 0,
+            result_type: None,
+            operands: vec![v],
+            constant: Some(Immediate::U64(0)),
+            target: None,
+        };
+        let edge = |id: u32, op: Opcode, prev: u32, cur: u32, has: u32| Instruction {
+            opcode: op,
+            result_id: id,
+            result_type: Some(ValueType::F64),
+            operands: vec![prev, cur, has],
+            constant: Some(Immediate::U64(0)),
+            target: None,
+        };
+        // The body: v = value; prev = hist[0]; has = histhas[0]; histwrite(0,v);
+        // raw = edge(prev, v); flag = raw * has; write the flag to a field.
+        let mk = |op: Opcode, value: f64| EirModule {
+            module_hash: Hash256([0; 32]),
+            schema_set_hash: Hash256([0; 32]),
+            domain_ir_hash: Hash256([0; 32]),
+            target_kind: 0,
+            functions: vec![Function {
+                id: 0,
+                effect_mask: EIR_EFFECT_WRITE_WORLD,
+                argument_count: 0,
+                instructions: vec![
+                    const_f64(1, value),
+                    hist(2),
+                    has(3),
+                    write(1),
+                    edge(4, op, 2, 1, 3),
+                    Instruction {
+                        opcode: Opcode::WriteView,
+                        result_id: 0,
+                        result_type: None,
+                        operands: vec![4],
+                        constant: None,
+                        target: Some(ComponentRef {
+                            entity: 1,
+                            component: ComponentTypeId([7; 16]),
+                            offset: 0,
+                        }),
+                    },
+                    ret(),
+                ],
+            }],
+        };
+        // A runtime whose only interesting behavior is capturing the write.
+        #[derive(Default)]
+        struct Sink {
+            last: f64,
+        }
+        impl EirRuntime for Sink {
+            fn read_field(&self, _t: ComponentRef) -> Result<u64> {
+                Ok(0.0f64.to_bits())
+            }
+            fn write_field(&mut self, _t: ComponentRef, value: u64) {
+                self.last = f64::from_bits(value);
+            }
+            fn query_neighbor_count(&self, _e: u128, _r: f64) -> Result<u64> {
+                Ok(0)
+            }
+            fn query_nearest_dist(&self, _e: u128) -> Result<u64> {
+                Ok(f64::MAX.to_bits())
+            }
+            fn query_neighbor_mean(&self, _e: u128, _s: u32, _r: f64) -> Result<f64> {
+                Ok(0.0)
+            }
+            fn query_nearest_offset(&self, _e: u128) -> Result<(f64, f64, f64)> {
+                Ok((0.0, 0.0, 0.0))
+            }
+            fn field_laplacian(
+                &self,
+                _component: ComponentTypeId,
+                _i: f64,
+                _j: f64,
+                _width: f64,
+            ) -> Result<f64> {
+                Ok(0.0)
+            }
+        }
+        let values = [0.5f64, -0.5, -0.5, 0.5];
+        let want_cross = [0.0, 1.0, 0.0, 1.0];
+        let want_rise = [0.0, 0.0, 0.0, 1.0];
+        let want_fall = [0.0, 1.0, 0.0, 0.0];
+        for (op, want, want_last_t) in [
+            (Opcode::CrossDown, want_cross, 3.0),
+            (Opcode::RiseEdge, want_rise, 3.0),
+            (Opcode::FallEdge, want_fall, 1.0),
+        ] {
+            let mut rt = Sink::default();
+            let mut env = ExecEnv::default();
+            for (k, value) in values.iter().enumerate() {
+                env.time = k as f64;
+                mk(op, *value)
+                    .interpret_with_env(&mut rt, &mut env, WorldId(1), WorldVersion(0))
+                    .unwrap();
+                assert_eq!(rt.last, want[k], "{} step {k} (value {value})", op.name());
+            }
+            assert_eq!(
+                env.cross_time.get(&0).copied().unwrap_or(-1.0),
+                want_last_t,
+                "{} timestamps its most recent crossing at t={want_last_t}",
+                op.name()
+            );
+            assert_eq!(env.hist.get(&0), Some(&0.5));
+        }
+    }
+
     fn const_u64(id: u32, value: u64) -> Instruction {
         Instruction {
             opcode: Opcode::Const,
@@ -4105,6 +4339,10 @@ mod tests {
             Opcode::FiredAt,
             Opcode::FiredEvery,
             Opcode::ScheduleEvent,
+            Opcode::CrossDown,
+            Opcode::RiseEdge,
+            Opcode::FallEdge,
+            Opcode::LastCross,
         ];
         let mut instructions: Vec<Instruction> = opcodes
             .iter()
