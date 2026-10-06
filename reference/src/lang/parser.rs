@@ -233,6 +233,10 @@ pub(crate) fn is_builtin_call(name: &str) -> bool {
             | "release"
             | "resource_busy"
             | "resource_capacity"
+            // RFC-0049: deterministic time scaling.
+            | "time_scale"
+            | "set_time_scale"
+            | "step_dt"
             // RFC-0044 follow-up: array reductions over a named array.
             | "sum"
             | "mean"
@@ -314,6 +318,11 @@ pub(crate) fn builtin_arity(name: &str) -> Option<usize> {
         // resource name, the reads take none.
         "seize" => 2,
         "release" | "resource_busy" | "resource_capacity" => 1,
+        // RFC-0049: `time_scale()` reads; `set_time_scale(x)` requests.
+        "time_scale" => 0,
+        "set_time_scale" => 1,
+        // RFC-0049: `step_dt()` reads the effective step length.
+        "step_dt" => 0,
         // RFC-0044 follow-up: array reductions take a literal array name (the
         // length is compile-time). `dot(a, b)` folds two equal-length arrays.
         "sum" | "mean" | "norm" | "asum" | "prod" | "min_of" | "max_of" => 1,

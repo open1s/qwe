@@ -36,6 +36,12 @@ pub const EIR_EFFECT_BARRIER: u32 = 1024;
 const NONDETERMINISTIC: u32 =
     EIR_EFFECT_TIME | EIR_EFFECT_RANDOM | EIR_EFFECT_IO | EIR_EFFECT_DEVICE | EIR_EFFECT_NETWORK;
 
+/// RFC-0049: the largest time scale the runtime will apply. A request above it
+/// saturates, so a runaway model cannot silently turn the effective step into a
+/// non-finite number. Ten billion is exact in `f64` and already far past any
+/// useful real-time factor (the viewer offers `1e-8 … 1e10`).
+pub const TIME_SCALE_MAX: f64 = 1.0e10;
+
 /// RFC-0021 module envelope.
 pub const EIR_MAGIC: [u8; 8] = *b"PWEEIR2\0";
 pub const EIR_MAJOR: u16 = 2;
@@ -287,6 +293,17 @@ declare_opcodes! {
     /// `base + index`. Lets a runtime-indexed `name[i]` read/write be
     /// bounds-checked before the slot is touched.
     BoundsCheck = 252 => f64,
+    /// RFC-0049: set the time scale applied from the **next** step onward (the
+    /// current step already fixed its `dt_eff`, so a step is never
+    /// half-scaled). Operand 0 = the requested scale (F64); result F64 = the
+    /// **applied** scale. A finite, non-negative request is applied (saturating
+    /// at [`TIME_SCALE_MAX`]); anything else (negative, NaN, ±inf) leaves the
+    /// scale unchanged, so simulation time can never run backwards or leave the
+    /// finite domain. The applied value is returned, so a model can observe a
+    /// rejected request. Mutates `ExecEnv.time_scale` only. The *reads* of the
+    /// scale/step are world pseudo-component reads (`ReadView`), so they stay
+    /// eligible for the JIT/AOT and threaded dispatchers.
+    SetTimeScale = 254 => f64,
     /// RFC-0037: one Jacobi diffusion sweep `T += rate·∇²T` over a grid field
     /// (the whole sweep in one instruction). Operand 0 = rate; target = field.
     FieldDiffuse = 224 => u64,
@@ -586,6 +603,15 @@ pub struct ExecEnv {
     /// RFC-0048 slice C2: named resources (server capacity) keyed by the
     /// compile-time resource id. Execution-context state, like the calendar.
     pub resources: std::collections::BTreeMap<u64, ResourceState>,
+    /// RFC-0049: the time scale applied to the base step `dt` before the
+    /// simulation clock advances (`dt_eff = sim_dt * time_scale`). Deterministic
+    /// execution-context state (default `1.0`), changed by `SetTimeScale` from
+    /// the next step onward; the *reads* (`time_scale()`/`step_dt()` and the
+    /// scaled `dt` local) go through the world pseudo-components
+    /// `pwe.time.scale`/`pwe.time.step_dt` as `ReadView`, so they stay
+    /// JIT/AOT-eligible. Both backends derive it identically and `step_cross`
+    /// compares it.
+    pub time_scale: f64,
 }
 impl Default for ExecEnv {
     fn default() -> Self {
@@ -601,11 +627,28 @@ impl Default for ExecEnv {
             cross_time: std::collections::BTreeMap::new(),
             next_seq: 0,
             resources: std::collections::BTreeMap::new(),
+            time_scale: 1.0,
         }
     }
 }
 
 impl ExecEnv {
+    /// RFC-0049: applies a requested time scale and returns the **applied**
+    /// value. A finite, non-negative request is clamped to `[0, TIME_SCALE_MAX]`
+    /// and applied; a negative, NaN, or infinite request leaves the scale
+    /// unchanged. `SetTimeScale` and the host API share this one definition, so
+    /// the language and the embedding agree exactly.
+    pub fn set_time_scale(&mut self, requested: f64) -> f64 {
+        if requested.is_finite() && requested >= 0.0 {
+            self.time_scale = requested.min(TIME_SCALE_MAX);
+        }
+        self.time_scale
+    }
+
+    /// RFC-0049: the current time scale (see [`ExecEnv::time_scale`]).
+    pub fn time_scale(&self) -> f64 {
+        self.time_scale
+    }
     /// The earliest pending calendar entry (the calendar is kept sorted by
     /// `(time, priority, seq)`), or `None` when empty.
     pub fn next_event(&self) -> Option<&ScheduledEvent> {
@@ -1224,6 +1267,15 @@ impl EirModule {
                 Opcode::BoundsCheck => {
                     // RFC-0044: index, base, len — a runtime trap.
                     if instruction.operands.len() != 3 || instruction.target.is_some() {
+                        return Err(error(Status::EirInvalid, 4, index));
+                    }
+                    Some(ValueType::F64)
+                }
+                Opcode::SetTimeScale => {
+                    // RFC-0049: operand 0 = the requested scale. The scale and
+                    // step *reads* are world pseudo-component reads, so only the
+                    // control write is an opcode.
+                    if instruction.operands.len() != 1 || instruction.target.is_some() {
                         return Err(error(Status::EirInvalid, 4, index));
                     }
                     Some(ValueType::F64)
@@ -2080,6 +2132,20 @@ impl EirModule {
                     let capacity = env.resources.get(&rid).map(|r| r.capacity).unwrap_or(0);
                     stacks[depth - 1]
                         .insert(instruction.result_id, Immediate::F64(capacity as f64));
+                    pcs[depth - 1] += 1;
+                }
+                Opcode::SetTimeScale => {
+                    // RFC-0049: operand 0 = the requested scale; applies from the
+                    // next step. The applied (clamped / retained) value is the
+                    // result, so a rejected request is observable.
+                    let requested = as_f64(
+                        stacks[depth - 1]
+                            .get(&instruction.operands[0])
+                            .copied()
+                            .ok_or(error(Status::EirInvalid, 16, 0))?,
+                    );
+                    let applied = env.set_time_scale(requested);
+                    stacks[depth - 1].insert(instruction.result_id, Immediate::F64(applied));
                     pcs[depth - 1] += 1;
                 }
                 Opcode::PopEvent => {
@@ -4718,6 +4784,7 @@ mod tests {
             Opcode::ResourceBusy,
             Opcode::ResourceCapacity,
             Opcode::BoundsCheck,
+            Opcode::SetTimeScale,
         ];
         let mut instructions: Vec<Instruction> = opcodes
             .iter()
@@ -5267,6 +5334,127 @@ mod tests {
             "two seizes succeed, the third is refused, then a release frees one"
         );
         assert_eq!(env.resources.get(&rid).map(|r| r.busy), Some(2));
+    }
+
+    /// RFC-0049: `SetTimeScale` applies finite non-negative values,
+    /// clamps at TIME_SCALE_MAX, and rejects negative / NaN / ±inf
+    /// (leaving the previous scale in place).
+    #[test]
+    fn eir_set_time_scale_clamps_and_rejects_invalid() {
+        fn cst(id: u32, v: f64) -> Instruction {
+            Instruction {
+                opcode: Opcode::Const,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![],
+                constant: Some(Immediate::F64(v)),
+                target: None,
+            }
+        }
+        fn set(id: u32, operand: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::SetTimeScale,
+                result_id: id,
+                result_type: Some(ValueType::F64),
+                operands: vec![operand],
+                constant: None,
+                target: None,
+            }
+        }
+        // Each `set` writes its applied scale into a scratch state slot so the
+        // test can observe the applied value the way a model would.
+        fn wr(_id: u32, reg: u32) -> Instruction {
+            Instruction {
+                opcode: Opcode::WriteView,
+                result_id: 0,
+                result_type: None,
+                operands: vec![reg],
+                constant: None,
+                target: Some(ComponentRef {
+                    entity: 1,
+                    component: ComponentTypeId([7; 16]),
+                    offset: 0,
+                }),
+            }
+        }
+        let module = EirModule {
+            module_hash: Hash256([0; 32]),
+            schema_set_hash: Hash256([0; 32]),
+            domain_ir_hash: Hash256([0; 32]),
+            target_kind: 0,
+            functions: vec![Function {
+                id: 0,
+                effect_mask: 0,
+                argument_count: 0,
+                instructions: vec![
+                    cst(1, 2.0),
+                    set(2, 1),
+                    wr(0, 2), // applied = 2.0
+                    cst(3, -1.0),
+                    set(4, 3),
+                    wr(0, 4), // rejected, applied = 2.0
+                    cst(5, f64::INFINITY),
+                    set(6, 5),
+                    wr(0, 6), // rejected, applied = 2.0
+                    cst(7, 1.0e20),
+                    set(8, 7),
+                    wr(0, 8), // clamped to TIME_SCALE_MAX
+                    cst(9, f64::NAN),
+                    set(10, 9),
+                    wr(0, 10), // rejected, applied = TIME_SCALE_MAX
+                    ret(),
+                ],
+            }],
+        };
+        module.validate(false).unwrap();
+        #[derive(Default)]
+        struct Track {
+            writes: Vec<u64>,
+        }
+        impl EirRuntime for Track {
+            fn read_field(&self, _t: ComponentRef) -> Result<u64> {
+                Ok(0)
+            }
+            fn write_field(&mut self, _t: ComponentRef, v: u64) {
+                self.writes.push(v);
+            }
+            fn query_neighbor_count(&self, _e: u128, _r: f64) -> Result<u64> {
+                Ok(0)
+            }
+            fn query_nearest_dist(&self, _e: u128) -> Result<u64> {
+                Ok(f64::MAX.to_bits())
+            }
+            fn query_neighbor_mean(&self, _e: u128, _s: u32, _r: f64) -> Result<f64> {
+                Ok(0.0)
+            }
+            fn query_nearest_offset(&self, _e: u128) -> Result<(f64, f64, f64)> {
+                Ok((0.0, 0.0, 0.0))
+            }
+            fn field_laplacian(
+                &self,
+                _c: ComponentTypeId,
+                _i: f64,
+                _j: f64,
+                _w: f64,
+            ) -> Result<f64> {
+                Ok(0.0)
+            }
+        }
+        let mut env = ExecEnv::default();
+        let mut rt = Track::default();
+        module
+            .interpret_with_env(&mut rt, &mut env, WorldId(1), WorldVersion(0))
+            .unwrap();
+        let got: Vec<f64> = rt.writes.iter().map(|b| f64::from_bits(*b)).collect();
+        assert_eq!(
+            got,
+            vec![2.0, 2.0, 2.0, TIME_SCALE_MAX, TIME_SCALE_MAX],
+            "applied values: 2.0, rejected, rejected, clamped, rejected"
+        );
+        assert_eq!(
+            env.time_scale, TIME_SCALE_MAX,
+            "final scale is the clamped value"
+        );
     }
 
     /// RFC-0048 slice B: equal-time entries pop in insertion order (`seq`).

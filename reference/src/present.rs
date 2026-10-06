@@ -1601,16 +1601,77 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, RwLock};
 
+/// Default ceiling on simulation steps per frame for a driver. It is
+/// deliberately effectively unlimited: the *real* bound on viewer speed is the
+/// wall-clock step budget, so a large slider request degrades to "as fast as
+/// this machine can step" instead of being clipped to a small round number.
+/// Pass `--max-steps-per-frame N` to impose a deliberate CPU cap.
+pub const MAX_STEPS_PER_FRAME: u32 = u32::MAX;
+
+/// Wall-clock budget for stepping within one playground frame, mirroring the
+/// live viewer's budget so a huge speed cannot stall the playground server.
+pub const PLAYGROUND_STEP_BUDGET_MS: u64 = 10;
+
+/// Advances the viewer speed accumulator by one frame's request and returns how
+/// many steps to attempt this frame.
+///
+/// The request is a **rate** (steps per frame). Only the fractional remainder is
+/// carried between frames, so:
+/// * slow motion below one step per frame still advances smoothly, and
+/// * a very large request can never leave a backlog that keeps the simulation
+///   flat-out after the user lowers the speed (the bug this replaced).
+///
+/// Steps skipped because a frame hit its time budget are dropped, not deferred —
+/// a rate control must not accumulate debt.
+pub fn speed_frame(acc: &mut f64, req: f64, max_steps: u32) -> u32 {
+    if !req.is_finite() || req <= 0.0 {
+        return 0;
+    }
+    let total = *acc + req;
+    let want = total.floor();
+    *acc = total - want;
+    if want >= max_steps as f64 {
+        max_steps
+    } else {
+        want as u32
+    }
+}
+
 /// The live state a running runtime publishes for the browser viewer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct LiveState {
     pub frame: PresentationFrame,
     /// Simulation step counter.
     pub step: u64,
+    /// RFC-0049: the time scale currently **applied** by the runtime (written by
+    /// the stepping loop; this is what the viewer displays).
+    pub time_scale: f64,
+    /// RFC-0049: the time scale the browser last **requested** (written by
+    /// `/set-time-scale`; read and applied by the stepping loop). Kept separate
+    /// from `time_scale` so the loop's write-back of the applied value can never
+    /// swallow a fresh request.
+    pub time_scale_req: f64,
+    /// RFC-0049: effective step dt = sim_dt * time_scale, the next step's `dt`.
+    pub effective_dt: f64,
     /// Recent procedure info (e.g. which systems ran, notable values). The
     /// browser shows this so the simulation *procedure* is visible, not just
     /// positions.
     pub info: Vec<String>,
+}
+
+impl Default for LiveState {
+    fn default() -> Self {
+        // A scale of 1.0 is real time; `f64::default()` would be 0.0 and freeze
+        // the simulation, so the default is spelled out deliberately.
+        Self {
+            frame: PresentationFrame::default(),
+            step: 0,
+            time_scale: 1.0,
+            time_scale_req: 1.0,
+            effective_dt: 0.0,
+            info: Vec::new(),
+        }
+    }
 }
 
 /// Serves a live viewer on `127.0.0.1:port` in a background thread. The browser
@@ -1723,6 +1784,30 @@ fn handle_connection(
         reset.store(true, std::sync::atomic::Ordering::Relaxed);
         pause.store(true, std::sync::atomic::Ordering::Relaxed);
         ("200 OK", "text/plain", b"ok".to_vec())
+    } else if path.starts_with("/set-time-scale") {
+        // RFC-0049: browser-controlled time scale. Record the request; the
+        // stepping loop reads `time_scale_req`, applies it to the runtime (the
+        // new scale takes effect from the next step), and publishes the applied
+        // value back into `time_scale`.
+        //
+        // The viewer only offers `1e-8 … 1e10`, so a request is required to be
+        // finite and strictly positive. A scale of exactly 0 makes the effective
+        // step 0, and a model that divides by `dt` then trips the deterministic
+        // division guard (`EirInvalid` 18) — the viewer keeps that trap out of
+        // reach. Programmatic `set_time_scale` keeps its RFC clamp to `[0, MAX]`.
+        if let Some(query) = path.split_once('?').map(|(_, q)| q) {
+            for param in query.split('&') {
+                if let Some(val_str) = param.strip_prefix("v=") {
+                    if let Ok(v) = val_str.parse::<f64>() {
+                        if v.is_finite() && v > 0.0 {
+                            let mut live = state.write().unwrap_or_else(|e| e.into_inner());
+                            live.time_scale_req = v.min(crate::eir::TIME_SCALE_MAX);
+                        }
+                    }
+                }
+            }
+        }
+        ("200 OK", "text/plain", b"ok".to_vec())
     } else if path.starts_with("/pause") {
         let now = if path.contains("on=0") {
             false
@@ -1758,6 +1843,10 @@ fn live_state_json(live: &LiveState) -> String {
     let mut out = String::new();
     out.push_str(&format!("{{\"step\":{},\"frame\":", live.step));
     out.push_str(&frame_to_json(&live.frame));
+    out.push_str(&format!(
+        ",\"time_scale\":{},\"effective_dt\":{}",
+        live.time_scale, live.effective_dt
+    ));
     out.push_str(",\"info\":[");
     for (i, s) in live.info.iter().enumerate() {
         if i > 0 {
@@ -1790,6 +1879,10 @@ fn live_viewer_html() -> String {
 <button id="rst" style="position:fixed;right:8px;bottom:8px;z-index:11;background:#3a4a6b;border:none;color:#fff;padding:6px 12px;cursor:pointer;border-radius:4px;font-family:monospace">⟳ Restart</button>
 <button id="pse" style="position:fixed;right:110px;bottom:8px;z-index:11;background:#3a4a6b;border:none;color:#fff;padding:6px 12px;cursor:pointer;border-radius:4px;font-family:monospace">⏸ Pause</button>
 <button id="lbl" style="position:fixed;right:210px;bottom:8px;z-index:11;background:#3a4a6b;border:none;color:#fff;padding:6px 12px;cursor:pointer;border-radius:4px;font-family:monospace">🏷 Labels</button>
+<label id="scale-label" style="position:fixed;right:470px;bottom:8px;z-index:11;color:#cbd5e1;background:#11141c;border:1px solid #2a3240;padding:6px 8px;border-radius:4px;font-family:monospace;font-size:12px;display:flex;align-items:center;gap:6px">scale
+  <input id="scale-input" type="number" min="0.00000001" max="10000000000" step="any" value="1" title="type an exact time scale" style="width:96px;background:#0b0e14;border:1px solid #2a3240;color:#e5e7eb;font-family:monospace;font-size:12px;padding:2px 4px;border-radius:3px">
+</label>
+<input type="range" id="scale-slider" min="-8" max="10" step="0.1" value="0" title="time scale (log10: 1e-8 … 1e10)" style="position:fixed;right:330px;bottom:14px;z-index:11;width:130px;cursor:pointer">
 <script type="importmap">{"imports":{
   "three":"/vendor/three/three.module.js",
   "three/addons/":"/vendor/three/addons/"
@@ -1867,6 +1960,14 @@ function updateSelection(){
 // Names / field names / info lines are user-authored text pasted into
 // innerHTML: escape them so a name like `<img onerror=…>` stays text.
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// Compact number formatting for the info bar: plain for ordinary magnitudes,
+// exponent notation at the extremes (the speed slider spans 1e-8 … 1e10).
+function compact(x){
+  if(typeof x!=='number'||!isFinite(x)) return String(x);
+  const a=Math.abs(x);
+  if(a!==0 && (a<0.001 || a>=100000)) return x.toExponential(2);
+  return String(Math.round(x*1000)/1000);
+}
 function svgGeo(d, depth, scale){ const data=new SVGLoader().parse(d); let sh=[]; for(const p of data.paths) sh=sh.concat(SVGLoader.createShapes(p));
   const geo=new THREE.ExtrudeGeometry(sh,{depth:Math.max(depth,0.001),bevelEnabled:false,curveSegments:16}); geo.scale(scale,-scale,scale); geo.center(); return geo; }
 function polyGeo(pts, faces){ const pos=[]; const F=faces&&faces.length?faces:null;
@@ -2124,7 +2225,8 @@ function apply(f){
   for(const m of meshes.values()){ scene.remove(m); disposeObj(m); }
   meshes.clear();
   for(const m of decals){ scene.remove(m); disposeObj(m); } decals.length=0;
-  let html='<b>step '+f.step+' · t='+f.frame.time.toFixed(3)+'</b><hr>';
+  let html='<b>step '+f.step+' · t='+f.frame.time.toFixed(3)+
+    ' · speed='+compact(f.time_scale)+'/frame · \u0394t='+compact(f.effective_dt)+'</b><hr>';
   // Sun = the body nearest the origin (central body).
   let sun={x:0,y:0,z:0};
   for(const e of f.frame.entities){const r=Math.hypot(e.pos[0],e.pos[1]);if(!sun.r||r<sun.r){sun.r=r;sun.x=e.pos[0];sun.y=e.pos[1];sun.z=e.pos[2];}}
@@ -2232,7 +2334,7 @@ document.addEventListener('visibilitychange',()=>{
 async function poll(){
   if(!alive) return;
   const ac=new AbortController(); inflight=ac;
-  try{const r=await fetch('/state',{cache:'no-store',signal:ac.signal});const f=await r.json();apply(f);conn.style.display='none';}
+  try{const r=await fetch('/state',{cache:'no-store',signal:ac.signal});const f=await r.json();apply(f);syncScale(f);conn.style.display='none';}
   catch(e){ if(e&&e.name==='AbortError') return; conn.style.display='block';conn.textContent='waiting for runtime…'; }
   inflight=null;
   if(alive) setTimeout(poll,60);
@@ -2242,6 +2344,51 @@ let paused=false;
 document.getElementById('pse').onclick=()=>{paused=!paused;fetch('/pause?on='+(paused?1:0)).then(r=>r.text()).then(()=>{document.getElementById('pse').textContent=(paused?'▶ Resume':'⏸ Pause');}).catch(()=>{});};
 document.getElementById('rst').addEventListener('click',()=>{paused=true;document.getElementById('pse').textContent='▶ Resume';});
 document.getElementById('lbl').onclick=()=>{labelsOn=!labelsOn;document.getElementById('lbl').style.opacity=labelsOn?'1':'0.45';};
+// RFC-0049: browser-side speed control. The slider is logarithmic: its value is
+// log10(speed), spanning 1e-8 … 1e10, and the number box accepts an exact value
+// (including exponent notation such as 2.5e5). Both POST the request to the
+// runtime; polling never fights the user while the thumb or the box is active.
+let scaleDragging=false, scaleEditing=false;
+const scaleInput=document.getElementById('scale-input'), scaleSlider=document.getElementById('scale-slider');
+const SCALE_MIN_EXP=-8, SCALE_MAX_EXP=10, SCALE_MIN=1e-8, SCALE_MAX=1e10;
+function sendScale(v){ fetch('/set-time-scale?v='+v,{cache:'no-store'}).catch(()=>{}); }
+// Position both controls from one scale value (used by the slider, the box and
+// the poll). The exponent is rounded to the slider's step so the thumb does not
+// jitter between polls.
+function showScale(s){
+  scaleInput.value=String(s);
+  if(s>0){
+    const e=Math.max(SCALE_MIN_EXP, Math.min(SCALE_MAX_EXP, Math.log10(s)));
+    scaleSlider.value=String(Math.round(e*10)/10);
+  }
+}
+function syncScale(f){
+  if(scaleDragging||scaleEditing) return;
+  const s=(typeof f.time_scale==='number'&&isFinite(f.time_scale))?f.time_scale:1;
+  showScale(s);
+}
+// Slider → box + runtime.
+scaleSlider.addEventListener('pointerdown',()=>{scaleDragging=true;});
+addEventListener('pointerup',()=>{scaleDragging=false;});
+scaleSlider.oninput=function(){
+  const v=Math.pow(10, +scaleSlider.value);
+  scaleInput.value=String(Number(v.toPrecision(6)));
+  sendScale(v);
+};
+// Box → slider + runtime. Committed on Enter or blur (`change`), clamped to the
+// same range the slider offers; an unparsable entry is rejected by leaving the
+// value for the next poll to restore.
+scaleInput.addEventListener('focus',()=>{scaleEditing=true;});
+scaleInput.addEventListener('blur',()=>{scaleEditing=false;});
+scaleInput.onchange=function(){
+  const v=+scaleInput.value;
+  if(isFinite(v)&&v>0){
+    const clamped=Math.min(SCALE_MAX, Math.max(SCALE_MIN, v));
+    showScale(clamped);
+    sendScale(clamped);
+  }
+};
+scaleInput.addEventListener('keydown',e=>{ if(e.key==='Enter') scaleInput.blur(); });
 poll();
 startLoop();
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);composer.setSize(innerWidth,innerHeight);labelRenderer.setSize(innerWidth,innerHeight);});
@@ -2614,6 +2761,9 @@ mod tests {
         let live = LiveState {
             frame,
             step: 1,
+            time_scale: 1.0,
+            time_scale_req: 1.0,
+            effective_dt: 1.0,
             info: vec!["</script>x".into()],
         };
         let lj = live_state_json(&live);
@@ -2644,6 +2794,9 @@ mod tests {
         let live = LiveState {
             frame,
             step: 42,
+            time_scale: 1.0,
+            time_scale_req: 1.0,
+            effective_dt: 1.0,
             info: vec!["gravity ran".to_string(), "vehicle y=0.8".to_string()],
         };
         let json = live_state_json(&live);
@@ -2682,6 +2835,46 @@ mod tests {
         assert!(page.contains("o.castShadow"));
         assert!(page.contains("const PRIMS ="));
         assert!(page.contains("function updateTrails"));
+        // RFC-0049 viewer speed control: the slider, the exact-value box, the
+        // request it sends, and the poll-side readback must all be present. A
+        // missing helper here previously threw inside the poll handler and left
+        // the page stuck on "waiting for runtime…".
+        assert!(page.contains("id=\"scale-slider\""));
+        assert!(page.contains("id=\"scale-input\""));
+        assert!(page.contains("/set-time-scale?v="));
+        assert!(page.contains("function compact("));
+        assert!(page.contains("function syncScale("));
+    }
+
+    #[test]
+    fn speed_frame_is_a_rate_not_a_backlog() {
+        // Slow motion below one step per frame accumulates the fraction: 0.4
+        // asks for a step every other frame, never more.
+        let mut acc = 0.0;
+        let want: Vec<u32> = (0..5).map(|_| speed_frame(&mut acc, 0.4, 1000)).collect();
+        assert_eq!(want, vec![0, 0, 1, 0, 1]);
+        // An ordinary fast-forward asks for exactly the requested steps.
+        let mut acc = 0.0;
+        assert_eq!(speed_frame(&mut acc, 20.0, 1000), 20);
+        assert_eq!(acc, 0.0);
+        // The reported bug: a very large request followed immediately by a small
+        // one must slow down on the very next frame, not keep running off a
+        // backlog of unfinished steps.
+        let mut acc = 0.0;
+        assert_eq!(speed_frame(&mut acc, 1.0e10, MAX_STEPS_PER_FRAME), u32::MAX);
+        assert_eq!(speed_frame(&mut acc, 0.2, MAX_STEPS_PER_FRAME), 0);
+        assert_eq!(speed_frame(&mut acc, 0.2, MAX_STEPS_PER_FRAME), 0);
+        assert_eq!(speed_frame(&mut acc, 0.2, MAX_STEPS_PER_FRAME), 1);
+        // A deliberate cap clamps the request without banking the difference.
+        let mut acc = 0.0;
+        assert_eq!(speed_frame(&mut acc, 1000.0, 8), 8);
+        assert_eq!(speed_frame(&mut acc, 0.5, 8), 0);
+        // Defensive: a non-positive or non-finite request is inert.
+        let mut acc = 0.0;
+        assert_eq!(speed_frame(&mut acc, 0.0, 100), 0);
+        assert_eq!(speed_frame(&mut acc, -5.0, 100), 0);
+        assert_eq!(speed_frame(&mut acc, f64::NAN, 100), 0);
+        assert_eq!(acc, 0.0);
     }
 
     #[test]
@@ -2792,6 +2985,26 @@ fn publish(state: &Arc<RwLock<LiveState>>, rt: &crate::lang::LangRuntime, step: 
     g.step = step;
     g.frame = frame;
     g.info = info;
+    // Publish the scale the runtime actually applied (may differ from the
+    // request if it was clamped or rejected), plus the next step's effective dt.
+    g.time_scale = rt.time_scale();
+    g.effective_dt = rt.effective_dt();
+}
+
+/// RFC-0049 / viewer speed: reads the browser's latest speed request (in steps
+/// per frame). Returns `None` when there is no usable request, so a caller can
+/// fall back to its own default. The request is validated here rather than at
+/// the HTTP edge so a malformed or non-positive value can never reach a driver.
+fn requested_speed(state: &Arc<RwLock<LiveState>>) -> Option<f64> {
+    let req = state
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .time_scale_req;
+    if req.is_finite() && req > 0.0 {
+        Some(req)
+    } else {
+        None
+    }
 }
 
 fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<LiveState>>) {
@@ -2799,6 +3012,9 @@ fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<Liv
     let mut last_src: Option<String> = None;
     let mut paused = true;
     let mut step = 0u64;
+    // Viewer speed is steps-per-frame (see `present_live`): the physics step is
+    // never rescaled, so changing speed cannot destabilise the model.
+    let mut speed_acc = 0.0f64;
     loop {
         match rx.recv_timeout(std::time::Duration::from_millis(16)) {
             Ok(PgCmd::Load(src, reply)) => match crate::lang::LangRuntime::compile(&src) {
@@ -2807,6 +3023,7 @@ fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<Liv
                     last_src = Some(src);
                     step = 0;
                     paused = false;
+                    speed_acc = 0.0;
                     let _ = reply.send("ok".to_string());
                     if let Some(r) = &rt {
                         publish(&state, r, 0, "compiled");
@@ -2821,6 +3038,7 @@ fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<Liv
                     if let Ok(r) = crate::lang::LangRuntime::compile(&src) {
                         rt = Some(r);
                         step = 0;
+                        speed_acc = 0.0;
                         if let Some(r) = &rt {
                             publish(&state, r, 0, "reset");
                         }
@@ -2830,24 +3048,44 @@ fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<Liv
             Ok(PgCmd::Pause(p)) => paused = p.unwrap_or(!paused),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if !paused {
+                    let req = requested_speed(&state).unwrap_or(1.0);
+                    // Rate control: whole part is this frame's target, only the
+                    // fraction carries (see `speed_frame`), so a large request
+                    // cannot leave a backlog that outlives the request.
+                    let n = speed_frame(&mut speed_acc, req, MAX_STEPS_PER_FRAME);
                     if let Some(r) = &mut rt {
-                        match r.step_interpreter() {
-                            Ok(_) => {
-                                step += 1;
-                                publish(&state, r, step, "");
-                            }
-                            Err(e) => {
-                                paused = true;
-                                let mut info = vec![format!("step {step} failed: {e}")];
-                                for d in crate::lang::take_diagnostics() {
-                                    info.push(format!("[{}] {}", d.detail, d.message));
+                        let mut failed = None;
+                        let mut ran = 0u32;
+                        let deadline = std::time::Instant::now()
+                            + std::time::Duration::from_millis(PLAYGROUND_STEP_BUDGET_MS);
+                        while ran < n {
+                            match r.step_interpreter() {
+                                Ok(_) => {
+                                    step += 1;
+                                    ran += 1;
                                 }
-                                let frame = r.present_frame(None);
-                                let mut g = state.write().unwrap_or_else(|e| e.into_inner());
-                                g.step = step;
-                                g.frame = frame;
-                                g.info = info;
+                                Err(e) => {
+                                    failed = Some(e);
+                                    break;
+                                }
                             }
+                            if std::time::Instant::now() >= deadline {
+                                break;
+                            }
+                        }
+                        if let Some(e) = failed {
+                            paused = true;
+                            let mut info = vec![format!("step {step} failed: {e}")];
+                            for d in crate::lang::take_diagnostics() {
+                                info.push(format!("[{}] {}", d.detail, d.message));
+                            }
+                            let frame = r.present_frame(None);
+                            let mut g = state.write().unwrap_or_else(|e| e.into_inner());
+                            g.step = step;
+                            g.frame = frame;
+                            g.info = info;
+                        } else if ran > 0 {
+                            publish(&state, r, step, "");
                         }
                     }
                 }

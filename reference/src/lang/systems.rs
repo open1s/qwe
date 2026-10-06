@@ -4,6 +4,40 @@
 #![allow(clippy::too_many_arguments)]
 use super::*;
 
+/// RFC-0049: lower the `dt` local a system body reads to the **effective** step
+/// `base * time_scale()` rather than the declared constant. The scale is read
+/// through the `pwe.time.scale` world pseudo-component (`ReadView`), so the
+/// function stays eligible for the native JIT and the threaded dispatcher; at
+/// the default scale `1.0` the multiply is exact, so an unscaled run is
+/// bit-identical to one that baked the constant. Returns the scaled register.
+fn scaled_dt_reg(base: u32, next_id: &mut u32, out: &mut Vec<crate::eir::Instruction>) -> u32 {
+    let scale = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        crate::eir::Opcode::ReadView,
+        scale,
+        Some(crate::eir::ValueType::F64),
+        vec![],
+        None,
+        Some(crate::physics_eir::cr(
+            0,
+            crate::physics_eir::time_scale_id(),
+            0,
+        )),
+    ));
+    let scaled = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        crate::eir::Opcode::Mul,
+        scaled,
+        Some(crate::eir::ValueType::F64),
+        vec![base, scale],
+        None,
+        None,
+    ));
+    scaled
+}
+
 pub struct UpdateSystem {
     /// Slot rules, with raw LHS (`sN` or a named slot) resolved per-entity.
     pub rules: Vec<(String, Expr)>,
@@ -285,7 +319,11 @@ impl EirSystem for UpdateSystem {
                 Some(crate::eir::Immediate::F64(dt_sub)),
                 None,
             ));
-            locals.insert("dt".to_string(), dt_reg);
+            // RFC-0049: the step length the rules integrate with is the declared
+            // `dt_sub` scaled by the current time scale, computed once per
+            // substep and shared by the explicit `dt` local and the `+=` sugar.
+            let dt_eff = scaled_dt_reg(dt_reg, &mut next_id, out);
+            locals.insert("dt".to_string(), dt_eff);
             let parts = LowerParts {
                 slot_regs: &slot_regs,
                 ref_regs: &ref_regs,
@@ -333,17 +371,8 @@ impl EirSystem for UpdateSystem {
                 }
                 // delta = expr(state)
                 let expr_reg = super::lower::lower_expr_f64(expr, &ctx, &mut next_id, out);
-                // delta *= dt
-                let dt_reg = next_id;
-                next_id += 1;
-                out.push(crate::physics_eir::instr(
-                    crate::eir::Opcode::Const,
-                    dt_reg,
-                    Some(crate::eir::ValueType::F64),
-                    vec![],
-                    Some(crate::eir::Immediate::F64(dt_sub)),
-                    None,
-                ));
+                // delta *= dt (RFC-0049: the substep's scaled step)
+                let dt_reg = dt_eff;
                 let scaled = next_id;
                 next_id += 1;
                 out.push(crate::physics_eir::instr(
@@ -390,16 +419,8 @@ impl EirSystem for UpdateSystem {
                     continue;
                 };
                 let expr_reg = super::lower::lower_expr_f64(expr, &ctx, &mut next_id, out);
-                let dt_reg = next_id;
-                next_id += 1;
-                out.push(crate::physics_eir::instr(
-                    crate::eir::Opcode::Const,
-                    dt_reg,
-                    Some(crate::eir::ValueType::F64),
-                    vec![],
-                    Some(crate::eir::Immediate::F64(dt_sub)),
-                    None,
-                ));
+                // RFC-0049: the substep's scaled step (shared with `dt`).
+                let dt_reg = dt_eff;
                 let scaled = next_id;
                 next_id += 1;
                 out.push(crate::physics_eir::instr(
@@ -863,7 +884,10 @@ impl EirSystem for Rk4System {
                     Some(crate::eir::Immediate::F64(self.dt)),
                     None,
                 ));
-                locals.insert("dt".to_string(), dt_reg);
+                // RFC-0049: the stage step is the declared dt scaled by the time
+                // scale, so a scaled rk4 integrates the larger step it advances.
+                let dt_eff = scaled_dt_reg(dt_reg, &mut next_id, out);
+                locals.insert("dt".to_string(), dt_eff);
                 let parts = LowerParts {
                     slot_regs: &work,
                     ref_regs: &ref_regs,
@@ -2928,6 +2952,9 @@ entity — skipped (not in its state; typo?)",
         let zero = nb_const(out, &mut next_id, 0.0);
         let one = nb_const(out, &mut next_id, 1.0);
         let dt_reg = nb_const(out, &mut next_id, self.dt);
+        // RFC-0049: the reaction window is the declared dt scaled by the time
+        // scale, matching the clock the runtime advances this step.
+        let dt_reg = scaled_dt_reg(dt_reg, &mut next_id, out);
         // Virtual time inside this step, and the "still enabled" flag: `en`
         // stays 1 only while every event so far landed inside the window.
         let mut vt = zero;

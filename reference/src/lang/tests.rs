@@ -2596,6 +2596,149 @@ fn rfc_0048_resource_capacity_is_fixed_and_release_saturates() {
     assert_eq!(st.values[3], 0.0, "an empty release stays at 0");
 }
 
+/// RFC-0049: the host-set time scale multiplies the effective step, so both the
+/// simulation clock and `step_dt()` grow by the factor while the number of
+/// *steps* stays the count the host asked for. Stepped cross-backend, so
+/// interpreter ≡ JIT for `ReadTimeScale`/`ReadStepDt`.
+#[test]
+fn rfc_0049_time_scale_scales_the_clock_and_the_step_dt() {
+    let src = "world { gravity=(0,0,0) \
+                     entity e { state=(x=0.0, seen=0.0, sc=0.0) } } \
+                   systems { update { on = e; dt = 0.5 \
+                     x = x + 2.0 * step_dt() \
+                     seen = step_dt() \
+                     sc = time_scale() } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    assert_eq!(rt.time_scale(), 1.0, "the default scale is unscaled");
+    assert_eq!(rt.set_time_scale(2.0), 2.0, "a valid request is applied");
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    // dt_eff = 0.5 * 2.0 = 1.0; a scale-invariant integrator sees it directly.
+    assert_eq!(st.values[0], 2.0, "x integrated with the scaled step");
+    assert_eq!(st.values[1], 1.0, "step_dt() reports the effective step");
+    assert_eq!(st.values[2], 2.0, "time_scale() reports the applied scale");
+    assert_eq!(rt.scene.sim_time, 1.0, "the clock advanced by dt_eff");
+    // Three more steps advance the clock by 3 * dt_eff.
+    rt.step_cross_n(3).unwrap();
+    assert_eq!(rt.scene.sim_time, 4.0, "the clock scales every step");
+    assert_eq!(rt.clock, 4);
+}
+
+/// RFC-0049: a `set_time_scale` inside a step applies from the **next** step,
+/// so a step is never half-scaled. Stepped cross-backend.
+#[test]
+fn rfc_0049_time_scale_change_applies_from_the_next_step() {
+    let src = "world { gravity=(0,0,0) \
+                     entity e { state=(last=0.0) } } \
+                   systems { update { on = e; dt = 0.5 \
+                     last = step_dt() \
+                     let _ = set_time_scale(3.0) } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    assert_eq!(
+        rt.scene.sim_time, 0.5,
+        "step 1 used the scale at entry (1.0)"
+    );
+    assert_eq!(
+        rt.time_scale(),
+        3.0,
+        "the request is live for the next step"
+    );
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 0.5, "step 1 saw the unscaled step");
+    rt.step_cross_n(1).unwrap();
+    assert_eq!(rt.scene.sim_time, 2.0, "step 2 used dt_eff = 0.5 * 3.0");
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 1.5, "step 2 saw the scaled step");
+}
+
+/// RFC-0049: the scale is a total, deterministic function. A negative request
+/// and a non-finite request are rejected (the previous scale is retained and
+/// returned, so the caller can observe it); zero is a valid request and pauses
+/// the clock. `time_scale()` reports the scale that governs the step in
+/// progress, so the step that issued the requests still ran unscaled. Stepped
+/// cross-backend.
+#[test]
+fn rfc_0049_invalid_time_scales_are_rejected_and_zero_pauses() {
+    let src = "world { gravity=(0,0,0) \
+                     entity e { state=(big=1.0e308, a=0.0, b=0.0, c=0.0, d=0.0) } } \
+                   systems { update { on = e; dt = 1.0 \
+                     a = set_time_scale(-2.0) \
+                     b = set_time_scale(0.0) \
+                     c = set_time_scale(big * big) \
+                     d = time_scale() } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(
+        st.values[1], 1.0,
+        "a negative request is rejected (value kept)"
+    );
+    assert_eq!(st.values[2], 0.0, "zero is applied — the clock pauses");
+    assert_eq!(
+        st.values[3], 0.0,
+        "an infinite request is rejected (value kept)"
+    );
+    assert_eq!(
+        st.values[4], 1.0,
+        "time_scale() reports the scale governing the step in progress"
+    );
+    assert_eq!(rt.scene.sim_time, 1.0, "step 1 used the scale at entry");
+    // A paused clock keeps advancing the step counter without advancing time.
+    rt.step_cross_n(3).unwrap();
+    assert_eq!(
+        rt.scene.sim_time, 1.0,
+        "a zero scale freezes simulation time"
+    );
+    assert_eq!(rt.clock, 4, "the step counter still runs");
+    assert_eq!(rt.time_scale(), 0.0, "the live scale is the applied zero");
+}
+
+/// RFC-0049: the `dt` a body reads (and the implicit `+= dt·expr` sugar) is the
+/// **effective** step, so a scaled run integrates the larger step it advances —
+/// the model's `dt` and the clock cannot disagree. Stepped cross-backend, and
+/// the scaling instructions are `ReadView`/`Mul`, which keep the function
+/// eligible for the native JIT.
+#[test]
+fn rfc_0049_body_dt_is_the_effective_scaled_step() {
+    let src = "world { gravity=(0,0,0) \
+                     entity e { state=(x=0.0, y=0.0, seen=0.0) } } \
+                   systems { update { on = e; dt = 0.25 \
+                     x = x + dt \
+                     y += 4.0 \
+                     seen = dt } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.set_time_scale(3.0);
+    rt.step_cross_n(1).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    // dt_eff = 0.25 * 3.0 = 0.75: explicit `dt` and the `+=` sugar agree.
+    assert_eq!(st.values[0], 0.75, "explicit dt is the effective step");
+    assert_eq!(st.values[1], 3.0, "`y += 4.0` integrated 4.0 * dt_eff");
+    assert_eq!(st.values[2], 0.75, "the dt local is the effective step");
+    assert_eq!(rt.scene.sim_time, 0.75, "the clock advanced by the same dt");
+    assert_eq!(rt.effective_dt(), 0.75);
+}
+
+/// RFC-0049: the host API is the same definition as the builtin — it clamps at
+/// `TIME_SCALE_MAX` and rejects (retains) anything invalid. Cross-backend.
+#[test]
+fn rfc_0049_host_api_shares_the_builtin_definition() {
+    let src = "world { gravity=(0,0,0) entity e { state=(x=0.0) } } \
+                   systems { update { on = e; dt = 1.0 \
+                     x = x + step_dt() } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    assert_eq!(rt.set_time_scale(1.0e12), crate::eir::TIME_SCALE_MAX);
+    assert_eq!(rt.effective_dt(), crate::eir::TIME_SCALE_MAX);
+    assert_eq!(rt.set_time_scale(f64::NAN), crate::eir::TIME_SCALE_MAX);
+    // Back to a sane scale and step: one step advances by exactly 2.0 seconds.
+    assert_eq!(rt.set_time_scale(2.0), 2.0);
+    assert_eq!(rt.effective_dt(), 2.0);
+    rt.step_cross_n(1).unwrap();
+    assert_eq!(rt.scene.sim_time, 2.0);
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(st.values[0], 2.0, "the integrator used the effective step");
+}
+
 /// RFC-0048 slice B: calendar reads on an empty calendar are safe sentinels —
 /// count 0, kind 0, payload 0, and a *finite* `f64::MAX` time (so storing it in
 /// a state slot cannot trip the detail-88 non-finite check).

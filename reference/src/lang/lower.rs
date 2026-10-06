@@ -1124,6 +1124,48 @@ pub(crate) fn lower_expr(
                     ));
                     out_reg
                 }
+                // RFC-0049: deterministic time scaling. `time_scale()` reads the
+                // scale governing the current step (the step-start snapshot) and
+                // `step_dt()` the effective step length — both are world
+                // pseudo-component reads (`pwe.time.scale` / `pwe.time.step_dt`),
+                // so they stay eligible for the JIT/AOT and threaded dispatchers,
+                // exactly like `t`. `set_time_scale(x)` requests a new scale for
+                // the **next** step (finite, non-negative; clamped, invalid
+                // requests ignored) and yields the **applied** scale. Only the
+                // control write is an opcode; `step_cross` compares the resulting
+                // execution-context state.
+                "time_scale" | "step_dt" => {
+                    let component = if *name == "time_scale" {
+                        crate::physics_eir::time_scale_id()
+                    } else {
+                        crate::physics_eir::step_dt_id()
+                    };
+                    let out_reg = *next_id;
+                    *next_id += 1;
+                    out.push(crate::physics_eir::instr(
+                        crate::eir::Opcode::ReadView,
+                        out_reg,
+                        Some(crate::eir::ValueType::F64),
+                        vec![],
+                        None,
+                        Some(crate::physics_eir::cr(0, component, 0)),
+                    ));
+                    out_reg
+                }
+                "set_time_scale" => {
+                    let x = lower_expr_f64(&args[0], ctx, next_id, out);
+                    let out_reg = *next_id;
+                    *next_id += 1;
+                    out.push(crate::physics_eir::instr(
+                        crate::eir::Opcode::SetTimeScale,
+                        out_reg,
+                        Some(crate::eir::ValueType::F64),
+                        vec![x],
+                        None,
+                        None,
+                    ));
+                    out_reg
+                }
                 // RFC-0044 follow-up: array reductions over a named array. The
                 // length is compile-time, so these unroll to the existing
                 // arithmetic/comparison opcodes (no new opcode, no runtime

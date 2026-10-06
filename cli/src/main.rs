@@ -81,7 +81,11 @@ fn usage() {
                               usually slower than the CPU - see roadmap)\n  \
            --threaded         opt-in threaded-dispatch interpreter (the jump\n  \
                               table is the faster default)\n  \
-           --port P           present/playground: HTTP port\n\
+           --port P           present/playground: HTTP port\n  \
+           --max-steps-per-frame N\n  \
+                              present: cap simulation steps per frame (default\n  \
+                              unlimited; the live speed slider is bounded by a\n  \
+                              per-frame wall-clock budget)\n\
          \n\
          Compile source to a .pweb binary, then run the binary (javac/java style).\n\
          A .pweb artifact holds the verified canonical EIR module plus the\n\
@@ -770,6 +774,13 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     let mut native_jit = true;
     let mut gpu = false;
     let mut threaded = false;
+    // RFC-0049: the time scale is a runtime/execution-context setting, applied
+    // from the first step onward (captured after construction, like `--param`).
+    let mut time_scale: Option<f64> = None;
+    // Live-viewer speed ceiling (steps per frame). The viewer slider asks for a
+    // speed; the loop runs whole steps within a wall-clock budget, and this caps
+    // the count so a pathological request cannot spin forever.
+    let mut max_steps_per_frame: u32 = present::MAX_STEPS_PER_FRAME;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -809,6 +820,32 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
             }
             "--threaded" => {
                 threaded = true;
+            }
+            "--time-scale" => {
+                let Some(v) = it.next().and_then(|s| s.parse::<f64>().ok()) else {
+                    eprintln!("pwe: --time-scale needs a finite number");
+                    return 2;
+                };
+                if !v.is_finite() {
+                    eprintln!("pwe: --time-scale must be finite");
+                    return 2;
+                }
+                if v < 0.0 {
+                    eprintln!("pwe: --time-scale must be non-negative");
+                    return 2;
+                }
+                time_scale = Some(v);
+            }
+            "--max-steps-per-frame" => {
+                let Some(v) = it.next().and_then(|s| s.parse::<u32>().ok()) else {
+                    eprintln!("pwe: --max-steps-per-frame needs a positive integer");
+                    return 2;
+                };
+                if v == 0 {
+                    eprintln!("pwe: --max-steps-per-frame must be positive");
+                    return 2;
+                }
+                max_steps_per_frame = v;
             }
             "--port" | "-p" => {
                 let Some(v) = it.next().and_then(|s| s.parse::<u16>().ok()) else {
@@ -875,6 +912,15 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
     if check {
         rt.set_finite_check(true);
     }
+    if let Some(v) = time_scale {
+        // RFC-0049: the host time scale is the same definition as the builtin —
+        // clamped at TIME_SCALE_MAX, invalid requests rejected. It governs the
+        // first step onward, so it is applied before any step runs.
+        let applied = rt.set_time_scale(v);
+        if applied != v {
+            eprintln!("pwe: --time-scale {} clamped to {}", v, applied);
+        }
+    }
     if threaded {
         // Opt-in threaded-dispatch interpreter (default is the faster jump table).
         rt.enable_threaded_dispatch(true);
@@ -925,7 +971,7 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
             report(&rt, steps);
             0
         }
-        Some(p) => present_live(rt, &model, p),
+        Some(p) => present_live(rt, &model, p, max_steps_per_frame),
     }
 }
 
@@ -933,8 +979,18 @@ fn cmd_run(args: &[String], present_default: Option<u16>) -> i32 {
 /// cross-checks every step). Interactive/demo runs favor throughput.
 const CROSS_BATCH: u32 = 16;
 
+/// Wall-clock budget for stepping within one live frame. Together with
+/// `--max-steps-per-frame` this bounds per-frame work: a very large speed runs
+/// as many steps as fit here rather than stalling the viewer.
+const STEP_BUDGET_MS: u64 = 10;
+
 /// Executes live and serves the browser viewer until interrupted.
-fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
+fn present_live(
+    mut rt: LangRuntime,
+    model: &WorldModel,
+    port: u16,
+    max_steps_per_frame: u32,
+) -> i32 {
     let live = Arc::new(RwLock::new(LiveState::default()));
     // The viewer's Restart button sets this; the loop reloads the initial scene.
     let reset = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -952,31 +1008,69 @@ fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
     let cam = auto_frame_camera(&rt);
     let initial = rt.scene.clone();
     let mut step = 0u64;
+    // Browser speed control: the viewer's slider sets how many simulation steps
+    // run per frame, not the integrator's `dt`. Scaling `dt` instead would make
+    // the effective step coarse and drive explicit integrators into `inf`/`NaN`
+    // (tripping the deterministic division/compare guard), so the physics step is
+    // left exactly as the model declares it and only the *step rate* changes.
+    // A fractional accumulator gives smooth slow-motion below one step per frame.
+    let mut speed_acc = 0.0f64;
     loop {
         if reset.swap(false, std::sync::atomic::Ordering::Relaxed) {
             rt.reset_to(initial.clone());
             step = 0;
+            speed_acc = 0.0;
         }
-        if pause.load(std::sync::atomic::Ordering::Relaxed) {
+        let paused = pause.load(std::sync::atomic::Ordering::Relaxed);
+        // The requested speed (steps per frame) is read even while paused so the
+        // viewer's readout tracks the slider.
+        let req = {
+            let g = live.read().unwrap_or_else(|e| e.into_inner());
+            if g.time_scale_req.is_finite() && g.time_scale_req > 0.0 {
+                g.time_scale_req
+            } else {
+                1.0
+            }
+        };
+        if paused {
             std::thread::sleep(std::time::Duration::from_millis(16));
             continue;
         }
-        // One step per frame; cross-verify the backends on the same 16-step
-        // phase as `run` (the last step of each batch, i.e. step ≡ 15 mod CROSS_BATCH)
-        // so the two CLIs agree about which steps are checked.
-        let r = if (step + 1) % CROSS_BATCH as u64 == 0 {
-            rt.step_cross()
-        } else {
-            rt.step_interpreter()
-        };
-        if let Err(e) = r {
-            eprintln!("pwe: step {step} failed: {e}");
-            for d in pwe_reference::lang::take_diagnostics() {
-                eprintln!("  [{}] {}", d.detail, d.message);
+        // The request is a *rate* (steps per frame). Only the fraction carries
+        // between frames (`present::speed_frame`), so a very large request cannot
+        // leave a backlog that keeps the loop flat-out after the user lowers the
+        // speed. Steps the frame budget prevented are dropped, not deferred.
+        let want = present::speed_frame(&mut speed_acc, req, max_steps_per_frame);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(STEP_BUDGET_MS);
+        let mut ran = 0u32;
+        while ran < want {
+            // Cross-verify the backends on the same 16-step phase as `run` (the
+            // last step of each batch, i.e. step ≡ 15 mod CROSS_BATCH) so the two
+            // CLIs agree about which steps are checked.
+            let r = if (step + 1) % CROSS_BATCH as u64 == 0 {
+                rt.step_cross()
+            } else {
+                rt.step_interpreter()
+            };
+            match r {
+                Ok(_) => {
+                    step += 1;
+                    ran += 1;
+                }
+                Err(e) => {
+                    eprintln!("pwe: step {step} failed: {e}");
+                    for d in pwe_reference::lang::take_diagnostics() {
+                        eprintln!("  [{}] {}", d.detail, d.message);
+                    }
+                    return 1;
+                }
             }
-            return 1;
+            // Honour the frame budget, but only after at least one step so slow
+            // motion still advances.
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
         }
-        step += 1;
         // Build the frame and the info text outside the lock, then swap them in:
         // holding the write lock during a heavy frame would block a `/state`
         // reader (and delay a closing tab waiting on its last request).
@@ -992,6 +1086,10 @@ fn present_live(mut rt: LangRuntime, model: &WorldModel, port: u16) -> i32 {
             g.step = step;
             g.frame = frame;
             g.info = info;
+            // Report the *requested* speed so the slider/box do not fight
+            // themselves, and the simulated time actually advanced this frame.
+            g.time_scale = req.min(max_steps_per_frame as f64);
+            g.effective_dt = ran as f64 * rt.sim_dt;
         }
         std::thread::sleep(std::time::Duration::from_millis(16));
     }

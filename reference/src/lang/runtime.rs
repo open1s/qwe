@@ -523,11 +523,14 @@ impl LangRuntime {
     }
 
     /// Resets the runtime to a previously captured scene (step 0, cleared
-    /// execution context). Used by the live viewer's Restart.
+    /// execution context). Used by the live viewer's Restart. The RFC-0049 time
+    /// scale is a playback setting, so it survives the reset.
     pub fn reset_to(&mut self, scene: Scene) {
+        let scale = self.env.time_scale;
         self.scene = scene;
         self.clock = 0;
         self.env = crate::eir::ExecEnv::default();
+        self.env.time_scale = scale;
     }
 
     /// Enables/disables the per-step non-finite state check (detail 88).
@@ -613,9 +616,29 @@ impl LangRuntime {
             .collect()
     }
 
-    /// Advances the global simulation clock by one step.
-    fn advance_clock(&mut self) {
-        self.scene.sim_time += self.sim_dt;
+    /// RFC-0049: the current time scale (`1.0` = unscaled).
+    pub fn time_scale(&self) -> f64 {
+        self.env.time_scale
+    }
+
+    /// RFC-0049: sets the time scale applied from the next step onward (the
+    /// current step's `dt` is already fixed). Returns the **applied** scale: a
+    /// finite, non-negative request is clamped to `[0, TIME_SCALE_MAX]`; a
+    /// negative/NaN/infinite request leaves the scale unchanged. The language
+    /// `set_time_scale` builtin shares this definition.
+    pub fn set_time_scale(&mut self, requested: f64) -> f64 {
+        self.env.set_time_scale(requested)
+    }
+
+    /// RFC-0049: the effective step length the **next** step will advance by
+    /// (`sim_dt * time_scale`).
+    pub fn effective_dt(&self) -> f64 {
+        self.sim_dt * self.env.time_scale
+    }
+
+    /// Advances the global simulation clock by `dt` (the already-scaled step).
+    fn advance_clock(&mut self, dt: f64) {
+        self.scene.sim_time += dt;
         self.clock += 1;
         self.publish_channels();
     }
@@ -676,9 +699,13 @@ impl LangRuntime {
         let mut rt = SceneRuntime::with_gpu(&self.scene, self.gpu.as_ref());
         #[cfg(not(all(feature = "gpu", target_os = "macos")))]
         let mut rt = SceneRuntime::new(&self.scene);
+        // RFC-0049: the step's effective dt is fixed at entry from the current
+        // time scale; a `set_time_scale` during the step applies to the next one.
+        let dt = self.effective_dt();
+        rt.set_time_context(self.env.time_scale, dt);
         self.env.time = self.scene.sim_time;
         self.env.step = self.clock;
-        self.env.step_dt = self.sim_dt;
+        self.env.step_dt = dt;
         self.env.events.clear();
         crate::eir::drain_due_events(&mut self.env);
         // The module was validated once at compile; executing skips the
@@ -699,7 +726,7 @@ impl LangRuntime {
             self.assert_finite()?;
         }
         self.check_conserved(&writes)?;
-        self.advance_clock();
+        self.advance_clock(dt);
         Ok(writes)
     }
 
@@ -709,9 +736,11 @@ impl LangRuntime {
         let mut rt = SceneRuntime::with_gpu(&self.scene, self.gpu.as_ref());
         #[cfg(not(all(feature = "gpu", target_os = "macos")))]
         let mut rt = SceneRuntime::new(&self.scene);
+        let dt = self.effective_dt();
+        rt.set_time_context(self.env.time_scale, dt);
         self.env.time = self.scene.sim_time;
         self.env.step = self.clock;
-        self.env.step_dt = self.sim_dt;
+        self.env.step_dt = dt;
         self.env.events.clear();
         crate::eir::drain_due_events(&mut self.env);
         let writes = self.jit.execute_with_env_validated(
@@ -726,7 +755,7 @@ impl LangRuntime {
         let overlays = rt.take_overlays();
         apply_writes(&mut self.scene, &writes)?;
         crate::physics_eir::flush_overlays(&mut self.scene, &overlays);
-        self.advance_clock();
+        self.advance_clock(dt);
         Ok(writes)
     }
 
@@ -738,11 +767,16 @@ impl LangRuntime {
     pub fn step_cross(&mut self) -> Result<Vec<WorldWrite>> {
         let a = self.scene.clone();
         let b = self.scene.clone();
+        // RFC-0049: both backends share one effective dt, captured before either
+        // runs, so a time-scale change made by one backend cannot desynchronize
+        // them within a step.
+        let dt = self.effective_dt();
+        let scale = self.env.time_scale;
         let base = {
             let mut e = self.env.clone();
             e.time = self.scene.sim_time;
             e.step = self.clock;
-            e.step_dt = self.sim_dt;
+            e.step_dt = dt;
             e.events.clear();
             crate::eir::drain_due_events(&mut e);
             e
@@ -753,6 +787,7 @@ impl LangRuntime {
         let mut rt_a = SceneRuntime::with_gpu(&a, self.gpu.as_ref());
         #[cfg(not(all(feature = "gpu", target_os = "macos")))]
         let mut rt_a = SceneRuntime::new(&a);
+        rt_a.set_time_context(scale, dt);
         let int_writes = if self.threaded && self.optimized.threaded_supported() {
             self.optimized
                 .execute_threaded_with_index(&mut rt_a, &mut env_a, &self.call_index)?
@@ -766,6 +801,7 @@ impl LangRuntime {
         let mut rt_b = SceneRuntime::with_gpu(&b, self.gpu.as_ref());
         #[cfg(not(all(feature = "gpu", target_os = "macos")))]
         let mut rt_b = SceneRuntime::new(&b);
+        rt_b.set_time_context(scale, dt);
         let jit_writes = self.jit.execute_with_env_validated(
             &self.jit_key,
             &mut rt_b,
@@ -790,6 +826,12 @@ impl LangRuntime {
             || env_a.cross_time != env_b.cross_time
             || env_a.next_seq != env_b.next_seq
         {
+            return Err(error(Status::EirInvalid, 50));
+        }
+        // RFC-0049: the time scale is execution-context state derived during the
+        // step; a divergence here would surface as a different clock a step
+        // later, so it is compared like the other derived state.
+        if env_a.time_scale != env_b.time_scale {
             return Err(error(Status::EirInvalid, 50));
         }
         // RFC-0048 slice C2: resources are execution-context state (like the
@@ -817,7 +859,7 @@ impl LangRuntime {
         // Copy the conserved writes before the borrow ends.
         let cw: Vec<WorldWrite> = int_writes.clone();
         self.check_conserved(&cw)?;
-        self.advance_clock();
+        self.advance_clock(dt);
         Ok(int_writes)
     }
 

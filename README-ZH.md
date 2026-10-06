@@ -5,8 +5,8 @@
 [English](README.md)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![rust](https://img.shields.io/badge/rust-1.81%2B-orange.svg)](https://www.rust-lang.org)
-[![tests](https://img.shields.io/badge/tests-485%20passing-brightgreen.svg)](#测试与符合性)
-[![conformance](https://img.shields.io/badge/conformance-36%2F36%20%C2%B7%200%20skips-brightgreen.svg)](#测试与符合性)
+[![tests](https://img.shields.io/badge/tests-491%20passing-brightgreen.svg)](#测试与符合性)
+[![conformance](https://img.shields.io/badge/conformance-37%2F37%20%C2%B7%200%20skips-brightgreen.svg)](#测试与符合性)
 [![RFCs](https://img.shields.io/badge/frozen%20contract-37%20RFCs-purple.svg)](#冻结契约)
 [![repo](https://img.shields.io/badge/github-open1s%2Fqwe-181717.svg)](https://github.com/open1s/qwe)
 
@@ -15,7 +15,7 @@ PWE 不是又一个物理玩具，而是一个**基底**：唯一权威的世界
 种群演化、电磁、热、声、波、机械臂，以及会走路的机器。
 
 而且它的确定性**可被证明**：解释器是语义基准，JIT 必须与它**每一步逐字节一致**；
-300+ 测试与 36 项符合性检查强制保证——**零跳过**。
+300+ 测试与 37 项符合性检查强制保证——**零跳过**。
 
 ```
 World Model → WIR → Domain IR → EIR → 解释器 / JIT / AOT → Runtime → CPU / GPU / NPU / Edge / Cloud
@@ -209,7 +209,7 @@ application  →  world  →  IR  →  compiler  →  runtime  →  kernel  → 
 git clone git@github.com:open1s/qwe.git && cd qwe
 
 cargo build --workspace
-cargo test  --workspace          # 485 个测试
+cargo test  --workspace          # 491 个测试
 cargo run -p pwe-conformance     # RFC-0029：全部 PASS，无跳过
 
 # 语言端到端：
@@ -225,15 +225,15 @@ cargo run -p pwe-reference --example language_demo
 
 | 套件 | 数量 |
 | --- | --- |
-| 运行时 / 语言单元测试 | 423 |
+| 运行时 / 语言单元测试 | 429 |
 | 解析解符合性 | 21 |
 | 属性测试 | 4 |
 | 标准库测试 | 9 |
 | 模糊测试（确定性） | 2 |
 | 集成 / 其它 | 26 |
-| **合计** | **485** |
+| **合计** | **491** |
 
-外加 `pwe-conformance`：**36 / 36，零跳过**。`no_std` 检查：
+外加 `pwe-conformance`：**37 / 37，零跳过**。`no_std` 检查：
 `cargo check -p pwe-api --no-default-features`。
 
 ---

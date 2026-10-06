@@ -85,6 +85,23 @@ pub fn sim_time_id() -> ComponentTypeId {
     fixed_id(&ID, "pwe.time", "clock")
 }
 
+/// RFC-0049: canonical id of the current step's **time scale**
+/// (`pwe.time.scale` v1) — the step-start snapshot read by the language
+/// `time_scale()` builtin and by the scaled `dt` local. Like the clock it does
+/// not belong to an entity; the `SceneRuntime` serves it.
+pub fn time_scale_id() -> ComponentTypeId {
+    static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
+    fixed_id(&ID, "pwe.time", "scale")
+}
+
+/// RFC-0049: canonical id of the current step's **effective length** in
+/// simulation seconds (`pwe.time.step_dt` v1), read by the language `step_dt()`
+/// builtin. Served by the `SceneRuntime` alongside the clock.
+pub fn step_dt_id() -> ComponentTypeId {
+    static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
+    fixed_id(&ID, "pwe.time", "step_dt")
+}
+
 /// RFC-0038: canonical `ComponentTypeId` of the per-entity `active` flag.
 pub fn active_id() -> ComponentTypeId {
     static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
@@ -165,6 +182,8 @@ struct CanonicalIds {
     state: ComponentTypeId,
     active: ComponentTypeId,
     sim_time: ComponentTypeId,
+    time_scale: ComponentTypeId,
+    step_dt: ComponentTypeId,
 }
 
 impl CanonicalIds {
@@ -176,6 +195,8 @@ impl CanonicalIds {
             state: state_id(),
             active: active_id(),
             sim_time: sim_time_id(),
+            time_scale: time_scale_id(),
+            step_dt: step_dt_id(),
         }
     }
 }
@@ -201,6 +222,12 @@ pub struct SceneRuntime<'a> {
     param_ids: std::collections::BTreeMap<ComponentTypeId, f64>,
     /// Canonical component ids, resolved once (hot-path fast access).
     ids: CanonicalIds,
+    /// RFC-0049: the step-start time scale and effective step length, served to
+    /// the EIR as the `pwe.time.scale` / `pwe.time.step_dt` pseudo-components.
+    /// They are fixed for the whole step (a `set_time_scale` applies next step),
+    /// so every system of a step integrates with one scale.
+    time_scale: f64,
+    step_dt: f64,
     /// Optional Metal GPU context for field sweeps (`pwe run --gpu`).
     #[cfg(all(feature = "gpu", target_os = "macos"))]
     gpu: Option<&'a crate::gpu::Gpu>,
@@ -224,9 +251,20 @@ impl<'a> SceneRuntime<'a> {
             field_ids,
             param_ids,
             ids: CanonicalIds::resolve(),
+            time_scale: 1.0,
+            step_dt: 0.0,
             #[cfg(all(feature = "gpu", target_os = "macos"))]
             gpu: None,
         }
+    }
+
+    /// RFC-0049: publishes the step's time scale and effective step length to
+    /// the EIR (`time_scale()` / `step_dt()` / the scaled `dt` local read them).
+    /// Called once per step with the values captured at step entry, so every
+    /// system in the step sees one consistent scale.
+    pub fn set_time_context(&mut self, time_scale: f64, step_dt: f64) {
+        self.time_scale = time_scale;
+        self.step_dt = step_dt;
     }
 
     /// Attaches an optional Metal GPU context (field sweeps run on the GPU when
@@ -259,6 +297,14 @@ impl SceneRuntime<'_> {
         // The global simulation clock (`t`) does not belong to any entity.
         if target.component == self.ids.sim_time {
             return Ok(self.scene.sim_time.to_bits());
+        }
+        // RFC-0049: the step's time scale and effective step length are served
+        // like the clock — world-level scalars, not entity fields.
+        if target.component == self.ids.time_scale {
+            return Ok(self.time_scale.to_bits());
+        }
+        if target.component == self.ids.step_dt {
+            return Ok(self.step_dt.to_bits());
         }
         // A model parameter: not tied to any entity. Checked first so a
         // parameter read never falls through to the entity lookup.

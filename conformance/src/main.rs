@@ -874,6 +874,36 @@ fn extensions(report: &mut Report) {
         if resources_ok { Case::Pass } else { Case::Fail },
     );
 
+    // RFC-0049: time scale is a runtime execution-context setting.
+    // `set_time_scale` requests the scale for the *next* step and
+    // returns the applied value; `time_scale()` and `step_dt()` read
+    // the step-start scale/effective step. After two steps with
+    // scales 1.0→2.0 the clock advanced 1+2=3 seconds.
+    let time_scale = r#"
+world { gravity=(0,0,0)
+    entity e { state=(t=0.0, s=0.0, sp=0.0) } }
+systems { update { on=e; dt=1.0
+    t = set_time_scale(2.0)
+    s = time_scale()
+    sp = s * 100.0 } }
+"#;
+    let time_scale_ok = run(time_scale, 2)
+        .map(|rt| {
+            // Step 1 (entered at scale 1.0, applied next=2.0): clock advances 1.0.
+            // Step 2 (entered at scale 2.0, next stays 2.0): clock advances 2.0.
+            // The applied scale is observable; the clock reflects the effective step.
+            rt.scene.sim_time == 3.0 && rt.time_scale() == 2.0
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0049 time scale (applies from next step, clock advances 1+2)",
+        if time_scale_ok {
+            Case::Pass
+        } else {
+            Case::Fail
+        },
+    );
+
     // RFC-0044 (deferred item, landed): a runtime array index is bound-checked.
     // An in-range dynamic read/write succeeds cross-backend; an out-of-range
     // index traps (detail 18) — the trap path is covered by `lang::tests`, since
