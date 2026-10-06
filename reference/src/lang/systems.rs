@@ -3,40 +3,9 @@
 //! `send`/`recv` channels, and `nbody`.
 #![allow(clippy::too_many_arguments)]
 use super::*;
-
-/// RFC-0049: lower the `dt` local a system body reads to the **effective** step
-/// `base * time_scale()` rather than the declared constant. The scale is read
-/// through the `pwe.time.scale` world pseudo-component (`ReadView`), so the
-/// function stays eligible for the native JIT and the threaded dispatcher; at
-/// the default scale `1.0` the multiply is exact, so an unscaled run is
-/// bit-identical to one that baked the constant. Returns the scaled register.
-fn scaled_dt_reg(base: u32, next_id: &mut u32, out: &mut Vec<crate::eir::Instruction>) -> u32 {
-    let scale = *next_id;
-    *next_id += 1;
-    out.push(crate::physics_eir::instr(
-        crate::eir::Opcode::ReadView,
-        scale,
-        Some(crate::eir::ValueType::F64),
-        vec![],
-        None,
-        Some(crate::physics_eir::cr(
-            0,
-            crate::physics_eir::time_scale_id(),
-            0,
-        )),
-    ));
-    let scaled = *next_id;
-    *next_id += 1;
-    out.push(crate::physics_eir::instr(
-        crate::eir::Opcode::Mul,
-        scaled,
-        Some(crate::eir::ValueType::F64),
-        vec![base, scale],
-        None,
-        None,
-    ));
-    scaled
-}
+// RFC-0049: shared with the `physics_eir` systems so every baked `dt` in the
+// codebase is scaled by one definition (see `physics_eir::scaled_dt_reg`).
+use crate::physics_eir::scaled_dt_reg;
 
 pub struct UpdateSystem {
     /// Slot rules, with raw LHS (`sN` or a named slot) resolved per-entity.
@@ -800,6 +769,27 @@ impl EirSystem for Rk4System {
         // Substeps: repeat the whole RK4 step (base reads, stages, combine)
         // with dt/n; each substep re-reads the state.
         let dt_sub = self.dt / self.substeps as f64;
+        // RFC-0049: the substep length itself has to carry the time scale, not
+        // only the `dt` local. The stage shifts and the combine weight *are*
+        // the integration the state advances with — `inte` rules only read
+        // derivatives, so leaving those constants baked made a scaled rk4
+        // move its clock while the state stood still.
+        let mut nd = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
+        let dt_sub_reg = nd;
+        nd += 1;
+        out.push(crate::physics_eir::instr(
+            crate::eir::Opcode::Const,
+            dt_sub_reg,
+            Some(crate::eir::ValueType::F64),
+            vec![],
+            Some(crate::eir::Immediate::F64(dt_sub)),
+            None,
+        ));
+        let dt_sub_scaled = scaled_dt_reg(dt_sub_reg, &mut nd, out);
+        let half = const_reg(0.5, &mut nd, out);
+        let dt_half = binary(crate::eir::Opcode::Mul, dt_sub_scaled, half, &mut nd, out);
+        let sixth = const_reg(1.0 / 6.0, &mut nd, out);
+        let dt_sixth = binary(crate::eir::Opcode::Mul, dt_sub_scaled, sixth, &mut nd, out);
         for _ in 0..self.substeps {
             // Read the base (start-of-step) own state into `y`.
             let mut y: Vec<u32> = Vec::with_capacity(slots);
@@ -831,23 +821,15 @@ impl EirSystem for Rk4System {
                         work.extend_from_slice(&y);
                     }
                     Some(kp) => {
-                        let shift = if stage < 3 { dt_sub / 2.0 } else { dt_sub };
+                        // RFC-0049: the stage shift is the scaled substep, so
+                        // every stage integrates the same scaled length.
+                        let shift = if stage < 3 { dt_half } else { dt_sub_scaled };
                         for (i, base) in y.iter().copied().enumerate() {
                             let k = match kp.get(i) {
                                 Some(Some(r)) => {
-                                    let sreg =
-                                        out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
-                                    out.push(crate::physics_eir::instr(
-                                        crate::eir::Opcode::Const,
-                                        sreg,
-                                        Some(crate::eir::ValueType::F64),
-                                        vec![],
-                                        Some(crate::eir::Immediate::F64(shift)),
-                                        None,
-                                    ));
                                     let mut sid =
                                         out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
-                                    binary(crate::eir::Opcode::Mul, sreg, *r, &mut sid, out)
+                                    binary(crate::eir::Opcode::Mul, shift, *r, &mut sid, out)
                                 }
                                 // No rule for this slot: derivative is 0, keep y.
                                 _ => {
@@ -1010,19 +992,8 @@ impl EirSystem for Rk4System {
                     let b = binary(crate::eir::Opcode::Add, two_k3, k4, &mut next_id, out);
                     binary(crate::eir::Opcode::Add, a, b, &mut next_id, out)
                 };
-                let dtsix = {
-                    let sreg = next_id;
-                    next_id += 1;
-                    out.push(crate::physics_eir::instr(
-                        crate::eir::Opcode::Const,
-                        sreg,
-                        Some(crate::eir::ValueType::F64),
-                        vec![],
-                        Some(crate::eir::Immediate::F64(dt_sub / 6.0)),
-                        None,
-                    ));
-                    binary(crate::eir::Opcode::Mul, sreg, sum, &mut next_id, out)
-                };
+                // RFC-0049: the combine weight is the scaled substep as well.
+                let dtsix = binary(crate::eir::Opcode::Mul, dt_sixth, sum, &mut next_id, out);
                 // Gate the delta (not the sum): the state is untouched when 0.
                 let dtsix = match gate_reg {
                     Some(g) => binary(crate::eir::Opcode::Mul, dtsix, g, &mut next_id, out),
@@ -2442,8 +2413,19 @@ impl EirSystem for WaveSystem {
         for limb in pl {
             operands.push(const_u64_reg(limb as u64, &mut next, out));
         }
+        // RFC-0049: the Courant coefficient is the wave's step (nv += cfl·lap),
+        // so it has to carry the time scale along with the clock — otherwise a
+        // scaled run advances `t` while the field stands still.
         let cfl = self.velocity * self.dt / self.dx;
-        operands.push(const_reg(cfl * cfl, &mut next, out));
+        let cfl_reg = const_reg(cfl, &mut next, out);
+        let cfl_reg = scaled_dt_reg(cfl_reg, &mut next, out);
+        operands.push(binary(
+            crate::eir::Opcode::Mul,
+            cfl_reg,
+            cfl_reg,
+            &mut next,
+            out,
+        ));
         operands.push(const_reg(self.damping, &mut next, out));
         operands.push(const_reg(self.absorb, &mut next, out));
         operands.push(const_reg(self.absorb_width as f64, &mut next, out));
@@ -2705,7 +2687,12 @@ impl EirSystem for NbodySystem {
             pz,
         );
         // Half kick: v_half = v + a·dt/2.
-        let half = nb_const(out, &mut next_id, self.dt * 0.5);
+        // RFC-0049: Verlet has to integrate with the scaled step, so the kick
+        // and the drift advance the same length the clock records this step.
+        let dtc = nb_const(out, &mut next_id, self.dt);
+        let dtc = scaled_dt_reg(dtc, &mut next_id, out);
+        let half_dt = nb_const(out, &mut next_id, 0.5);
+        let half = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, dtc, half_dt);
         let hax = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, ax, half);
         let hay = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, ay, half);
         let haz = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, az, half);
@@ -2715,7 +2702,6 @@ impl EirSystem for NbodySystem {
 
         if self.stage == 1 {
             // Drift: p_new = p + v_half·dt; publish v_half and p_new.
-            let dtc = nb_const(out, &mut next_id, self.dt);
             let dvx = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vhx, dtc);
             let dvy = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vhy, dtc);
             let dvz = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vhz, dtc);
@@ -3499,7 +3485,9 @@ impl EirSystem for PairSystem {
             fz = nb_arith(out, &mut next_id, crate::eir::Opcode::Add, fz, t);
         }
         // Kick only: v += (f/m)·dt.
+        // RFC-0049: the kick integrates with the scaled step.
         let dtc = nb_const(out, &mut next_id, self.dt);
+        let dtc = scaled_dt_reg(dtc, &mut next_id, out);
         let ax = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, fx, m);
         let ay = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, fy, m);
         let az = nb_arith(out, &mut next_id, crate::eir::Opcode::Div, fz, m);
@@ -3549,10 +3537,18 @@ impl EirSystem for DriftSystem {
         let vx = nb_read(out, &mut next_id, entity, 3);
         let vy = nb_read(out, &mut next_id, entity, 4);
         let vz = nb_read(out, &mut next_id, entity, 5);
+        // RFC-0049: the drift advances the same scaled step the clock records.
         let dtc = nb_const(out, &mut next_id, self.dt);
+        let dtc = scaled_dt_reg(dtc, &mut next_id, out);
         // Optional damping, then drift: p += v·dt.
         let (vx, vy, vz) = if self.damp > 0.0 {
-            let keep = nb_const(out, &mut next_id, 1.0 - self.damp * self.dt);
+            // RFC-0049: the decay is 1 - k·dt over this step, so it is the
+            // scaled step (not the coefficient) that has to grow. Scaling
+            // `keep` itself would inflate it past 1 and amplify instead.
+            let decay = nb_const(out, &mut next_id, self.damp * self.dt);
+            let decay = scaled_dt_reg(decay, &mut next_id, out);
+            let one = nb_const(out, &mut next_id, 1.0);
+            let keep = nb_arith(out, &mut next_id, crate::eir::Opcode::Sub, one, decay);
             let nvx = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vx, keep);
             let nvy = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vy, keep);
             let nvz = nb_arith(out, &mut next_id, crate::eir::Opcode::Mul, vz, keep);

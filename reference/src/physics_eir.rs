@@ -102,6 +102,45 @@ pub fn step_dt_id() -> ComponentTypeId {
     fixed_id(&ID, "pwe.time", "step_dt")
 }
 
+/// RFC-0049: lower a baked `dt` constant to the **effective** step
+/// `base * time_scale()` rather than the declared one. The scale is read
+/// through the `pwe.time.scale` world pseudo-component (`ReadView`), so the
+/// instruction stays eligible for the native JIT and the threaded dispatcher;
+/// at the default scale `1.0` the multiply is exact, so an unscaled run is
+/// bit-identical to one that baked the constant.
+///
+/// Any integrator coefficient derived from `dt` — substep shifts, combine
+/// weights, Courant numbers, damping decay — must go through this. Baking them
+/// while scaling only the clock makes a scaled run advance `t` with the state
+/// standing still. Returns the scaled register.
+pub(crate) fn scaled_dt_reg(
+    base: u32,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> u32 {
+    let scale = *next_id;
+    *next_id += 1;
+    out.push(instr(
+        Opcode::ReadView,
+        scale,
+        Some(ValueType::F64),
+        vec![],
+        None,
+        Some(cr(0, time_scale_id(), 0)),
+    ));
+    let scaled = *next_id;
+    *next_id += 1;
+    out.push(instr(
+        Opcode::Mul,
+        scaled,
+        Some(ValueType::F64),
+        vec![base, scale],
+        None,
+        None,
+    ));
+    scaled
+}
+
 /// RFC-0038: canonical `ComponentTypeId` of the per-entity `active` flag.
 pub fn active_id() -> ComponentTypeId {
     static ID: std::sync::OnceLock<ComponentTypeId> = std::sync::OnceLock::new();
@@ -1279,6 +1318,9 @@ impl EirSystem for GravitySystem {
         ));
         let const_id = next;
         next += 1;
+        // RFC-0049: `gravity_y·dt` is this step's advance, so it scales with
+        // the clock instead of staying baked at the declared `dt`.
+        let const_id = scaled_dt_reg(const_id, &mut next, out);
         // read vel.y
         out.push(instr(
             Opcode::ReadView,
@@ -1347,6 +1389,8 @@ impl EirSystem for ForceSystem {
             ));
             let delta_id = next;
             next += 1;
+            // RFC-0049: `a·dt` is this step's advance — scale it with the clock.
+            let delta_id = scaled_dt_reg(delta_id, &mut next, out);
             out.push(instr(
                 Opcode::ReadView,
                 next,
@@ -1421,10 +1465,10 @@ impl EirSystem for LinearSystem {
             }
             // delta = dt·offset + Σ_j dt·coeff[i][j]·state[j]
             let mut next = out.iter().map(|x| x.result_id).max().unwrap_or(0) + 1;
-            let mut acc = next;
+            let acc = next;
             out.push(instr(
                 Opcode::Const,
-                next,
+                acc,
                 Some(ValueType::F64),
                 vec![],
                 Some(crate::eir::Immediate::F64(
@@ -1432,6 +1476,10 @@ impl EirSystem for LinearSystem {
                 )),
                 None,
             ));
+            next += 1;
+            // RFC-0049: both parts of the delta are step advances, so both
+            // scale with the clock rather than staying at the declared `dt`.
+            let mut acc = scaled_dt_reg(acc, &mut next, out);
             for (j, &state_reg) in slot_regs.iter().enumerate() {
                 let coeff = row.get(j).copied().unwrap_or(0.0);
                 if coeff == 0.0 {
@@ -1449,6 +1497,7 @@ impl EirSystem for LinearSystem {
                 ));
                 let c_id = next;
                 next += 1;
+                let c_id = scaled_dt_reg(c_id, &mut next, out);
                 // dt·coeff·state[j]
                 out.push(instr(
                     Opcode::Mul,
@@ -1545,6 +1594,9 @@ impl EirSystem for IntegrateSystem {
             ));
             let dt_id = next;
             next += 1;
+            // RFC-0049: `vel·dt` is the displacement this step advances, so the
+            // integration scales with the clock.
+            let dt_id = scaled_dt_reg(dt_id, &mut next, out);
             // vel * dt
             out.push(instr(
                 Opcode::Mul,
@@ -2127,6 +2179,11 @@ impl EirSimulation {
     /// Advances one step purely through EIR.
     pub fn step(&mut self) -> Result<()> {
         let mut rt = SceneRuntime::new(&self.scene);
+        // RFC-0049: stamp the time context the way every production step path
+        // does. Leaving the `SceneRuntime` default (`step_dt = 0.0`) made
+        // `step_dt()` report 0 and any program dividing by it trip the
+        // deterministic division guard.
+        rt.set_time_context(1.0, self.dt);
         let writes = self.lowered.module.interpret_with(
             &mut rt,
             pwe_api::WorldId(0),

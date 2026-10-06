@@ -85,7 +85,13 @@ fn usage() {
            --max-steps-per-frame N\n  \
                               present: cap simulation steps per frame (default\n  \
                               unlimited; the live speed slider is bounded by a\n  \
-                              per-frame wall-clock budget)\n\
+                              per-frame wall-clock budget)\n  \
+           --time-scale F     RFC-0049: multiply every simulated second by F\n  \
+                              (1 = real time, 2 = double speed, 0.5 = slow\n  \
+                              motion); non-negative and finite, clamped to\n  \
+                              1e10; independent of the present speed slider,\n  \
+                              which is a steps-per-frame rate and never\n  \
+                              changes the physics dt\n\
          \n\
          Compile source to a .pweb binary, then run the binary (javac/java style).\n\
          A .pweb artifact holds the verified canonical EIR module plus the\n\
@@ -1033,6 +1039,15 @@ fn present_live(
             }
         };
         if paused {
+            // Publish even while paused: `/state` is served from `live`, so
+            // without this the echo keeps the last running value, the speed the
+            // user just set appears to snap back, and the slider reverts
+            // itself on the next poll until they resume.
+            {
+                let mut g = live.write().unwrap_or_else(|e| e.into_inner());
+                g.time_scale = req;
+                g.effective_dt = 0.0;
+            }
             std::thread::sleep(std::time::Duration::from_millis(16));
             continue;
         }
@@ -1043,6 +1058,10 @@ fn present_live(
         let want = present::speed_frame(&mut speed_acc, req, max_steps_per_frame);
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(STEP_BUDGET_MS);
         let mut ran = 0u32;
+        // A step trap is reported through the viewer, not by killing the
+        // server: exiting here would drop `/state` and leave the page on
+        // "waiting for runtime…" forever with nothing to explain why.
+        let mut trap: Option<String> = None;
         while ran < want {
             // Cross-verify the backends on the same 16-step phase as `run` (the
             // last step of each batch, i.e. step ≡ 15 mod CROSS_BATCH) so the two
@@ -1058,11 +1077,14 @@ fn present_live(
                     ran += 1;
                 }
                 Err(e) => {
-                    eprintln!("pwe: step {step} failed: {e}");
+                    let mut msg = format!("step {step} failed: {e}");
+                    eprintln!("pwe: {msg}");
                     for d in pwe_reference::lang::take_diagnostics() {
                         eprintln!("  [{}] {}", d.detail, d.message);
+                        msg.push_str(&format!("\n[{}] {}", d.detail, d.message));
                     }
-                    return 1;
+                    trap = Some(msg);
+                    break;
                 }
             }
             // Honour the frame budget, but only after at least one step so slow
@@ -1075,21 +1097,28 @@ fn present_live(
         // holding the write lock during a heavy frame would block a `/state`
         // reader (and delay a closing tab waiting on its last request).
         let frame = rt.present_frame(Some(cam));
-        let info = info_lines(&rt, model, step);
+        let mut info = info_lines(&rt, model, step);
         // The `print(...)` log is a debugging side-channel that persists across
         // steps; drain it each frame so a program that prints every step cannot
         // grow memory without bound during a live session (the frame above has
         // already captured the lines for the viewer).
         let _ = rt.drain_logs();
+        if let Some(msg) = &trap {
+            info = vec![msg.clone()];
+            // Pause so the loop reports the same failure instead of
+            // re-trapping on the same step in a hot spin.
+            pause.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         {
             let mut g = live.write().unwrap_or_else(|e| e.into_inner());
             g.step = step;
             g.frame = frame;
             g.info = info;
-            // Report the *requested* speed so the slider/box do not fight
-            // themselves, and the simulated time actually advanced this frame.
-            g.time_scale = req.min(max_steps_per_frame as f64);
-            g.effective_dt = ran as f64 * rt.sim_dt;
+            // Echo the *requested* speed so the slider and box do not fight
+            // themselves; the `Δt` readout shows what was actually advanced
+            // this frame, RFC-0049 scale included.
+            g.time_scale = req;
+            g.effective_dt = ran as f64 * rt.effective_dt();
         }
         std::thread::sleep(std::time::Duration::from_millis(16));
     }

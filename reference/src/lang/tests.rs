@@ -2739,6 +2739,231 @@ fn rfc_0049_host_api_shares_the_builtin_definition() {
     assert_eq!(st.values[0], 2.0, "the integrator used the effective step");
 }
 
+/// RFC-0049: the time scale must move the *state*, not only the reported
+/// clock. `x' = v, v' = -x` from `x(0)=1, v(0)=0` is the harmonic oscillator
+/// `(cos t, -sin t)`, so ten `dt = 0.1` steps must land on `t = 1` unscaled and
+/// `t = 2` at scale 2 — this is the regression where the rk4 stage shifts and
+/// the combine weight were baked at the declared `dt` while only the clock
+/// scaled, so both scales produced an identical (wrong) state. Also pins the
+/// clock fallback: an `rk4`-only program must advance by its declared `dt`, not
+/// the 1/60 default. Stepped cross-backend.
+#[test]
+fn rfc_0049_time_scale_moves_the_rk4_integrator() {
+    let src = "world { gravity=(0,0,0) \
+                       entity e { state=(x=1.0, v=0.0) } } \
+                     systems { rk4 { on=e; dt=0.1 \
+                       inte x = v \
+                       inte v = 0.0 - x } }";
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(10).unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert!(
+        (st.values[0] - 1.0_f64.cos()).abs() < 1e-6,
+        "scale 1 integrates to cos(1), got {}",
+        st.values[0]
+    );
+    assert!(
+        (st.values[1] + 1.0_f64.sin()).abs() < 1e-6,
+        "scale 1 integrates to -sin(1), got {}",
+        st.values[1]
+    );
+    // The clock must follow the declared `dt`, not the 1/60 fallback.
+    assert!(
+        (rt.scene.sim_time - 1.0).abs() < 1e-9,
+        "an rk4-only clock advances by its declared dt, got {}",
+        rt.scene.sim_time
+    );
+    assert!(
+        (rt.effective_dt() - 0.1).abs() < 1e-12,
+        "effective_dt() is the declared dt at scale 1, got {}",
+        rt.effective_dt()
+    );
+
+    // Ten steps at scale 2 must integrate to t = 2, not re-produce t = 1.
+    let mut scaled = LangRuntime::compile(src).unwrap();
+    scaled.set_time_scale(2.0);
+    assert!(
+        (scaled.effective_dt() - 0.2).abs() < 1e-12,
+        "effective_dt() carries the scale, got {}",
+        scaled.effective_dt()
+    );
+    scaled.step_cross_n(10).unwrap();
+    let st = scaled
+        .scene
+        .get(EntityId(1))
+        .unwrap()
+        .state
+        .as_ref()
+        .unwrap();
+    // The tolerance is RK4 truncation error at `h = 0.2` over ten steps
+    // (`10 · 0.2⁵/120 ≈ 2.7e-5`), not slack: the unscaled bug returned `cos(1)`
+    // here, ~0.98 away.
+    assert!(
+        (st.values[0] - 2.0_f64.cos()).abs() < 1e-4,
+        "scale 2 integrates to cos(2), got {}",
+        st.values[0]
+    );
+    assert!(
+        (st.values[1] + 2.0_f64.sin()).abs() < 1e-4,
+        "scale 2 integrates to -sin(2), got {}",
+        st.values[1]
+    );
+    assert!(
+        (scaled.scene.sim_time - 2.0).abs() < 1e-9,
+        "the clock scales with the step, got {}",
+        scaled.scene.sim_time
+    );
+    assert_eq!(
+        scaled.clock, 10,
+        "the scale changes dt, never the step count"
+    );
+}
+
+/// RFC-0049: the domain `gravity` + `integrate` systems bake `dt` into their
+/// immediates, so they must scale too. Semi-implicit Euler from rest with
+/// `g = -10, dt = 0.1` falls `-0.1·(1+…+10) = -5.5` in ten steps; at scale 2
+/// each step is `0.2 s`, so ten of them integrate the *same system* for twice
+/// as long and must fall `-0.2·(2+…+20) = -22.0` — exactly 4× as far, the
+/// `t → 2t` signature of a correctly scaled integrator. Stepped cross-backend.
+#[test]
+fn rfc_0049_time_scale_moves_the_gravity_and_integrate_systems() {
+    let src = r#"
+            world { gravity = (0, 0, 0)
+                entity ball { position = (0, 0, 0)
+                              velocity = (0, 0, 0)
+                              mass = 1
+                              dynamic = true }
+            }
+            systems {
+                gravity { gravity_y = -10.0; dt = 0.1 }
+                integrate { dt = 0.1 }
+            }
+        "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(10).unwrap();
+    let y1 = rt.scene.position(EntityId(1)).unwrap().y;
+    assert!(
+        (y1 + 5.5).abs() < 1e-9,
+        "unscaled free fall is -5.5, got {y1}"
+    );
+
+    let mut scaled = LangRuntime::compile(src).unwrap();
+    scaled.set_time_scale(2.0);
+    scaled.step_cross_n(10).unwrap();
+    let y2 = scaled.scene.position(EntityId(1)).unwrap().y;
+    assert!(
+        (y2 + 22.0).abs() < 1e-9,
+        "scale 2 integrates twice as long, got {y2}"
+    );
+    assert!(
+        (y2 / y1 - 4.0).abs() < 1e-9,
+        "doubling dt quadruples the fall, got ratio {}",
+        y2 / y1
+    );
+}
+
+/// RFC-0049: `nbody`'s Verlet kick and drift both carry `dt`, so the scale must
+/// move the bodies. Two equal particles at rest under `G = -1.0` repel; after
+/// the same number of steps a doubled step length has to have separated them
+/// strictly further than the unscaled run. Stepped cross-backend.
+#[test]
+fn rfc_0049_time_scale_moves_the_nbody_integrator() {
+    let src = r#"
+            world { gravity = (0,0,0)
+                entity a { state = (-2, 0, 0,  0, 0, 0, 1) }
+                entity b { state = ( 2, 0, 0,  0, 0, 0, 1) }
+            }
+            systems { nbody { G = -1.0; dt = 0.01 } }
+        "#;
+    let gap = |rt: &LangRuntime| {
+        let a = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+        let b = rt.scene.get(EntityId(2)).and_then(|e| e.state.as_ref());
+        match (a, b) {
+            (Some(a), Some(b)) => b.values[0] - a.values[0],
+            _ => panic!("both particles keep state"),
+        }
+    };
+
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross_n(50).unwrap();
+    let g1 = gap(&rt);
+    assert!(g1 > 4.0, "the particles repelled: gap {g1}");
+
+    let mut scaled = LangRuntime::compile(src).unwrap();
+    scaled.set_time_scale(2.0);
+    scaled.step_cross_n(50).unwrap();
+    let g2 = gap(&scaled);
+    assert!(
+        g2 > g1,
+        "a scaled step moves further, got {g2} vs unscaled {g1}"
+    );
+}
+
+/// RFC-0049: the wave leapfrog's Courant coefficient is `(v·dt/dx)²`, so it
+/// must be scaled *before* squaring — `cfl → cfl·scale` yields `cfl²·scale²`.
+/// Two independent properties pin it: the scaled field must differ from the
+/// unscaled one (the regression returned byte-identical fields while the clock
+/// ran on), and the pulse must have travelled further, measured by the
+/// right-half amplitude centroid `Σ c·u² / Σ u²`. Stepped cross-backend.
+#[test]
+fn rfc_0049_time_scale_moves_the_wave_courant_coefficient() {
+    let src = "world { gravity=(0,0,0) \
+                       field u { width=41; height=1; dx=1.0 } \
+                       field um { width=41; height=1; dx=1.0 } \
+                       entity e { state=(x=0.0) } } \
+                     systems { wave { field = u; prev = um; velocity = 1.0; dt = 0.2 } }";
+    /// Amplitude centroid of the right-travelling half, in grid columns.
+    fn centroid(rt: &LangRuntime) -> f64 {
+        let u = rt.scene.fields.get("u").unwrap();
+        let (mut moment, mut mass) = (0.0, 0.0);
+        for c in 20..41usize {
+            let v = u.value(c, 0);
+            moment += c as f64 * v * v;
+            mass += v * v;
+        }
+        moment / mass
+    }
+    fn snapshot(rt: &LangRuntime) -> Vec<f64> {
+        let u = rt.scene.fields.get("u").unwrap();
+        (0..41).map(|c| u.value(c, 0)).collect()
+    }
+
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.scene.fields.get_mut("u").unwrap().set(20, 0, 1.0);
+    rt.scene.fields.get_mut("um").unwrap().set(20, 0, 1.0);
+    rt.step_cross_n(6).unwrap();
+    let (base, base_vec) = (centroid(&rt), snapshot(&rt));
+
+    let mut scaled = LangRuntime::compile(src).unwrap();
+    scaled.set_time_scale(2.0);
+    scaled.scene.fields.get_mut("u").unwrap().set(20, 0, 1.0);
+    scaled.scene.fields.get_mut("um").unwrap().set(20, 0, 1.0);
+    scaled.step_cross_n(6).unwrap();
+    let (fast, fast_vec) = (centroid(&scaled), snapshot(&scaled));
+
+    assert!(
+        base.is_finite() && fast.is_finite(),
+        "centroid must be finite"
+    );
+    let max_diff = base_vec
+        .iter()
+        .zip(&fast_vec)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f64, f64::max);
+    assert!(
+        max_diff > 1e-6,
+        "the scale must change the field: max |Δu| = {max_diff}"
+    );
+    assert!(
+        fast > base,
+        "a larger Courant number carries the pulse further: {fast} vs {base}"
+    );
+    assert!(
+        fast_vec.iter().all(|v| v.is_finite()),
+        "the scaled leapfrog must stay finite"
+    );
+}
+
 /// RFC-0048 slice B: calendar reads on an empty calendar are safe sentinels —
 /// count 0, kind 0, payload 0, and a *finite* `f64::MAX` time (so storing it in
 /// a state slot cannot trip the detail-88 non-finite check).

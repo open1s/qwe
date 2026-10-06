@@ -177,9 +177,13 @@ impl LangRuntime {
     ) -> Result<Self> {
         let module = compiled.eir.clone();
         let program = compiled.program;
-        // The simulation clock advances by the `update` system's dt so `t`
-        // tracks integration time; a `gillespie`-only program advances by its
-        // reaction window instead. Fall back to 1/60.
+        // The simulation clock advances by the integrating system's dt so `t`
+        // tracks integration time: an `update` system first, then a
+        // `gillespie` reaction window, then any other system that declares a
+        // `dt` (`rk4`, `nbody`, `pair`, `drift`, `wave`, …). Without that last
+        // clause an rk4-only program fell back to 1/60 while the state
+        // integrated at its declared `dt`, so the clock and the model disagreed
+        // by a factor of dt·60. Fall back to 1/60 when nothing declares one.
         let sim_dt = compiled
             .parsed
             .systems
@@ -191,6 +195,13 @@ impl LangRuntime {
                     .systems
                     .iter()
                     .find(|s| s.kind == "gillespie")
+            })
+            .or_else(|| {
+                compiled
+                    .parsed
+                    .systems
+                    .iter()
+                    .find(|s| s.params.contains_key("dt"))
             })
             .and_then(|s| s.params.get("dt").copied())
             .unwrap_or(1.0 / 60.0);

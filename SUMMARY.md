@@ -75,6 +75,7 @@
 * [RFC-0046: EIR as an Explicit SSA CFG](rfc/RFC-0046-eir-ssa-cfg.md)
 * [RFC-0047: Toward a General-Purpose Simulation Language](rfc/RFC-0047-general-simulation-language.md)
 * [RFC-0048: Discrete-Event + Hybrid Core](rfc/RFC-0048-discrete-event-hybrid-core.md)
+* [RFC-0049: Time Scaling](rfc/RFC-0049-time-scaling.md)
 * [RFC alignment](docs/rfc-alignment.md)
 * [RFC supersession](docs/rfc-supersession.md)
 

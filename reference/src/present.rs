@@ -1788,26 +1788,24 @@ fn handle_connection(
         // RFC-0049: browser-controlled time scale. Record the request; the
         // stepping loop reads `time_scale_req`, applies it to the runtime (the
         // new scale takes effect from the next step), and publishes the applied
-        // value back into `time_scale`.
-        //
-        // The viewer only offers `1e-8 … 1e10`, so a request is required to be
-        // finite and strictly positive. A scale of exactly 0 makes the effective
-        // step 0, and a model that divides by `dt` then trips the deterministic
-        // division guard (`EirInvalid` 18) — the viewer keeps that trap out of
-        // reach. Programmatic `set_time_scale` keeps its RFC clamp to `[0, MAX]`.
-        if let Some(query) = path.split_once('?').map(|(_, q)| q) {
-            for param in query.split('&') {
-                if let Some(val_str) = param.strip_prefix("v=") {
-                    if let Ok(v) = val_str.parse::<f64>() {
-                        if v.is_finite() && v > 0.0 {
-                            let mut live = state.write().unwrap_or_else(|e| e.into_inner());
-                            live.time_scale_req = v.min(crate::eir::TIME_SCALE_MAX);
-                        }
-                    }
-                }
-            }
+        // value back into `time_scale`. Validation lives in
+        // `apply_time_scale_query`, shared with the playground — and a rejected
+        // value is reported, not swallowed: answering `ok` to a request that
+        // did nothing is the same silent-fallback shape as answering 200 to a
+        // missing route.
+        let accepted = path
+            .split_once('?')
+            .map(|(_, q)| apply_time_scale_query(state, q))
+            .unwrap_or(false);
+        if accepted {
+            ("200 OK", "text/plain", b"ok".to_vec())
+        } else {
+            (
+                "400 Bad Request",
+                "text/plain",
+                b"rejected: v must be a finite number > 0".to_vec(),
+            )
         }
-        ("200 OK", "text/plain", b"ok".to_vec())
     } else if path.starts_with("/pause") {
         let now = if path.contains("on=0") {
             false
@@ -1839,13 +1837,44 @@ fn handle_connection(
     stream.flush()
 }
 
+/// Applies a browser `v=` time-scale request to `state`.
+///
+/// Shared by the `present` viewer and the playground so both accept exactly the
+/// same contract: the request must be finite and strictly positive (a scale of
+/// 0 makes the effective step 0, and a model that divides by `dt` then trips
+/// the deterministic division guard `EirInvalid` 18 — the viewer keeps that
+/// trap out of reach) and is clamped to `TIME_SCALE_MAX`. Programmatic
+/// `set_time_scale` keeps its own RFC clamp to `[0, MAX]`.
+///
+/// Returns `true` when a value was accepted; malformed, non-finite and
+/// non-positive requests are ignored, leaving the previous scale in place.
+fn apply_time_scale_query(state: &Arc<RwLock<LiveState>>, query: &str) -> bool {
+    for param in query.split('&') {
+        if let Some(val_str) = param.strip_prefix("v=") {
+            if let Ok(v) = val_str.parse::<f64>() {
+                if v.is_finite() && v > 0.0 {
+                    let mut live = state.write().unwrap_or_else(|e| e.into_inner());
+                    live.time_scale_req = v.min(crate::eir::TIME_SCALE_MAX);
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn live_state_json(live: &LiveState) -> String {
     let mut out = String::new();
     out.push_str(&format!("{{\"step\":{},\"frame\":", live.step));
     out.push_str(&frame_to_json(&live.frame));
+    // `fmt_f64`, not the raw value: a non-finite `effective_dt` (e.g. a model
+    // with a very large `dt` run past the f64 range) would otherwise emit
+    // `Infinity`, which is not JSON — `r.json()` would throw on every poll and
+    // the viewer would sit at "waiting for runtime…" forever.
     out.push_str(&format!(
         ",\"time_scale\":{},\"effective_dt\":{}",
-        live.time_scale, live.effective_dt
+        fmt_f64(live.time_scale),
+        fmt_f64(live.effective_dt)
     ));
     out.push_str(",\"info\":[");
     for (i, s) in live.info.iter().enumerate() {
@@ -2349,9 +2378,18 @@ document.getElementById('lbl').onclick=()=>{labelsOn=!labelsOn;document.getEleme
 // (including exponent notation such as 2.5e5). Both POST the request to the
 // runtime; polling never fights the user while the thumb or the box is active.
 let scaleDragging=false, scaleEditing=false;
+// Echo race: `sendScale` is fire-and-forget, so a `/state` poll that left
+// before the request landed still carries the *previous* scale. Without this,
+// `syncScale` overwrote the control the user had just moved with the stale
+// value, and the thumb visibly snapped back. Hold the request until an echo
+// agrees with it (the driver echoes the value it applied) or the deadline
+// passes — which is what happens when the runtime rejects the request, so a
+// rejected value can never freeze the control at a value nobody has.
+let pendingScale=0, pendingSince=0;
+const SCALE_ECHO_MS=1500;
 const scaleInput=document.getElementById('scale-input'), scaleSlider=document.getElementById('scale-slider');
 const SCALE_MIN_EXP=-8, SCALE_MAX_EXP=10, SCALE_MIN=1e-8, SCALE_MAX=1e10;
-function sendScale(v){ fetch('/set-time-scale?v='+v,{cache:'no-store'}).catch(()=>{}); }
+function sendScale(v){ pendingScale=v; pendingSince=Date.now(); fetch('/set-time-scale?v='+v,{cache:'no-store'}).catch(()=>{}); }
 // Position both controls from one scale value (used by the slider, the box and
 // the poll). The exponent is rounded to the slider's step so the thumb does not
 // jitter between polls.
@@ -2365,11 +2403,26 @@ function showScale(s){
 function syncScale(f){
   if(scaleDragging||scaleEditing) return;
   const s=(typeof f.time_scale==='number'&&isFinite(f.time_scale))?f.time_scale:1;
+  if(pendingScale!==0){
+    if(Date.now()-pendingSince<SCALE_ECHO_MS){
+      // Relative epsilon: the request round-trips through `String()` in the URL
+      // and `f64::from_str` on the server, which is exact but not worth betting
+      // the UI on.
+      if(Math.abs(s-pendingScale) > Math.abs(pendingScale)*1e-9) return;
+    }
+    pendingScale=0;
+  }
   showScale(s);
 }
 // Slider → box + runtime.
 scaleSlider.addEventListener('pointerdown',()=>{scaleDragging=true;});
 addEventListener('pointerup',()=>{scaleDragging=false;});
+// A drag can end without a `pointerup` — the browser claims the pointer or the
+// window loses it (`pointercancel`), or focus leaves the slider. Stuck
+// `scaleDragging` meant `syncScale` bailed on every later poll and the readout
+// stopped following the runtime for the rest of the session.
+addEventListener('pointercancel',()=>{scaleDragging=false;});
+scaleSlider.addEventListener('blur',()=>{scaleDragging=false;});
 scaleSlider.oninput=function(){
   const v=Math.pow(10, +scaleSlider.value);
   scaleInput.value=String(Number(v.toPrecision(6)));
@@ -2844,6 +2897,81 @@ mod tests {
         assert!(page.contains("/set-time-scale?v="));
         assert!(page.contains("function compact("));
         assert!(page.contains("function syncScale("));
+        // RFC-0049 control loop hardening: the echo race guard (a poll that
+        // left before the request landed must not snap the thumb back to the
+        // old value) and the drag-lifetime guards (a cancelled drag must not
+        // permanently mute `syncScale`).
+        assert!(page.contains("pendingScale"), "stale-echo guard is missing");
+        assert!(page.contains("function sendScale"));
+        assert!(
+            page.contains("'pointercancel'"),
+            "cancelled drags must clear"
+        );
+    }
+
+    /// RFC-0049: the scale request is validated in exactly one place,
+    /// `apply_time_scale_query`, so the `pwe present` `/set-time-scale` route,
+    /// the playground's `/api/set-time-scale` handler and the token-carrying
+    /// viewer rewrite cannot drift apart. Zero, negative, non-finite and
+    /// unparseable values are rejected outright (they would freeze the loop or
+    /// feed a zero divisor), and a legal request is clamped to
+    /// `TIME_SCALE_MAX`.
+    #[test]
+    fn set_time_scale_query_validates_and_clamps() {
+        let state = Arc::new(RwLock::new(LiveState::default()));
+        assert_eq!(state.read().unwrap().time_scale_req, 1.0, "default");
+
+        assert!(
+            apply_time_scale_query(&state, "v=2.5&other=1"),
+            "a valid request applies even alongside other params"
+        );
+        assert_eq!(state.read().unwrap().time_scale_req, 2.5);
+
+        for bad in ["v=0", "v=-1", "v=NaN", "v=inf", "v=-inf", "v=abc", "", "v="] {
+            assert!(!apply_time_scale_query(&state, bad), "reject {bad:?}");
+            assert_eq!(
+                state.read().unwrap().time_scale_req,
+                2.5,
+                "{bad:?} must leave the live request untouched"
+            );
+        }
+
+        // A legal request beyond the ceiling is accepted and clamped, never
+        // propagated as an unbounded step multiplier.
+        assert!(apply_time_scale_query(&state, "v=1e300"));
+        assert_eq!(
+            state.read().unwrap().time_scale_req,
+            crate::eir::TIME_SCALE_MAX
+        );
+    }
+
+    /// RFC-0049: `/state` must stay *parseable* JSON. The raw `{}` format of a
+    /// huge `effective_dt` yields `Infinity`, which is not JSON — `r.json()`
+    /// throws, the poll loop dies, and the page sits at "waiting for runtime…".
+    #[test]
+    fn live_state_json_stays_parseable_for_extreme_values() {
+        let live = LiveState {
+            step: 7,
+            time_scale: f64::INFINITY,
+            effective_dt: 1e300,
+            ..Default::default()
+        };
+        let json = live_state_json(&live);
+        assert!(!json.contains("Infinity"), "not JSON: {json}");
+        assert!(!json.contains("NaN"), "not JSON: {json}");
+        assert!(json.contains("\"time_scale\":"), "{json}");
+        assert!(json.contains("\"effective_dt\":"), "{json}");
+
+        let live = LiveState {
+            time_scale: f64::NAN,
+            effective_dt: f64::NEG_INFINITY,
+            ..Default::default()
+        };
+        let json = live_state_json(&live);
+        assert!(
+            !json.contains("Infinity") && !json.contains("NaN"),
+            "not JSON: {json}"
+        );
     }
 
     #[test]
@@ -2859,12 +2987,13 @@ mod tests {
         assert_eq!(acc, 0.0);
         // The reported bug: a very large request followed immediately by a small
         // one must slow down on the very next frame, not keep running off a
-        // backlog of unfinished steps.
+        // backlog of unfinished steps. 0.2 asks for a step every fifth frame.
         let mut acc = 0.0;
         assert_eq!(speed_frame(&mut acc, 1.0e10, MAX_STEPS_PER_FRAME), u32::MAX);
-        assert_eq!(speed_frame(&mut acc, 0.2, MAX_STEPS_PER_FRAME), 0);
-        assert_eq!(speed_frame(&mut acc, 0.2, MAX_STEPS_PER_FRAME), 0);
-        assert_eq!(speed_frame(&mut acc, 0.2, MAX_STEPS_PER_FRAME), 1);
+        let after: Vec<u32> = (0..5)
+            .map(|_| speed_frame(&mut acc, 0.2, MAX_STEPS_PER_FRAME))
+            .collect();
+        assert_eq!(after, vec![0, 0, 0, 0, 1]);
         // A deliberate cap clamps the request without banking the difference.
         let mut acc = 0.0;
         assert_eq!(speed_frame(&mut acc, 1000.0, 8), 8);
@@ -2974,7 +3103,14 @@ pub fn serve_playground(port: u16) -> std::io::Result<()> {
     Ok(())
 }
 
-fn publish(state: &Arc<RwLock<LiveState>>, rt: &crate::lang::LangRuntime, step: u64, note: &str) {
+fn publish(
+    state: &Arc<RwLock<LiveState>>,
+    rt: &crate::lang::LangRuntime,
+    step: u64,
+    note: &str,
+    speed: f64,
+    advanced_dt: f64,
+) {
     let frame = rt.present_frame(None);
     let info = vec![if note.is_empty() {
         format!("step {step}")
@@ -2985,10 +3121,11 @@ fn publish(state: &Arc<RwLock<LiveState>>, rt: &crate::lang::LangRuntime, step: 
     g.step = step;
     g.frame = frame;
     g.info = info;
-    // Publish the scale the runtime actually applied (may differ from the
-    // request if it was clamped or rejected), plus the next step's effective dt.
-    g.time_scale = rt.time_scale();
-    g.effective_dt = rt.effective_dt();
+    // `speed` is the browser's requested steps-per-frame (echoed so the control
+    // does not fight itself); `advanced_dt` is the simulated time actually
+    // advanced this frame, which is what the viewer's `Δt` readout shows.
+    g.time_scale = speed;
+    g.effective_dt = advanced_dt;
 }
 
 /// RFC-0049 / viewer speed: reads the browser's latest speed request (in steps
@@ -3026,7 +3163,14 @@ fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<Liv
                     speed_acc = 0.0;
                     let _ = reply.send("ok".to_string());
                     if let Some(r) = &rt {
-                        publish(&state, r, 0, "compiled");
+                        publish(
+                            &state,
+                            r,
+                            0,
+                            "compiled",
+                            requested_speed(&state).unwrap_or(1.0),
+                            0.0,
+                        );
                     }
                 }
                 Err(e) => {
@@ -3040,15 +3184,22 @@ fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<Liv
                         step = 0;
                         speed_acc = 0.0;
                         if let Some(r) = &rt {
-                            publish(&state, r, 0, "reset");
+                            publish(
+                                &state,
+                                r,
+                                0,
+                                "reset",
+                                requested_speed(&state).unwrap_or(1.0),
+                                0.0,
+                            );
                         }
                     }
                 }
             }
             Ok(PgCmd::Pause(p)) => paused = p.unwrap_or(!paused),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let req = requested_speed(&state).unwrap_or(1.0);
                 if !paused {
-                    let req = requested_speed(&state).unwrap_or(1.0);
                     // Rate control: whole part is this frame's target, only the
                     // fraction carries (see `speed_frame`), so a large request
                     // cannot leave a backlog that outlives the request.
@@ -3084,10 +3235,28 @@ fn playground_driver(rx: std::sync::mpsc::Receiver<PgCmd>, state: Arc<RwLock<Liv
                             g.step = step;
                             g.frame = frame;
                             g.info = info;
+                            g.time_scale = req;
+                            g.effective_dt = 0.0;
                         } else if ran > 0 {
-                            publish(&state, r, step, "");
+                            publish(&state, r, step, "", req, ran as f64 * r.effective_dt());
+                        } else {
+                            // Nothing ran this frame — the rate is below one step
+                            // per frame, or the frame budget bought none. Echo the
+                            // speed anyway: `/state` is served straight from
+                            // `live`, so a stale echo makes the control the user
+                            // just moved snap back on the next poll.
+                            let mut g = state.write().unwrap_or_else(|e| e.into_inner());
+                            g.time_scale = req;
+                            g.effective_dt = 0.0;
                         }
                     }
+                } else if rt.is_some() {
+                    // Paused: still echo the speed, or the readout reverts to the
+                    // last running value and the slider appears to undo itself.
+                    // `info` is left alone so a reported step failure survives.
+                    let mut g = state.write().unwrap_or_else(|e| e.into_inner());
+                    g.time_scale = req;
+                    g.effective_dt = 0.0;
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -3196,6 +3365,8 @@ fn handle_playground(
         path = "/api/reset".to_string();
     } else if path == "/pause" {
         path = "/api/pause".to_string();
+    } else if path == "/set-time-scale" {
+        path = "/api/set-time-scale".to_string();
     }
 
     // CSRF guard: state-changing requests must carry the per-process token and
@@ -3254,6 +3425,24 @@ fn handle_playground(
         let _ = tx.send(PgCmd::Pause(set));
         return respond(stream, "text/plain", b"ok");
     }
+    if path == "/api/set-time-scale" {
+        // RFC-0049: the same browser time-scale control the `present` viewer
+        // offers — without this route the playground's slider was a no-op that
+        // answered `not found`, which is a 200, so the viewer's `.catch()`
+        // never reported the failure and `/state` kept echoing `speed 1`.
+        // A rejected value is reported as 400 rather than `ok` — the viewer
+        // ignores the body, but a caller must be able to tell that nothing was
+        // applied.
+        if apply_time_scale_query(state, &query) {
+            return respond(stream, "text/plain", b"ok");
+        }
+        return respond_status(
+            stream,
+            "400 Bad Request",
+            "text/plain",
+            b"rejected: v must be a finite number > 0",
+        );
+    }
     if path == "/view" {
         return respond(stream, "text/html; charset=utf-8", viewer.as_bytes());
     }
@@ -3275,10 +3464,11 @@ fn handle_playground(
 }
 
 /// Injects the CSRF token into the `present` viewer page and rewrites its
-/// control endpoints (`/reset`, `/pause`) onto the guarded `/api/*` routes.
+/// control endpoints (`/reset`, `/pause`, `/set-time-scale`) onto the guarded
+/// `/api/*` routes.
 fn viewer_with_token(viewer: &str, token: &str) -> String {
     let patch = format!(
-        "<script>(function(){{const T={token:?};const f=window.fetch;window.fetch=function(u,o){{if(typeof u==='string'){{u=u.replace(/^\\/reset/,'/api/reset').replace(/^\\/pause/,'/api/pause');}}o=o||{{}};o.headers=Object.assign({{}},o.headers,{{'X-PWE-Token':T}});return f(u,o);}};}})();</script>"
+        "<script>(function(){{const T={token:?};const f=window.fetch;window.fetch=function(u,o){{if(typeof u==='string'){{u=u.replace(/^\\/reset/,'/api/reset').replace(/^\\/pause/,'/api/pause').replace(/^\\/set-time-scale/,'/api/set-time-scale');}}o=o||{{}};o.headers=Object.assign({{}},o.headers,{{'X-PWE-Token':T}});return f(u,o);}};}})();</script>"
     );
     match viewer.replacen("<head>", &format!("<head>{patch}"), 1) {
         s if s.contains(&patch) => s,

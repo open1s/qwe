@@ -88,6 +88,13 @@ impl PweRuntime {
             detail: 1,
             byte_offset: 0,
         })?;
+        // RFC-0049: this runtime steps a single module whose systems each bake
+        // their own `dt`, so there is no *one* step length to report here —
+        // `step_dt()` reads `SceneRuntime`'s `0.0` "no step length" default and
+        // `time_scale()` the `1.0` default, which is exactly unscaled. Do not
+        // stamp an invented step: a program that divides by an unknown divisor
+        // trips the deterministic division guard, which is the designed
+        // response, rather than silently computing against a made-up length.
         let mut rt = SceneRuntime::new(&self.scene);
         let writes = module
             .eir
