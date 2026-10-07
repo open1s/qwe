@@ -307,7 +307,16 @@ impl EirSystem for UpdateSystem {
                 current_entity: entity,
                 int_locals: Default::default(),
             };
-            lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
+            let mut array_writes: Vec<super::lower::ArrayWrite> = Vec::new();
+            lower_let_block(
+                &self.lets,
+                None,
+                &mut next_id,
+                out,
+                &mut locals,
+                &parts,
+                &mut array_writes,
+            );
             // Rebuild the ctx so the slot rules can see the locals.
             let ctx = LowerCtx {
                 slot_regs: &slot_regs,
@@ -334,6 +343,9 @@ impl EirSystem for UpdateSystem {
                 }
                 None => None,
             };
+            // RFC-0044 follow-up: emit deferred loop-body array writes, gated
+            // by the system `when` exactly like the rule writes.
+            super::lower::emit_array_writes(&array_writes, gate_reg, entity, &mut next_id, out);
             for (i, expr) in &resolved {
                 if *i >= slots {
                     continue;
@@ -884,7 +896,15 @@ impl EirSystem for Rk4System {
                     current_entity: entity,
                     int_locals: Default::default(),
                 };
-                lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
+                lower_let_block(
+                    &self.lets,
+                    None,
+                    &mut next_id,
+                    out,
+                    &mut locals,
+                    &parts,
+                    &mut Vec::new(),
+                );
                 let ctx = LowerCtx {
                     slot_regs: &work,
                     ref_regs: &ref_regs,
@@ -1221,7 +1241,15 @@ impl EirSystem for InvariantSystem {
             current_entity: entity,
             int_locals: Default::default(),
         };
-        lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
+        lower_let_block(
+            &self.lets,
+            None,
+            &mut next_id,
+            out,
+            &mut locals,
+            &parts,
+            &mut Vec::new(),
+        );
         let ctx = parts.ctx(&locals);
         let expr_reg = lower_expr_f64(&self.expr, &ctx, &mut next_id, out);
         // `conserved` records the quantity itself; `invariant` records a 0/1
@@ -2982,7 +3010,15 @@ entity — skipped (not in its state; typo?)",
                 current_entity: entity,
                 int_locals: Default::default(),
             };
-            lower_let_block(&self.lets, None, &mut next_id, out, &mut locals, &parts);
+            lower_let_block(
+                &self.lets,
+                None,
+                &mut next_id,
+                out,
+                &mut locals,
+                &parts,
+                &mut Vec::new(),
+            );
             let ctx = parts.ctx(&locals);
 
             // Propensities of every channel, clamped at zero (a negative rate

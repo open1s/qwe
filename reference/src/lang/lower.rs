@@ -1907,6 +1907,17 @@ pub(crate) fn let_stmts_slot_span(
         match s {
             LetStmt::Let(_, e) => expr_slot_span(e, sn, max, any),
             LetStmt::LetInt(_, e) => expr_slot_span(e, sn, max, any),
+            LetStmt::ArrAssign {
+                name, idx, value, ..
+            } => {
+                expr_slot_span(
+                    &Expr::Index(name.clone(), Box::new(idx.clone())),
+                    sn,
+                    max,
+                    any,
+                );
+                expr_slot_span(value, sn, max, any);
+            }
             LetStmt::If(c, t, e) => {
                 expr_slot_span(c, sn, max, any);
                 expr_slot_span(t, sn, max, any);
@@ -1941,6 +1952,10 @@ pub(crate) fn collect_let_refs(
             }
             LetStmt::LetInt(_, e) => {
                 collect_refs(e, out, props, named_refs, entity_map, state_names_by_id);
+            }
+            LetStmt::ArrAssign { idx, value, .. } => {
+                collect_refs(idx, out, props, named_refs, entity_map, state_names_by_id);
+                collect_refs(value, out, props, named_refs, entity_map, state_names_by_id);
             }
             LetStmt::If(c, t, e) => {
                 collect_refs(c, out, props, named_refs, entity_map, state_names_by_id);
@@ -2033,7 +2048,7 @@ pub(crate) fn has_control(stmts: &[LetStmt]) -> bool {
     stmts.iter().any(|s| match s {
         LetStmt::Break(_) | LetStmt::Continue(_) | LetStmt::If(..) => true,
         LetStmt::Repeat(_, body) | LetStmt::For(_, _, _, body) => has_control(body),
-        LetStmt::Let(..) | LetStmt::LetInt(..) => false,
+        LetStmt::Let(..) | LetStmt::LetInt(..) | LetStmt::ArrAssign { .. } => false,
     })
 }
 
@@ -2074,6 +2089,7 @@ pub(crate) fn stmts_have_query(stmts: &[LetStmt]) -> bool {
     stmts.iter().any(|s| match s {
         LetStmt::Let(_, e) => expr_has_query(e),
         LetStmt::LetInt(_, e) => expr_has_query(e),
+        LetStmt::ArrAssign { idx, value, .. } => expr_has_query(idx) || expr_has_query(value),
         LetStmt::If(c, t, e) => {
             expr_has_query(c)
                 || expr_has_query(t)
@@ -2127,6 +2143,147 @@ pub(crate) fn bind_loop_index(
 /// Returns the block's break register (`Some(1.0)` if a `break` fired within
 /// it) so an enclosing loop can stop iterating. A `break` exits only the
 /// innermost loop; it does not propagate to enclosing blocks.
+/// A deferred array-element write discovered while unrolling a loop body.
+///
+/// Array writes are side effects, so they must be emitted after the enclosing
+/// system's `when` gate is known (the gate may depend on `let` locals bound by
+/// the same block). They are recorded during unrolling and emitted by the
+/// caller via [`emit_array_writes`], which applies the iteration gate and the
+/// system gate exactly like the top-level `dyn_assigns`/`dyn_rules` path.
+pub(crate) struct ArrayWrite {
+    /// Absolute, bound-checked State slot register (`lower_dyn_index`).
+    pub(crate) slot: u32,
+    /// `=`: the value expression. `+=`: the already-`dt`-scaled delta.
+    pub(crate) value: u32,
+    /// `true` for `+=` (add to the current value), `false` for `=`.
+    pub(crate) add: bool,
+    /// The loop iteration's run/skip gate (1.0 executes, 0.0 skipped).
+    pub(crate) gate: Option<u32>,
+}
+
+/// The effective gate for a side-effecting loop-body statement:
+/// `run * (1 - skip)`, or `None` when the block is ungated.
+fn effective_gate(
+    run: Option<u32>,
+    skip: Option<u32>,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> Option<u32> {
+    use crate::eir::Opcode;
+    match (run, skip) {
+        (None, None) => None,
+        (r, None) => r,
+        (None, Some(s)) => {
+            let one = const_reg(1.0, next_id, out);
+            Some(binary(Opcode::Sub, one, s, next_id, out))
+        }
+        (Some(r), Some(s)) => {
+            let one = const_reg(1.0, next_id, out);
+            let ns = binary(Opcode::Sub, one, s, next_id, out);
+            Some(binary(Opcode::Mul, r, ns, next_id, out))
+        }
+    }
+}
+
+/// Reads a State slot at a runtime index (sees earlier writes in the same
+/// interpretation, like `dyn_rules`).
+fn read_slot_dyn_reg(
+    entity: u128,
+    slot: u32,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) -> u32 {
+    use crate::eir::{Opcode, ValueType};
+    let r = *next_id;
+    *next_id += 1;
+    out.push(crate::physics_eir::instr(
+        Opcode::ReadSlotDyn,
+        r,
+        Some(ValueType::F64),
+        vec![slot],
+        None,
+        Some(crate::physics_eir::cr(
+            entity,
+            crate::physics_eir::state_id(),
+            0,
+        )),
+    ));
+    r
+}
+
+/// Emits the deferred array writes recorded while unrolling a loop body,
+/// applying the iteration gate and the system `when` gate. A `+=` reads the
+/// element's current value (seeing earlier array writes, like `dyn_rules`); a
+/// gated-off write leaves the element untouched.
+pub(crate) fn emit_array_writes(
+    writes: &[ArrayWrite],
+    when: Option<u32>,
+    entity: u128,
+    next_id: &mut u32,
+    out: &mut Vec<crate::eir::Instruction>,
+) {
+    use crate::eir::{Opcode, ValueType};
+    for w in writes {
+        // `gate = iteration * when` (each factor is 1.0/0.0); `None` = always.
+        let gate = match (w.gate, when) {
+            (None, None) => None,
+            (g, None) => g,
+            (None, Some(w)) => Some(w),
+            (Some(g), Some(w)) => Some(binary(Opcode::Mul, g, w, next_id, out)),
+        };
+        let value = if w.add {
+            let cur = read_slot_dyn_reg(entity, w.slot, next_id, out);
+            let sum = binary(Opcode::Add, cur, w.value, next_id, out);
+            match gate {
+                Some(g) => {
+                    let v = *next_id;
+                    *next_id += 1;
+                    out.push(crate::physics_eir::instr(
+                        Opcode::Select,
+                        v,
+                        Some(ValueType::F64),
+                        vec![g, sum, cur],
+                        None,
+                        None,
+                    ));
+                    v
+                }
+                None => sum,
+            }
+        } else {
+            match gate {
+                Some(g) => {
+                    let cur = read_slot_dyn_reg(entity, w.slot, next_id, out);
+                    let v = *next_id;
+                    *next_id += 1;
+                    out.push(crate::physics_eir::instr(
+                        Opcode::Select,
+                        v,
+                        Some(ValueType::F64),
+                        vec![g, w.value, cur],
+                        None,
+                        None,
+                    ));
+                    v
+                }
+                None => w.value,
+            }
+        };
+        out.push(crate::physics_eir::instr(
+            Opcode::WriteSlotDyn,
+            0,
+            None,
+            vec![w.slot, value],
+            None,
+            Some(crate::physics_eir::cr(
+                entity,
+                crate::physics_eir::state_id(),
+                0,
+            )),
+        ));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_let_block(
     stmts: &[LetStmt],
@@ -2135,6 +2292,7 @@ pub(crate) fn lower_let_block(
     out: &mut Vec<crate::eir::Instruction>,
     locals: &mut std::collections::BTreeMap<String, u32>,
     parts: &LowerParts<'_>,
+    writes: &mut Vec<ArrayWrite>,
 ) -> Option<u32> {
     let mut skip: Option<u32> = None; // block-local continue gate
     let mut broke: Option<u32> = None; // block-local break accumulator
@@ -2185,6 +2343,47 @@ pub(crate) fn lower_let_block(
                     }
                 }
             }
+            // RFC-0044 follow-up: `name[idx] = value` / `name[idx] += value`
+            // inside a loop body. The index is bound-checked against this
+            // entity's layout; the write is deferred so the system `when` gate
+            // (which may read `let` locals) can be applied at emission.
+            LetStmt::ArrAssign {
+                name,
+                idx,
+                add,
+                value,
+            } => {
+                let ctx = parts.ctx(locals);
+                let target = super::ast::DynIndex::Array(name.clone(), Box::new(idx.clone()));
+                match lower_dyn_index(&target, &ctx, next_id, out) {
+                    None => push_diag(
+                        109,
+                        0,
+                        format!("array `{name}` is not in this entity's state - write ignored"),
+                    ),
+                    Some(slot) => {
+                        let rhs = lower_expr_f64(value, &ctx, next_id, out);
+                        let value_reg = if *add {
+                            // `+=` is the `inte` sugar: integrate at this
+                            // substep's scaled dt (RFC-0049).
+                            let dt_reg = match locals.get("dt").copied() {
+                                Some(r) => r,
+                                None => const_reg(1.0, next_id, out),
+                            };
+                            binary(crate::eir::Opcode::Mul, rhs, dt_reg, next_id, out)
+                        } else {
+                            rhs
+                        };
+                        let gate = effective_gate(run, skip, next_id, out);
+                        writes.push(ArrayWrite {
+                            slot,
+                            value: value_reg,
+                            add: *add,
+                            gate,
+                        });
+                    }
+                }
+            }
             LetStmt::Break(cond) | LetStmt::Continue(cond) => {
                 let ctx = parts.ctx(locals);
                 let c = match cond {
@@ -2230,7 +2429,7 @@ pub(crate) fn lower_let_block(
                     // context gates them.
                     let inner_run = if context_gated { enter } else { None };
                     for _ in 0..*n {
-                        lower_let_block(body, inner_run, next_id, out, locals, parts);
+                        lower_let_block(body, inner_run, next_id, out, locals, parts, writes);
                     }
                 } else {
                     // Controlled inner loop: iteration run chains on breaks.
@@ -2245,7 +2444,8 @@ pub(crate) fn lower_let_block(
                                 binary(crate::eir::Opcode::Mul, run_prev, nb, next_id, out)
                             }
                         };
-                        let b = lower_let_block(body, Some(run_k), next_id, out, locals, parts);
+                        let b =
+                            lower_let_block(body, Some(run_k), next_id, out, locals, parts, writes);
                         if let Some(bb) = b {
                             broke_inner = Some(or_gate(broke_inner, bb, next_id, out));
                         }
@@ -2272,7 +2472,7 @@ pub(crate) fn lower_let_block(
                     let inner_run = if context_gated { enter } else { None };
                     for k in (*lo as i64)..(*hi as i64) {
                         bind_loop_index(name, k as f64, inner_run, next_id, out, locals, parts);
-                        lower_let_block(body, inner_run, next_id, out, locals, parts);
+                        lower_let_block(body, inner_run, next_id, out, locals, parts, writes);
                     }
                 } else {
                     let mut run_prev = enter.unwrap_or_else(|| const_reg(1.0, next_id, out));
@@ -2287,7 +2487,8 @@ pub(crate) fn lower_let_block(
                             }
                         };
                         bind_loop_index(name, k as f64, Some(run_k), next_id, out, locals, parts);
-                        let b = lower_let_block(body, Some(run_k), next_id, out, locals, parts);
+                        let b =
+                            lower_let_block(body, Some(run_k), next_id, out, locals, parts, writes);
                         if let Some(bb) = b {
                             broke_inner = Some(or_gate(broke_inner, bb, next_id, out));
                         }

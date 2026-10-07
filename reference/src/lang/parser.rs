@@ -790,7 +790,10 @@ pub(crate) fn unrolled_size(stmts: &[UpdateStmt]) -> usize {
     stmts
         .iter()
         .map(|s| match s {
-            UpdateStmt::Let(..) | UpdateStmt::Break(_) | UpdateStmt::Continue(_) => 1,
+            UpdateStmt::Let(..)
+            | UpdateStmt::ArrAssign { .. }
+            | UpdateStmt::Break(_)
+            | UpdateStmt::Continue(_) => 1,
             UpdateStmt::If(..) => 1,
             UpdateStmt::Repeat(n, body) => n * unrolled_size(body),
             UpdateStmt::For(_, lo, hi, body) => {
@@ -903,6 +906,17 @@ pub(crate) fn to_let_stmts(stmts: &[UpdateStmt], offset: usize) -> Result<Vec<Le
                 Ok(LetStmt::LetInt(name.clone(), parse_expr_str(text)?))
             }
             UpdateStmt::Let(name, text, _) => Ok(LetStmt::Let(name.clone(), parse_expr_str(text)?)),
+            UpdateStmt::ArrAssign {
+                name,
+                idx,
+                add,
+                value,
+            } => Ok(LetStmt::ArrAssign {
+                name: name.clone(),
+                idx: parse_expr_str(idx)?,
+                add: *add,
+                value: parse_expr_str(value)?,
+            }),
             UpdateStmt::Repeat(n, body) => Ok(LetStmt::Repeat(*n, to_let_stmts(body, offset)?)),
             UpdateStmt::For(name, lo, hi, body) => Ok(LetStmt::For(
                 name.clone(),
@@ -946,6 +960,27 @@ pub(crate) fn build_loop_body<'a>(
             }
             Rule::repeat_stmt | Rule::for_stmt => {
                 body.push(build_loop_stmt(inner, offset, array_lens)?)
+            }
+            // RFC-0044 follow-up: `name[idx] = expr` / `name[idx] += expr` in a
+            // loop body. Children are [arr_index, arr_op, expr]; `arr_index` is
+            // [ident, index expr].
+            Rule::arr_assign => {
+                let mut ai = inner.into_inner();
+                let lhs = next_pair(&mut ai)?;
+                if lhs.as_rule() != Rule::arr_index {
+                    return Err(error(Status::Invalid, 56));
+                }
+                let mut li = lhs.into_inner();
+                let name = next_pair(&mut li)?.as_str().to_string();
+                let idx = next_pair(&mut li)?.as_str().trim().to_string();
+                let op = next_pair(&mut ai)?.as_str().to_string();
+                let value = next_pair(&mut ai)?.as_str().trim().to_string();
+                body.push(UpdateStmt::ArrAssign {
+                    name,
+                    idx,
+                    add: op == "+=",
+                    value,
+                });
             }
             Rule::break_stmt | Rule::continue_stmt => {
                 // Children: [kw] or [kw, if_kw, expr].

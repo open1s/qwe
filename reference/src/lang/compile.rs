@@ -44,6 +44,11 @@ pub fn build_systems(
     let mut conserved_count: usize = 0;
     let mut gillespie_count: usize = 0;
     for s in systems {
+        // RFC-0044 follow-up: array-element writes in loop bodies are
+        // `update`-only (they lower to dynamic State writes).
+        if s.kind != "update" {
+            reject_arr_assigns(&s.update_stmts, &s.kind, s.byte_offset)?;
+        }
         match s.kind.as_str() {
             "gravity" => out.push(Box::new(GravitySystem {
                 gravity_y: param(&s.params, "gravity_y", s.byte_offset, &s.kind)?,
@@ -2542,6 +2547,10 @@ impl DimEnv<'_> {
                     let d = self.of_expr(e)?;
                     self.locals.insert(name.clone(), d);
                 }
+                LetStmt::ArrAssign { idx, value, .. } => {
+                    self.of_expr(idx)?;
+                    self.of_expr(value)?;
+                }
                 LetStmt::If(c, t, e) => {
                     self.of_expr(c)?;
                     self.of_expr(t)?;
@@ -2962,9 +2971,38 @@ fn collect_stmt_names(stmts: &[UpdateStmt], out: &mut std::collections::BTreeSet
                 out.insert(name.clone());
             }
             UpdateStmt::Repeat(_, body) => collect_stmt_names(body, out),
-            UpdateStmt::If(..) | UpdateStmt::Break(_) | UpdateStmt::Continue(_) => {}
+            UpdateStmt::If(..)
+            | UpdateStmt::ArrAssign { .. }
+            | UpdateStmt::Break(_)
+            | UpdateStmt::Continue(_) => {}
         }
     }
+}
+
+/// RFC-0044 follow-up: array-element writes in loop bodies lower to dynamic
+/// State writes and are `update`-only; every other system kind either has no
+/// state-write path (`invariant`/`conserved`/`watch`) or compiles its states
+/// to register chains (`rk4`, `gillespie`).
+fn reject_arr_assigns(stmts: &[UpdateStmt], kind: &str, offset: usize) -> Result<()> {
+    for st in stmts {
+        match st {
+            UpdateStmt::ArrAssign { name, .. } => {
+                return Err(error_at(
+                    Status::Invalid,
+                    73,
+                    offset,
+                    format!(
+                        "array write `{name}[…] = …` in a loop is update-only; `{kind}` cannot \
+write state elements here"
+                    ),
+                ));
+            }
+            UpdateStmt::Repeat(_, body) => reject_arr_assigns(body, kind, offset)?,
+            UpdateStmt::For(_, _, _, body) => reject_arr_assigns(body, kind, offset)?,
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Rejects an identifier that would resolve to nothing at lowering time
@@ -3237,6 +3275,16 @@ fn check_let_array_index(
         match s {
             LetStmt::Let(_, e) => check_array_index(e, state_names_by_id, sys_off)?,
             LetStmt::LetInt(_, e) => check_array_index(e, state_names_by_id, sys_off)?,
+            LetStmt::ArrAssign {
+                name, idx, value, ..
+            } => {
+                check_array_index(
+                    &Expr::Index(name.clone(), Box::new(idx.clone())),
+                    state_names_by_id,
+                    sys_off,
+                )?;
+                check_array_index(value, state_names_by_id, sys_off)?;
+            }
             LetStmt::If(c, a, b) => {
                 check_array_index(c, state_names_by_id, sys_off)?;
                 check_array_index(a, state_names_by_id, sys_off)?;
@@ -3374,6 +3422,10 @@ fn check_call_arities(parsed: &ParsedProgram) -> Result<()> {
             match s {
                 LetStmt::Let(_, e) => check(e, arity, ns)?,
                 LetStmt::LetInt(_, e) => check(e, arity, ns)?,
+                LetStmt::ArrAssign { idx, value, .. } => {
+                    check(idx, arity, ns)?;
+                    check(value, arity, ns)?;
+                }
                 LetStmt::If(c, t, e) => {
                     check(c, arity, ns)?;
                     check(t, arity, ns)?;
@@ -3746,6 +3798,7 @@ they are read as a Z-spin, not euler angles",
                         &mut instrs,
                         &mut locals,
                         &parts,
+                        &mut Vec::new(),
                     );
                 }
             }

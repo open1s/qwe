@@ -772,8 +772,9 @@ asin acos atan`；2 元：`pow atan2 hypot min max`；`if(c,a,b)`；`random()`�
   通配符。
 * `s[i]` 读 / `s[i] = expr` 写（运行时索引；**仅 `update`**）。
 * `repeat n {…}`（≤1000）、`for i in lo..hi {…}`（升序）、`break`/`continue`
-  （`break if (…)`），降级期展开（≤10000 条语句）。循环体仅含 `let`、嵌套循环、
-  `break`/`continue`。
+  （`break if (…)`），降级期展开（≤10000 条语句）。循环体含 `let`、嵌套循环、
+  `break`/`continue`，以及 `name[j] = expr` / `name[j] += expr` 数组写入
+  （仅 `update`）。
 
 ## 2.11 数组（定长、具名）
 
@@ -799,6 +800,11 @@ systems {
   （`BoundsCheck`），再按绝对槽 `base + j` 读取。
 * 写形式：`name[j] = expr`、`name[j] += expr`、`inte name[j] = rate`（读值在系统
   开始时采样，与所有规则一致）。
+* 同样的写形式可用在**循环体内**并绑定循环下标：
+  `for j in 0..len(v) { w[j] = v[j] * 2.0 }`。下标可为任意表达式（像读一样做越界
+  检查）；当该轮被 `break`/`continue` 跳过、或系统 `when` 门为假时写入被抑制；`+=`
+  在展开的每次写入上累加。循环体内的数组元素写入仅限 `update`（其它系统为 detail 73），
+  与 `s[i] =` 形式一致。
 * 常量 `j` 超出 `[0, N)` 为 **detail 52**；**运行期** `j` 越界、非整数或非有限值
   为 **detail 18** 装载类 trap（绝不静默读写任意槽）；未知数组名为 **detail 109**；
   初始化值多于 `N` 也是 detail 52。以上都不会静默读 0.0。

@@ -1079,6 +1079,34 @@ systems { update { on=e; dt=1.0
             Case::Fail
         },
     );
+
+    // RFC-0044 follow-up: an array-element write inside a loop body
+    // (`b[j] = a[j] * 2`) unrolls to a bound-checked dynamic State write.
+    let loop_assign = r#"
+        world { gravity = (0, 0, 0)
+            entity e { state = (t = 0.0)
+                array 4 a { 1.0, 2.0, 3.0, 4.0 }
+                array 4 b } }
+        systems {
+            update { on = e; dt = 0.1
+                for j in 0..len(a) { b[j] = a[j] * 2.0 } } }
+    "#;
+    let loop_assign_ok = run(loop_assign, 1)
+        .map(|rt| {
+            let st = rt.scene.get(EntityId(1)).and_then(|e| e.state.as_ref());
+            st.map(|s| s.values.get(5..9) == Some(&[2.0, 4.0, 6.0, 8.0][..]))
+                .unwrap_or(false)
+                && finite(&rt, 1)
+        })
+        .unwrap_or(false);
+    report.record(
+        "RFC-0044 array-element writes in loop bodies (cross-backend)",
+        if loop_assign_ok {
+            Case::Pass
+        } else {
+            Case::Fail
+        },
+    );
 }
 
 /// RFC-0045: the semantic module system — a two-module program compiles, runs

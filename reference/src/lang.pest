@@ -223,7 +223,16 @@ for_range = { for_bound ~ ".." ~ for_bound }
 // (RFC-0044).
 for_bound = { len_call | number }
 len_call = { "len" ~ "(" ~ ident ~ ")" }
-repeat_item = { (let_stmt | repeat_stmt | for_stmt | break_stmt | continue_stmt) ~ ";"? }
+repeat_item = { (let_stmt | repeat_stmt | for_stmt | break_stmt | continue_stmt
+                | arr_assign) ~ ";"? }
+// RFC-0044: an array-element assignment in a loop body — `name[i] = expr` /
+// `name[i] += expr`. The loop unrolls it like a `let`, the index is checked
+// against the array's declared length, and the write is gated by the
+// iteration's break/continue state. `funcs` bodies reject it (functions are
+// pure); it is a rule-body statement only.
+arr_assign = { arr_index ~ arr_op ~ expr }
+// The write operator: `=` (assign) or `+=` (integrate).
+arr_op = { "+=" | "=" }
 // `break` / `continue` (optionally `break if (cond)`) inside a loop body.
 break_stmt = { break_kw ~ (if_kw ~ expr)? }
 continue_stmt = { continue_kw ~ (if_kw ~ expr)? }

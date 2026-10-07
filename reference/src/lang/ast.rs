@@ -64,6 +64,18 @@ pub enum UpdateStmt {
     /// control-flow branch (lazy) so function calls nest/recursively on the
     /// call stack, unlike the eager `if(c,a,b)` expression.
     If(String, String, Option<String>),
+    /// RFC-0044 follow-up: an array-element write inside a loop body,
+    /// `name[idx] = value` (`add = false`) or `name[idx] += value`
+    /// (`add = true`, integrated: `name[idx] += dt * value`). Lowered while
+    /// unrolling to a bound-checked dynamic State write, gated by the
+    /// iteration's break/continue state and the system's `when`. Rule-body
+    /// only; `funcs` bodies reject it (functions are pure).
+    ArrAssign {
+        name: String,
+        idx: String,
+        add: bool,
+        value: String,
+    },
 }
 /// A lowered (resolved) statement tree: the `Expr` form of [`UpdateStmt`],
 /// stored per system and unrolled with gates during EIR lowering.
@@ -79,6 +91,14 @@ pub enum LetStmt {
     /// An integer-annotated `let` (RFC-0043): the value is coerced to an exact
     /// `I64` (wrapping the RHS in a `F64ToI64` when it is not already integer).
     LetInt(String, Expr),
+    /// RFC-0044 follow-up: an array-element write inside a loop body (the
+    /// resolved form of [`UpdateStmt::ArrAssign`]).
+    ArrAssign {
+        name: String,
+        idx: Expr,
+        add: bool,
+        value: Expr,
+    },
 }
 /// A parsed scalar expression over state slots (`s0`, `s1`, …).
 #[derive(Clone, Debug)]

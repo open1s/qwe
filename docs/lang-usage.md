@@ -862,7 +862,8 @@ tanh asin acos atan`; 2-arg: `pow atan2 hypot min max`; `if(c,a,b)`; `random()`,
 * `s[i]` read / `s[i] = expr` write (runtime index; **`update` only**).
 * `repeat n {…}` (≤1000), `for i in lo..hi {…}` (ascending), `break`/`continue`
   (`break if (…)`), unrolled (≤10000 statements). Loop bodies: `let`, nested
-  loops, `break`/`continue` only.
+  loops, `break`/`continue`, and `name[j] = expr` / `name[j] += expr` array
+  writes (`update` only).
 
 ## 2.11 Arrays (fixed-length, named)
 
@@ -889,6 +890,12 @@ systems {
   is bound-checked (`BoundsCheck`) then read at the absolute slot `base + j`.
 * `name[j] = expr`, `name[j] += expr`, and `inte name[j] = rate` are the write
   forms (the read set is sampled at system start, like every rule).
+* The same write forms work **inside a loop body**, binding the loop index:
+  `for j in 0..len(v) { w[j] = v[j] * 2.0 }`. The index may be any expression
+  (bound-checked like a read), the write is suppressed when the iteration is
+  skipped by `break`/`continue` or the system `when` gate is false, and `+=`
+  accumulates per unrolled write. Array-element writes in loop bodies are
+  `update`-only (detail 73 elsewhere), like the `s[i] =` form.
 * A constant `j` outside `[0, N)` is **detail 52**; a **runtime** `j` that is
   out of range, fractional, or non-finite is a **detail 18** load-class trap
   (never a silent read/write of an arbitrary slot); an unknown array name is

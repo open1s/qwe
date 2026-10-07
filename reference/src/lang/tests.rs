@@ -5550,3 +5550,163 @@ fn gillespie_channel_keyword_does_not_shadow_identifiers() {
     assert!(parsed.systems[0].channels.len() == 1);
     assert!(parsed.systems[0].assigns.contains_key("channel_x"));
 }
+
+/// RFC-0044 follow-up: `name[i] = expr` inside a `for` loop body unrolls to a
+/// bound-checked dynamic State write; interpreter == JIT.
+#[test]
+fn array_assign_in_loop_writes_elements() {
+    let src = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (t = 0.0)
+                array 4 a { 1.0, 2.0, 3.0, 4.0 }
+                array 4 b } }
+        systems { update { on = e; dt = 0.1
+            for j in 0..len(a) { b[j] = a[j] * 2.0 }
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross().unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    // slots: t, a.0..a.3, b.0..b.3
+    assert_eq!(&st.values[5..9], &[2.0, 4.0, 6.0, 8.0], "{:?}", st.values);
+}
+
+/// A repeated `name[i] = j` writes every element (the loop index is bound per
+/// iteration).
+#[test]
+fn array_assign_in_loop_binds_the_index() {
+    let src = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (t = 0.0) array 4 b } }
+        systems { update { on = e; dt = 1.0
+            for j in 0..4 { b[j] = j * j }
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross().unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(&st.values[1..5], &[0.0, 1.0, 4.0, 9.0], "{:?}", st.values);
+}
+
+/// `name[i] += expr` in a loop is the `inte` sugar: it integrates at the
+/// substep's scaled `dt`, exactly like a top-level `+=` rule (RFC-0049).
+#[test]
+fn array_accumulate_in_loop_integrates_with_dt() {
+    let src = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (t = 0.0)
+                array 3 v { 1.0, 2.0, 3.0 }
+                array 3 acc } }
+        systems { update { on = e; dt = 0.5
+            for j in 0..len(v) { acc[j] += v[j] }
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross().unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    // slots: t, v.0..v.2, acc.0..acc.2; acc = dt * v = 0.5 * [1, 2, 3].
+    assert_eq!(&st.values[4..7], &[0.5, 1.0, 1.5], "{:?}", st.values);
+}
+
+/// A `break` inside the loop suppresses the remainder of the unrolled writes
+/// (the write is gated by the iteration run register).
+#[test]
+fn array_assign_in_loop_respects_break() {
+    let src = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (t = 0.0) array 4 b } }
+        systems { update { on = e; dt = 1.0
+            for j in 0..4 { b[j] = 1.0 break if (j >= 1.0) }
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross().unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(&st.values[1..5], &[1.0, 1.0, 0.0, 0.0], "{:?}", st.values);
+}
+
+/// A `continue` skips the write for that iteration only.
+#[test]
+fn array_assign_in_loop_respects_continue() {
+    let src = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (t = 0.0) array 4 b } }
+        systems { update { on = e; dt = 1.0
+            for j in 0..4 { continue if (j == 1.0) b[j] = 1.0 }
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    rt.step_cross().unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(&st.values[1..5], &[1.0, 0.0, 1.0, 1.0], "{:?}", st.values);
+}
+
+/// The system `when` gate suppresses every deferred array write, on and off.
+#[test]
+fn array_assign_in_loop_respects_when_gate() {
+    let off = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (mode = 0.0) array 3 b } }
+        systems { update { on = e; dt = 1.0
+            when = (mode > 0.5)
+            for j in 0..len(b) { b[j] = 5.0 }
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(off).unwrap();
+    rt.step_cross().unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(
+        &st.values[1..4],
+        &[0.0, 0.0, 0.0],
+        "gated off: {:?}",
+        st.values
+    );
+
+    let on = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (mode = 1.0) array 3 b } }
+        systems { update { on = e; dt = 1.0
+            when = (mode > 0.5)
+            for j in 0..len(b) { b[j] = 5.0 }
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(on).unwrap();
+    rt.step_cross().unwrap();
+    let st = rt.scene.get(EntityId(1)).unwrap().state.as_ref().unwrap();
+    assert_eq!(
+        &st.values[1..4],
+        &[5.0, 5.0, 5.0],
+        "gated on: {:?}",
+        st.values
+    );
+}
+
+/// A runtime index into a loop-body write is bound-checked (detail 18).
+#[test]
+fn array_assign_in_loop_runtime_index_traps_out_of_range() {
+    let src = r#"
+        world { gravity=(0,0,0)
+            entity e { state = (k = 2.0) array 2 v { 5.0, 7.0 } } }
+        systems { update { on = e; dt = 1.0
+            for j in 0..2 { v[k] = j }
+        } }
+    "#;
+    let mut rt = LangRuntime::compile(src).unwrap();
+    match rt.step_cross() {
+        Ok(_) => panic!("v[k] with k = 2 on a length-2 array must trap (RFC-0044)"),
+        Err(e) => assert_eq!(e.detail, 18, "detail = {}", e.detail),
+    }
+}
+
+/// Array-element writes in loop bodies are `update`-only; `rk4` rejects them
+/// the same way it rejects a runtime-index rule LHS (detail 73).
+#[test]
+fn array_assign_in_loop_is_update_only() {
+    match LangRuntime::compile(
+        "world { gravity=(0,0,0) entity e { state=(x=0.0) array 2 v { 1.0, 2.0 } } }\n\
+systems { rk4 { on = e; dt = 1.0 for j in 0..2 { v[j] = v[j] + 1.0 } } }",
+    ) {
+        Ok(_) => panic!("an array write in an rk4 loop must be rejected"),
+        Err(e) => assert_eq!(e.detail, 73, "detail = {}", e.detail),
+    }
+}
